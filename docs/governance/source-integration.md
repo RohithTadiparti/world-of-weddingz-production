@@ -16,3 +16,29 @@ The product-development source is `https://github.com/RohithTadiparti/WOW-MD.git
 Never merge `source/main` directly into production. Never copy `.env`, local volumes, downloads, QA credentials, tunnels, agent settings or unreviewed generated files.
 
 Current uncommitted source-tree changes are not source commits. `mobile/src/app/planner-clients.tsx` and `.gitignore` must be reviewed separately before intake; their presence is recorded in the open-items/change-intake registers.
+
+## Periodic review
+
+`.github/workflows/source-sync-review.yml` runs every day at 03:17 UTC and on demand. It checks out the private source repository, compares its `main` branch with `.production/source-baseline.json`, uploads a 30-day JSON/Markdown report, and updates one bot-owned comment on issue `#32`.
+
+The workflow is deliberately review-only: it cannot push or merge either repository. A person reviews every reported commit, records the classification in `change-intake.csv`, and advances the reviewed baseline only after every commit in the range has a recorded decision.
+
+Only committed and pushed source changes are visible to GitHub Actions. Local WOW-MD commits or uncommitted UI/UX work remain outside the report until their owner publishes them.
+
+## Private repository access
+
+Add a fine-grained token as the production repository Actions secret `WOW_SYNC_TOKEN`:
+
+- resource owner: `RohithTadiparti`;
+- repository access: only `WOW-MD`;
+- repository permission: **Contents: read-only**;
+- no organization, administration, workflow, issue, pull-request, secret or package permissions;
+- expiry: 90 days or shorter, with a named rotation owner.
+
+The secret must never appear in a register, workbook, issue, workflow output or source file. If the token is absent, expired or cannot see the reviewed baseline, the scheduled job fails closed and leaves the previous baseline unchanged.
+
+## Changes that must flow back to WOW-MD
+
+Production changes under shared backend, frontend, mobile, Docker/Kubernetes application, or dependency-manifest paths require a separate WOW-MD pull request. The production PR links that mirror PR and cannot pass the mirror gate without it. Reviewers must resolve conflicts in WOW-MD; automation must not replace complete files over ongoing UI/UX work.
+
+Production-only governance, evidence and infrastructure files do not require a source mirror. Dependency manifests and lockfiles are always treated as shared because a later source synchronization could otherwise restore vulnerable or incompatible versions.
