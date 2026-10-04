@@ -23,9 +23,8 @@
 @import '@fontsource/cormorant-garamond/500.css';
 @import '@fontsource/cormorant-garamond/400-italic.css';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
 
 @layer base {
   /* ------------------------------------------------------------ tier 1 --
@@ -377,7 +376,9 @@
   /* A page title and its one-line explanation, used at the top of every
    * screen. Written once so the app has a single masthead rhythm. */
   .page-title {
-    @apply plate w-fit font-serif text-[2rem] font-normal leading-[1.1] text-brand sm:text-[2.5rem];
+    @apply w-fit font-serif text-[2rem] font-normal leading-[1.1] text-brand sm:text-[2.5rem];
+    background: rgb(var(--canvas));
+    box-shadow: 0 0 0 11px rgb(var(--canvas));
   }
 
   /* Clears the heart field from behind a run of text: a patch of the ground
@@ -403,7 +404,9 @@
   }
 
   .page-subtitle {
-    @apply plate mt-1 w-fit max-w-[65ch] text-[0.9375rem] leading-[1.75] text-gray-700;
+    @apply mt-1 w-fit max-w-[65ch] text-[0.9375rem] leading-[1.75] text-gray-700;
+    background: rgb(var(--canvas));
+    box-shadow: 0 0 0 11px rgb(var(--canvas));
   }
 
   /* Status tags. Square like everything else in the template; what tells a
@@ -412,19 +415,19 @@
     @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] px-2.5 py-1 text-xs font-medium tracking-[0.02em];
   }
   .pill-neutral {
-    @apply pill bg-gray-100 text-gray-600;
+    @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] bg-gray-100 px-2.5 py-1 text-xs font-medium tracking-[0.02em] text-gray-600;
   }
   .pill-brand {
-    @apply pill bg-brand-soft text-brand-strong;
+    @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] bg-brand-soft px-2.5 py-1 text-xs font-medium tracking-[0.02em] text-brand-strong;
   }
   .pill-positive {
-    @apply pill bg-positive-bg text-positive-fg;
+    @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] bg-positive-bg px-2.5 py-1 text-xs font-medium tracking-[0.02em] text-positive-fg;
   }
   .pill-caution {
-    @apply pill bg-caution-bg text-caution-fg;
+    @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] bg-caution-bg px-2.5 py-1 text-xs font-medium tracking-[0.02em] text-caution-fg;
   }
   .pill-critical {
-    @apply pill bg-critical-bg text-critical-fg;
+    @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] bg-critical-bg px-2.5 py-1 text-xs font-medium tracking-[0.02em] text-critical-fg;
   }
 
   /*
@@ -444,16 +447,16 @@
     @apply flex items-start gap-2 rounded-[--radius-sm] px-3 py-2.5 text-sm;
   }
   .alert-critical {
-    @apply alert bg-critical-bg text-critical-fg;
+    @apply flex items-start gap-2 rounded-[--radius-sm] bg-critical-bg px-3 py-2.5 text-sm text-critical-fg;
   }
   .alert-caution {
-    @apply alert bg-caution-bg text-caution-fg;
+    @apply flex items-start gap-2 rounded-[--radius-sm] bg-caution-bg px-3 py-2.5 text-sm text-caution-fg;
   }
   .alert-positive {
-    @apply alert bg-positive-bg text-positive-fg;
+    @apply flex items-start gap-2 rounded-[--radius-sm] bg-positive-bg px-3 py-2.5 text-sm text-positive-fg;
   }
   .alert-neutral {
-    @apply alert bg-surface-sunken text-gray-600;
+    @apply flex items-start gap-2 rounded-[--radius-sm] bg-surface-sunken px-3 py-2.5 text-sm text-gray-600;
   }
 
   /*
