@@ -5,7 +5,7 @@ import { api, apiMessage } from '../lib/api';
 import { useAuth } from '../store/auth';
 import PasswordField from '../components/PasswordField';
 import type { AccountType } from '../lib/permissions';
-import { EMAIL_PATTERN, GMAIL_PATTERN, MOBILE_10_PATTERN, NAME_PATTERN } from '../lib/permissions';
+import { EMAIL_PATTERN, MOBILE_10_PATTERN, NAME_PATTERN } from '../lib/permissions';
 
 /**
  * Sign-up is a two-step choice: first *what kind of account*, then the details.
@@ -58,6 +58,7 @@ export default function Register() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -98,9 +99,8 @@ export default function Register() {
     } else if (!name) errors.displayName = 'Enter your name';
 
     if (!EMAIL_PATTERN.test(email.trim())) errors.email = 'Enter a valid email address';
-    // Every portal registers with a Gmail address (EZ1-I104).
-    else if (!GMAIL_PATTERN.test(email.trim())) {
-      errors.email = 'Registration requires a @gmail.com email address';
+    if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username.trim().toLowerCase())) {
+      errors.username = 'Use 3-40 lowercase letters, numbers, dots, underscores or hyphens';
     }
 
     if (phoneRequired && !digits) errors.phone = 'Enter your mobile number';
@@ -133,6 +133,7 @@ export default function Register() {
     try {
       const payload: Record<string, unknown> = {
         email: email.trim(),
+        username: username.trim().toLowerCase(),
         password,
         accountType,
         displayName: name,
@@ -298,6 +299,18 @@ export default function Register() {
             {fieldErrors.email && (
               <p className="mt-1 text-xs text-red-600">{fieldErrors.email}</p>
             )}
+          </div>
+          <div>
+            <label className="label" htmlFor="username">Username</label>
+            <input
+              id="username"
+              className="input"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              aria-invalid={Boolean(fieldErrors.username)}
+            />
+            {fieldErrors.username && <p className="mt-1 text-xs text-red-600">{fieldErrors.username}</p>}
           </div>
         </div>
 

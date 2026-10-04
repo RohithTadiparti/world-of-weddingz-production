@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AxiosError } from 'axios';
 import { api, apiMessage } from '../lib/api';
@@ -20,6 +20,7 @@ export default function Login() {
   const [needsMfa, setNeedsMfa] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [zohoEnabled, setZohoEnabled] = useState(false);
   /**
    * Which way in (EZ1-I258).
    *
@@ -29,6 +30,24 @@ export default function Login() {
    */
   const [byMobile, setByMobile] = useState(false);
   const reduce = useReducedMotion();
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('sso') !== 'complete') return;
+    setLoading(true);
+    api.post('/auth/refresh', {})
+      .then(({ data }) => {
+        setAuth(data);
+        nav('/', { replace: true });
+      })
+      .catch((err) => setError(apiMessage(err, 'Zoho sign-in could not be completed.')))
+      .finally(() => setLoading(false));
+  }, [location.search, nav, setAuth]);
+
+  useEffect(() => {
+    api.get('/auth/login-options')
+      .then(({ data }) => setZohoEnabled(Boolean(data?.zohoSso)))
+      .catch(() => setZohoEnabled(false));
+  }, []);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -112,7 +131,7 @@ export default function Login() {
           <div className="space-y-4">
             <div>
               <label className="label" htmlFor="email">
-                Email or mobile number
+                Username, email or mobile number
               </label>
               {/*
                 `type="text"`, not `type="email"`: a client an agency took on by
@@ -179,7 +198,7 @@ export default function Login() {
 
           {/* Offered, not defaulted to — and hidden mid-MFA, where the account
               is already half signed in. */}
-          {!needsMfa && (
+          {!needsMfa && zohoEnabled && (
             <button
               type="button"
               className="btn-ghost btn-sm mt-2 w-full"
@@ -190,6 +209,11 @@ export default function Login() {
             >
               Sign in with a mobile number instead
             </button>
+          )}
+          {!needsMfa && (
+            <a className="btn-outline mt-2 flex w-full justify-center" href="/api/auth/sso/zoho/start">
+              Sign in with Zoho
+            </a>
           )}
             </form>
           )}

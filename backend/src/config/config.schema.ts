@@ -204,7 +204,13 @@ export const configValidationSchema = Joi.object({
   PASSWORD_RESET_TTL_MINUTES: Joi.number().min(5).max(1440).default(30),
   RSVP_TOKEN_TTL_DAYS: Joi.number().min(1).max(730).default(120),
   MFA_ISSUER: Joi.string().allow('').optional(),
-  MFA_REQUIRED_FOR_ADMIN: Joi.boolean().truthy('true').falsy('false').default(true),
+  MFA_REQUIRED_FOR_ADMIN: Joi.boolean().truthy('true').falsy('false').default(false),
+  ADMIN_LOGIN_PROVIDER: Joi.string().valid('password', 'zoho').default('password'),
+  ZOHO_SSO_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  ZOHO_ACCOUNTS_URL: Joi.string().uri({ scheme: ['https'] }).default('https://accounts.zoho.in'),
+  ZOHO_CLIENT_ID: Joi.string().allow('').optional(),
+  ZOHO_CLIENT_SECRET: Joi.string().allow('').optional(),
+  ZOHO_REDIRECT_URI: Joi.string().uri({ scheme: ['https'] }).allow('').optional(),
 
   // Mail
   MAIL_PROVIDER: Joi.string().valid('log', 'smtp').default('log'),
@@ -279,8 +285,14 @@ export const configValidationSchema = Joi.object({
     if (value.NODE_ENV !== 'production') {
       violations.push('NODE_ENV must be production for a public deployment tier');
     }
-    if (value.MFA_REQUIRED_FOR_ADMIN !== true) {
-      violations.push('MFA_REQUIRED_FOR_ADMIN must be true');
+    if (value.ADMIN_LOGIN_PROVIDER !== 'zoho') {
+      violations.push('ADMIN_LOGIN_PROVIDER must be zoho');
+    }
+    if (value.ZOHO_SSO_ENABLED !== true) {
+      violations.push('ZOHO_SSO_ENABLED must be true');
+    }
+    for (const key of ['ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REDIRECT_URI']) {
+      if (!String(value[key] ?? '').trim()) violations.push(`${key} is required for Zoho SSO`);
     }
     if (value.MAIL_PROVIDER !== 'smtp') {
       violations.push('MAIL_PROVIDER must be smtp');

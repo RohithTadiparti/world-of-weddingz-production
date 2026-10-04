@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Req,
   Res,
   UnauthorizedException,
@@ -42,6 +43,7 @@ import { AllowDuringPasswordReset } from '../../common/decorators/password-reset
 import { Permission, permissionsFor } from '../../common/authz/permissions';
 import { ACCOUNT_TYPE_ROLE, AccountType, INDIVIDUAL_ROLES } from '../../common/enums';
 import { AppConfigService } from '../../config/app-config.service';
+import { ZohoSsoService } from './zoho-sso.service';
 
 /**
  * The ceiling on the credential-guessing surface: register, login, refresh and
@@ -67,10 +69,39 @@ export class AuthController {
     private readonly invitations: InvitationsService,
     private readonly phones: PhoneVerificationService,
     private readonly cfg: AppConfigService,
+    private readonly zohoSso: ZohoSsoService,
   ) {}
 
   private ctx(req: Request) {
     return { userAgent: req.headers['user-agent'] ?? null, ip: req.ip ?? null };
+  }
+
+  @Public()
+  @Get('login-options')
+  loginOptions() {
+    return { zohoSso: this.cfg.auth.zohoSsoEnabled };
+  }
+
+  @Public()
+  @Get('sso/zoho/start')
+  @ApiOperation({ summary: 'Begin Zoho SSO for an existing account' })
+  async beginZohoSso(@Res() res: Response) {
+    return res.redirect(await this.zohoSso.authorizationUrl());
+  }
+
+  @Public()
+  @Get('sso/zoho/callback')
+  @ApiOperation({ summary: 'Complete Zoho SSO and open an application session' })
+  async completeZohoSso(
+    @Query('code') code: string,
+    @Query('state') state: string,
+    @Query('location') location: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const email = await this.zohoSso.exchange(code, state, location);
+    this.respond(req, res, await this.auth.loginWithZoho(email, this.ctx(req)));
+    return res.redirect(`${this.cfg.mail.appBaseUrl.replace(/\/$/, '')}/login?sso=complete`);
   }
 
   /**

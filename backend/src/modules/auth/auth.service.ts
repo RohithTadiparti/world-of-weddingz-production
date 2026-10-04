@@ -46,6 +46,7 @@ import { PhoneVerificationService } from './phone-verification.service';
 import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { expiresIn, generateToken, hashToken } from '../../common/util/tokens';
 import { MOBILE_PATTERN } from '../../common/util/identity-fields';
+import { isEmail } from 'class-validator';
 
 export interface JwtPayload {
   sub: string;
@@ -66,6 +67,8 @@ export interface JwtPayload {
    * change bumps it, and every token carrying the old value stops working.
    */
   tv?: number;
+  /** How the current session was established. */
+  authMethod?: 'password' | 'phone_otp' | 'zoho';
 
   /**
    * Issued-at in milliseconds.
@@ -106,6 +109,8 @@ export interface AuthResult {
 export const MFA_REQUIRED = 'MFA_REQUIRED';
 /** Administrator password was valid, but mandatory MFA has not been enrolled. */
 export const MFA_ENROLLMENT_REQUIRED = 'MFA_ENROLLMENT_REQUIRED';
+/** Administrator accounts use the configured organization identity provider. */
+export const SSO_REQUIRED = 'SSO_REQUIRED';
 
 /**
  * Per-number limits on signing in by mobile (EZ1-I258). The routes are also
@@ -143,11 +148,6 @@ export class AuthService {
    * account type maps through ACCOUNT_TYPE_ROLE, which has no admin entry.
    */
   private resolveRole(dto: RegisterDto, agentBound = false): UserRole {
-    // Every portal registers with a Gmail address (EZ1-I104). dto.email is
-    // already trimmed and lower-cased by normaliseEmail on the DTO.
-    if (!/@gmail\.com$/.test(dto.email)) {
-      throw new BadRequestException('Registration requires a @gmail.com email address.');
-    }
     if (dto.accountType === AccountType.INDIVIDUAL) {
       // The Individual User flow is a business switch, not a code path: with it
       // off the platform is an agent-only brokerage and the only way onto it is
@@ -191,6 +191,10 @@ export class AuthService {
 
     const exists = await this.users.findOne({ where: { email: dto.email } });
     if (exists) throw new ConflictException('Email already registered');
+    if (dto.username) {
+      const usernameTaken = await this.users.findOne({ where: { username: dto.username } });
+      if (usernameTaken) throw new ConflictException('Username already registered');
+    }
 
     /*
      * A mobile number, and one account per number (EZ1-I258).
@@ -216,6 +220,7 @@ export class AuthService {
     const user = await this.users.save(
       this.users.create({
         email: dto.email,
+        username: dto.username ?? null,
         phone: dto.phone,
         passwordHash,
         role,
@@ -312,7 +317,7 @@ export class AuthService {
 
   async login(dto: LoginDto, ctx: SessionContext = {}): Promise<AuthResult> {
     const select = [
-      'id', 'email', 'role', 'passwordHash', 'isActive', 'managedByAgentId',
+      'id', 'email', 'username', 'role', 'passwordHash', 'isActive', 'managedByAgentId',
       'isVerified', 'mfaEnabled', 'mfaSecret', 'failedLoginAttempts', 'lockedUntil',
       'mustResetPassword', 'onboardingStage', 'tokenVersion',
     ] as const;
@@ -340,7 +345,10 @@ export class AuthService {
           }
           return matches[0] ?? null;
         })()
-      : await this.users.findOne({ where: { email: dto.email }, select: [...select] });
+      : await this.users.findOne({
+          where: isEmail(dto.email) ? { email: dto.email } : { username: dto.email },
+          select: [...select],
+        });
 
     // Compare against a dummy hash when the user is absent so the response time
     // does not reveal whether an email is registered.
@@ -368,19 +376,10 @@ export class AuthService {
     }
     if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
 
-    // Administrators do not receive a privileged session until enrollment is
-    // complete. This is deliberately a refusal rather than a normal login:
-    // enrollment happens in a restricted staging window before the public
-    // deployment tier is enabled, so no admin-only route becomes the setup
-    // route for an account protected by only one factor.
-    if (
-      user.role === UserRole.ADMIN &&
-      this.cfg.auth.mfaRequiredForAdmin &&
-      !user.mfaEnabled
-    ) {
+    if (user.role === UserRole.ADMIN && this.cfg.auth.adminLoginProvider === 'zoho') {
       throw new ForbiddenException({
-        message: 'Administrator two-factor enrollment is required before sign-in',
-        code: MFA_ENROLLMENT_REQUIRED,
+        message: 'Use Sign in with Zoho for this administrator account',
+        code: SSO_REQUIRED,
       });
     }
 
@@ -414,7 +413,7 @@ export class AuthService {
       }
     }
 
-    return this.finishLogin(user, ctx);
+    return this.finishLogin(user, ctx, 'password');
   }
 
   // ---------------------------------------------- signing in by mobile (OTP)
@@ -540,7 +539,7 @@ export class AuthService {
       await this.users.update(user.id, { phoneVerifiedAt: new Date() });
     }
 
-    return this.finishLogin(user, ctx);
+    return this.finishLogin(user, ctx, 'phone_otp');
   }
 
   /**
@@ -580,7 +579,24 @@ export class AuthService {
   }
 
   /** The last few steps of a successful sign-in, shared by both second factors. */
-  private async finishLogin(user: User, ctx: SessionContext) {
+  async loginWithZoho(email: string, ctx: SessionContext = {}): Promise<AuthResult> {
+    const user = await this.users.findOne({
+      where: { email: email.trim().toLowerCase() },
+      select: [
+        'id', 'email', 'username', 'role', 'isActive', 'managedByAgentId', 'isVerified',
+        'mfaEnabled', 'mustResetPassword', 'onboardingStage', 'tokenVersion',
+      ],
+    });
+    if (!user || !user.isActive) throw new UnauthorizedException('No active account matches this Zoho identity');
+    if (!user.isVerified) await this.users.update(user.id, { isVerified: true, emailVerifiedAt: new Date() });
+    return this.finishLogin(user, ctx, 'zoho');
+  }
+
+  private async finishLogin(
+    user: User,
+    ctx: SessionContext,
+    authMethod: JwtPayload['authMethod'] = 'password',
+  ) {
     await this.clearLoginFailures(user.id);
     await this.audit.record({
       action: AuditAction.AUTH_LOGIN_SUCCEEDED,
@@ -589,7 +605,7 @@ export class AuthService {
       resourceId: user.id,
       ip: ctx.ip ?? null,
     });
-    return this.issueTokens(user, ctx);
+    return this.issueTokens(user, ctx, authMethod);
   }
 
   private async registerFailedLogin(user: User, ctx: SessionContext): Promise<void> {
@@ -643,12 +659,20 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('Access denied');
     if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
 
-    const next = await this.mintRefreshToken(user);
+    if (
+      user.role === UserRole.ADMIN &&
+      this.cfg.auth.adminLoginProvider === 'zoho' &&
+      payload.authMethod !== 'zoho'
+    ) {
+      throw new ForbiddenException({ message: 'Administrator SSO is required', code: SSO_REQUIRED });
+    }
+
+    const next = await this.mintRefreshToken(user, payload.authMethod);
     await this.sessions.rotate(user.id, refreshToken, next.token, next.expiresAt, ctx);
 
     return {
       user: this.publicUser(user),
-      accessToken: await this.mintAccessToken(user),
+      accessToken: await this.mintAccessToken(user, payload.authMethod),
       refreshToken: next.token,
     };
   }
@@ -730,7 +754,9 @@ export class AuthService {
           });
           return matches.length === 1 ? matches[0] : null;
         })()
-      : await this.users.findOne({ where: { email: identifier } });
+      : await this.users.findOne({
+          where: isEmail(identifier) ? { email: identifier } : { username: identifier },
+        });
 
     if (user && user.isActive) {
       const { token, tokenHash } = generateToken();
@@ -990,10 +1016,6 @@ export class AuthService {
     if (!this.verifyTotp(user.mfaSecret, code)) {
       throw new BadRequestException('That code is not valid');
     }
-    if (user.role === UserRole.ADMIN && this.cfg.auth.mfaRequiredForAdmin) {
-      throw new ForbiddenException('Two-factor cannot be switched off on an administrator account');
-    }
-
     await this.users.update(userId, { mfaEnabled: false, mfaSecret: null });
     await this.audit.record({
       action: AuditAction.AUTH_MFA_DISABLED,
@@ -1046,6 +1068,7 @@ export class AuthService {
   private async mintAccessToken(
     user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId'> &
       Partial<Pick<User, 'tokenVersion'>>,
+    authMethod: JwtPayload['authMethod'] = 'password',
   ): Promise<string> {
     return this.jwt.signAsync(
       {
@@ -1056,6 +1079,7 @@ export class AuthService {
         role: user.role,
         managedByAgentId: user.managedByAgentId ?? null,
         jti: randomUUID(),
+        authMethod,
       },
       { secret: this.cfg.auth.jwtSecret, expiresIn: this.cfg.auth.jwtExpiresIn },
     );
@@ -1063,6 +1087,7 @@ export class AuthService {
 
   private async mintRefreshToken(
     user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId'>,
+    authMethod: JwtPayload['authMethod'] = 'password',
   ): Promise<{ token: string; expiresAt: Date }> {
     const token = await this.jwt.signAsync(
       {
@@ -1071,6 +1096,7 @@ export class AuthService {
         role: user.role,
         managedByAgentId: user.managedByAgentId ?? null,
         jti: randomUUID(),
+        authMethod,
       },
       { secret: this.cfg.auth.jwtRefreshSecret, expiresIn: this.cfg.auth.jwtRefreshExpiresIn },
     );
@@ -1086,8 +1112,9 @@ export class AuthService {
     user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId' | 'isVerified' | 'mfaEnabled'> &
       Partial<Pick<User, 'mustResetPassword' | 'onboardingStage' | 'tokenVersion'>>,
     ctx: SessionContext = {},
+    authMethod: JwtPayload['authMethod'] = 'password',
   ): Promise<AuthResult> {
-    const refresh = await this.mintRefreshToken(user);
+    const refresh = await this.mintRefreshToken(user, authMethod);
     await this.sessions.create(user.id, refresh.token, refresh.expiresAt, ctx);
 
     /*
@@ -1107,7 +1134,7 @@ export class AuthService {
 
     return {
       user: this.publicUser(user),
-      accessToken: await this.mintAccessToken(user),
+      accessToken: await this.mintAccessToken(user, authMethod),
       refreshToken: refresh.token,
     };
   }
