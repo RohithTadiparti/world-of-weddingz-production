@@ -9,3 +9,4 @@ RISK-007,DNS cutover fails after source is paused,High,Possible,P0,Preflight DNS
 RISK-008,Source and production repositories drift silently,High,Likely,P1,Scheduled drift report and change-intake register,Unassigned,Open,
 RISK-009,Mock integration appears to deliver real email/payment/identity outcome,High,Possible,P0,Explicit simulated state and production fail-closed validation,Unassigned,Open,
 RISK-010,Historical secrets enter the private production history,Critical,Possible,P0,Clean snapshot history secret scanning and push protection,Codex,Mitigated,Initial scan found no tracked high-confidence signatures
+RISK-011,Private repository cannot enforce native branch protection or secret scanning on the current GitHub plan,High,Certain,P0,Use PR discipline and CI Gitleaks as compensating controls; upgrade to GitHub Pro or an eligible organization before production,Product owner,Open,GitHub API returned HTTP 403 and 422 on 2026-10-04

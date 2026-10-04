@@ -4,6 +4,8 @@ Never send credentials in chat, commit them, or place them in the Excel tracker.
 
 ## GitHub
 
+Current account-tier limitation (verified 2026-10-04): GitHub rejected private-repository branch protection with HTTP 403 because GitHub Pro is required, and rejected native secret scanning with HTTP 422. Dependabot alerts, automated security fixes, CodeQL and CI Gitleaks remain enabled or configured as compensating controls. Upgrade the owning account or transfer the repository to an eligible organization before public production, then make required PR reviews/checks and native push protection mandatory.
+
 Required account: repository owner or administrator for `RohithTadiparti/world-of-weddingz-production`.
 
 Required capabilities:
