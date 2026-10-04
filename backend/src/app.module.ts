@@ -24,6 +24,8 @@ import { AccountThrottlerGuard } from './platform/throttling/account-throttler.g
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { PasswordResetGuard } from './common/guards/password-reset.guard';
+import { pinoHttpOptions } from './common/logging/pino-options';
+import { DeliveryCaptureModule } from './platform/delivery-capture/delivery-capture.module';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { AgentsModule } from './modules/agents/agents.module';
@@ -52,20 +54,7 @@ import { AiModule } from './modules/ai/ai.module';
     AppConfigModule,
     LoggerModule.forRootAsync({
       inject: [AppConfigService],
-      useFactory: (cfg: AppConfigService) => ({
-        pinoHttp: {
-          level: cfg.runtime.logLevel,
-          transport: cfg.isProduction ? undefined : { target: 'pino-pretty' },
-          redact: [
-            'req.headers.authorization',
-            'req.body.password',
-            'req.body.currentPassword',
-            'req.body.newPassword',
-            'req.body.confirmPassword',
-            'req.body.bankAccount.accountNumber',
-          ],
-        },
-      }),
+      useFactory: pinoHttpOptions,
     }),
     // Counters live in Redis so the limit is the configured one no matter how
     // many replicas are running, and survives a restart.
@@ -85,6 +74,7 @@ import { AiModule } from './modules/ai/ai.module';
     }),
     DatabaseModule,
     RedisModule,
+    DeliveryCaptureModule,
     Neo4jModule,
     KafkaModule,
     EventsModule,

@@ -4,6 +4,7 @@ import { EntityManager, Repository } from 'typeorm';
 import { AuditEvent } from './entities/audit-event.entity';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
+import { errorType } from '../../common/logging/log-redaction';
 
 /** Stable action names. Grep-able, and safe to build dashboards on. */
 export const AuditAction = {
@@ -169,7 +170,13 @@ export class AuditService {
       );
       this.alert(input);
     } catch (err) {
-      this.logger.error(`Failed to write audit event ${input.action}`, err as Error);
+      this.logger.error({
+        event: 'audit_write_failure',
+        action: input.action,
+        resourceType: input.resourceType ?? null,
+        resourceId: input.resourceId ?? null,
+        errorType: errorType(err),
+      });
     }
   }
 

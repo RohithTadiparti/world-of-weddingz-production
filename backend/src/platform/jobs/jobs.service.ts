@@ -318,8 +318,13 @@ export class JobsService {
         await this.audit.record({
           action: AuditAction.BOOKING_ESCROW_RELEASED,
           resourceType: 'payment',
-          resourceId: 'payout-sweep',
-          metadata: { attempted, released, stillOwed: attempted - released },
+          resourceId: null,
+          metadata: {
+            source: 'payout-sweep',
+            attempted,
+            released,
+            stillOwed: attempted - released,
+          },
         });
       }
     } catch (err) {
