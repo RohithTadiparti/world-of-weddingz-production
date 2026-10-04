@@ -46,7 +46,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
     if (!this._ready || !this.producer) return;
     await this.producer.send({
       topic: this.cfg.kafka.topic,
-      messages: [{ key: event.eventType, value: JSON.stringify(event) }],
+      messages: [{ key: event.idempotencyKey ?? event.eventType, value: JSON.stringify(event) }],
     });
   }
 }

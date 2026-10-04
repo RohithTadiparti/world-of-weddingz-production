@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { OutboxService } from './outbox.service';
 import { EventBus } from './event-bus.service';
 import { KafkaService } from '../messaging/kafka.service';
+import { ReplicaLockService } from '../locks/replica-lock.service';
 
 /**
  * Polls the outbox and re-publishes events onto the in-process bus, then marks
@@ -19,21 +20,27 @@ export class OutboxProcessor implements OnModuleInit, OnModuleDestroy {
     private readonly outbox: OutboxService,
     private readonly bus: EventBus,
     private readonly kafka: KafkaService,
+    private readonly locks: ReplicaLockService,
   ) {}
 
   onModuleInit() {
-    this.timer = setInterval(() => this.tick(), this.intervalMs);
+    this.timer = setInterval(() => void this.processOnce(), this.intervalMs);
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
   }
 
-  private async tick() {
+  async processOnce(): Promise<void> {
+    await this.locks.runExclusive('outbox:dispatch', () => this.processBatch());
+  }
+
+  private async processBatch(): Promise<void> {
     try {
       const events = await this.outbox.findUnprocessed(this.batchSize);
       for (const e of events) {
         const event = {
+          idempotencyKey: e.id,
           eventType: e.eventType,
           aggregateType: e.aggregateType,
           payload: e.payload,

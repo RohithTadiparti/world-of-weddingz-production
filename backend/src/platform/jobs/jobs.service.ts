@@ -15,6 +15,7 @@ import { SmsService } from '../sms/sms.service';
 import { DataRightsService } from '../../modules/users/data-rights.service';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { BookingsService } from '../../modules/bookings/bookings.service';
+import { ReplicaLockService } from '../locks/replica-lock.service';
 import {
   BookingStatus,
   ConsentScope,
@@ -63,6 +64,7 @@ export class JobsService {
     private readonly audit: AuditService,
     private readonly dataRights: DataRightsService,
     private readonly bookingsService: BookingsService,
+    private readonly locks: ReplicaLockService,
   ) {}
 
   /**
@@ -74,6 +76,10 @@ export class JobsService {
    */
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
   async pruneExpired(): Promise<void> {
+    await this.locks.runExclusive('jobs:prune-expired', () => this.pruneExpiredOnce());
+  }
+
+  private async pruneExpiredOnce(): Promise<void> {
     try {
       const [sessions, codes] = await Promise.all([
         this.sessions.pruneExpired(),
@@ -102,6 +108,10 @@ export class JobsService {
    */
   @Cron(CronExpression.EVERY_HOUR)
   async reconcilePayments(): Promise<void> {
+    await this.locks.runExclusive('jobs:reconcile-payments', () => this.reconcilePaymentsOnce());
+  }
+
+  private async reconcilePaymentsOnce(): Promise<void> {
     try {
       const candidates = await this.payments.find({
         where: { providerStatus: Not(IsNull()) },
@@ -165,6 +175,12 @@ export class JobsService {
    */
   @Cron(CronExpression.EVERY_DAY_AT_10AM)
   async remindUnpaidMilestones(): Promise<void> {
+    await this.locks.runExclusive('jobs:remind-unpaid-milestones', () =>
+      this.remindUnpaidMilestonesOnce(),
+    );
+  }
+
+  private async remindUnpaidMilestonesOnce(): Promise<void> {
     try {
       const cutoff = new Date(Date.now() - REMINDER_AFTER_DAYS * 86_400_000);
       const waiting = await this.bookings.find({
@@ -247,6 +263,10 @@ export class JobsService {
    */
   @Cron(CronExpression.EVERY_WEEK)
   async purgeStaleProfiles(): Promise<void> {
+    await this.locks.runExclusive('jobs:purge-stale-profiles', () => this.purgeStaleProfilesOnce());
+  }
+
+  private async purgeStaleProfilesOnce(): Promise<void> {
     try {
       const { purged } = await this.dataRights.purgeStaleUnclaimed();
       if (purged) this.logger.log(`Purged ${purged} unclaimed profile(s) past retention`);
@@ -280,6 +300,12 @@ export class JobsService {
    */
   @Cron(CronExpression.EVERY_DAY_AT_5AM)
   async settlePendingPayouts(): Promise<void> {
+    await this.locks.runExclusive('jobs:settle-pending-payouts', () =>
+      this.settlePendingPayoutsOnce(),
+    );
+  }
+
+  private async settlePendingPayoutsOnce(): Promise<void> {
     try {
       const { attempted, released } = await this.bookingsService.retryPendingPayouts();
       if (attempted === 0) return;
@@ -303,6 +329,12 @@ export class JobsService {
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
   async delistLapsingConsent(): Promise<void> {
+    await this.locks.runExclusive('jobs:delist-lapsing-consent', () =>
+      this.delistLapsingConsentOnce(),
+    );
+  }
+
+  private async delistLapsingConsentOnce(): Promise<void> {
     try {
       const horizon = new Date(Date.now() + CONSENT_GRACE_DAYS * 86_400_000);
       const pooled = await this.profiles.find({
