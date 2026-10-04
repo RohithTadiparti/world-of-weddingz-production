@@ -7,7 +7,6 @@ import { CircleNotch, WarningCircle } from '@phosphor-icons/react';
 import { useAuth } from '../store/auth';
 import SupportContact from '../components/SupportContact';
 import PasswordField from '../components/PasswordField';
-import OtpSignIn from '../components/OtpSignIn';
 
 export default function Login() {
   const nav = useNavigate();
@@ -21,14 +20,6 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [zohoEnabled, setZohoEnabled] = useState(false);
-  /**
-   * Which way in (EZ1-I258).
-   *
-   * Email and password stays the default: it is what every existing account
-   * already uses and nothing about it has changed. The number is offered
-   * underneath, for the families an agent took on over the phone.
-   */
-  const [byMobile, setByMobile] = useState(false);
   const reduce = useReducedMotion();
 
   useEffect(() => {
@@ -70,7 +61,7 @@ export default function Login() {
         setNeedsMfa(true);
         setError('');
       } else {
-        setError(apiMessage(err, 'Invalid email or password.'));
+        setError(apiMessage(err, 'Invalid username, email, mobile number or password.'));
       }
     } finally {
       setLoading(false);
@@ -89,11 +80,6 @@ export default function Login() {
      */
     <div className="grid min-h-[100dvh] lg:grid-cols-[minmax(0,1fr)_1.1fr]">
       <div className="flex items-center justify-center px-6 py-12 sm:px-10">
-        {/*
-          A div rather than a form, because there are two forms here now: the
-          password one below and the code one inside OtpSignIn, and a form
-          nested in a form is not markup any browser agrees about (EZ1-I258).
-        */}
         <motion.div
           initial={reduce ? false : { opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -114,10 +100,7 @@ export default function Login() {
             Sign in to pick up where your family left off.
           </p>
 
-          {byMobile ? (
-            <OtpSignIn onUsePassword={() => setByMobile(false)} onSignedIn={() => nav('/')} />
-          ) : (
-            <form onSubmit={submit}>
+          <form onSubmit={submit}>
           {error && (
             <p
               role="alert"
@@ -199,24 +182,11 @@ export default function Login() {
           {/* Offered, not defaulted to — and hidden mid-MFA, where the account
               is already half signed in. */}
           {!needsMfa && zohoEnabled && (
-            <button
-              type="button"
-              className="btn-ghost btn-sm mt-2 w-full"
-              onClick={() => {
-                setByMobile(true);
-                setError('');
-              }}
-            >
-              Sign in with a mobile number instead
-            </button>
-          )}
-          {!needsMfa && (
             <a className="btn-outline mt-2 flex w-full justify-center" href="/api/auth/sso/zoho/start">
               Sign in with Zoho
             </a>
           )}
-            </form>
-          )}
+          </form>
 
           <p className="mt-6 text-center text-sm text-gray-500">
             No account?{' '}
