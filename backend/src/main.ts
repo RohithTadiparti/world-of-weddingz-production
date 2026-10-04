@@ -9,6 +9,7 @@ import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { RedisIoAdapter } from './platform/websocket/redis-io.adapter';
+import { helmetOptions, shouldExposeSwagger } from './common/security/http-security';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -20,7 +21,7 @@ async function bootstrap() {
   const cfg = app.get(AppConfigService);
 
   app.setGlobalPrefix(cfg.runtime.apiPrefix);
-  app.use(helmet());
+  app.use(helmet(helmetOptions));
   // Refresh tokens ride in an httpOnly cookie, so the parser is required.
   app.use(cookieParser());
   // Behind nginx / an ELB, so rate limiting and audit logs record the real
@@ -52,7 +53,7 @@ async function bootstrap() {
   await redisIoAdapter.connectToRedis();
   app.useWebSocketAdapter(redisIoAdapter);
 
-  if (cfg.runtime.swaggerEnabled) {
+  if (shouldExposeSwagger(cfg.runtime.env, cfg.runtime.swaggerEnabled)) {
     const swaggerCfg = new DocumentBuilder()
       .setTitle('WOW - World of Weddingz API')
       .setDescription('API documentation for the WOW platform')
