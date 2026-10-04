@@ -19,15 +19,17 @@ Current uncommitted source-tree changes are not source commits. `mobile/src/app/
 
 ## Periodic review
 
-`.github/workflows/source-sync-review.yml` runs every day at 03:17 UTC and on demand. It checks out the private source repository, compares its `main` branch with `.production/source-baseline.json`, uploads a 30-day JSON/Markdown report, and updates one bot-owned comment on issue `#32`.
+`.github/workflows/source-sync-review.yml` runs every day at 03:17 UTC and on demand. It checks out the source repository, compares its `main` branch with `.production/source-baseline.json`, uploads a 30-day JSON/Markdown report, and updates one bot-owned comment on issue `#32`.
 
 The workflow is deliberately review-only: it cannot push or merge either repository. A person reviews every reported commit, records the classification in `change-intake.csv`, and advances the reviewed baseline only after every commit in the range has a recorded decision.
 
 Only committed and pushed source changes are visible to GitHub Actions. Local WOW-MD commits or uncommitted UI/UX work remain outside the report until their owner publishes them.
 
-## Private repository access
+## Repository access and `WOW_SYNC_TOKEN`
 
-Add a fine-grained token as the production repository Actions secret `WOW_SYNC_TOKEN`:
+`WOW_SYNC_TOKEN` exists solely so the production repository's scheduled workflow can read `WOW-MD` after that repository returns to private visibility. It is not an application credential, login secret, deployment token or database key. While `WOW-MD` is temporarily public, GitHub can perform a read-only checkout without a personal token; the token can therefore remain deferred. Configure it before returning `WOW-MD` to private visibility, or update the workflow in a reviewed PR to use anonymous checkout while public.
+
+Generate it in GitHub under **Settings -> Developer settings -> Personal access tokens -> Fine-grained tokens -> Generate new token**, then add it to `world-of-weddingz-production` under **Settings -> Secrets and variables -> Actions -> New repository secret** with the exact name `WOW_SYNC_TOKEN`:
 
 - resource owner: `RohithTadiparti`;
 - repository access: only `WOW-MD`;
@@ -35,7 +37,7 @@ Add a fine-grained token as the production repository Actions secret `WOW_SYNC_T
 - no organization, administration, workflow, issue, pull-request, secret or package permissions;
 - expiry: 90 days or shorter, with a named rotation owner.
 
-The secret must never appear in a register, workbook, issue, workflow output or source file. If the token is absent, expired or cannot see the reviewed baseline, the scheduled job fails closed and leaves the previous baseline unchanged.
+Copy the value once directly into the Actions secret form. The secret must never appear in a register, workbook, issue, workflow output or source file. Once private access is required, an absent, expired or unauthorized token makes the scheduled job fail closed and leaves the previous baseline unchanged.
 
 ## Changes that must flow back to WOW-MD
 
