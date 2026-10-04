@@ -13,4 +13,5 @@ DOC-011,Baseline QA evidence,docs/evidence/qa/WOW_End_to_End_QA_Report_2026-10-0
 DOC-012,Production tracking workbook,docs/tracking/production-readiness-tracker.xlsx,Program management,Generated,Each change,2026-10-04,GOV-002
 DOC-013,Gated source synchronization plan,docs/superpowers/plans/2026-10-04-gated-source-synchronization.md,Release engineering,Active,On synchronization policy change,2026-10-04,SYNC-002
 DOC-014,SEC-001 implementation plan,docs/superpowers/plans/2026-10-04-sec-001-admin-mfa-provider-policy.md,Security,Active,On authentication/provider policy change,2026-10-04,SEC-001
-DOC-015,Zoho Mail SMTP operating guide,docs/operations/zoho-mail.md,Security and operations,Approved candidate,Quarterly or provider change,2026-10-04,SEC-001 OPS-003
+DOC-015,Zoho SSO and mail operating guide,docs/operations/zoho-mail.md,Security and operations,Approved candidate,Quarterly or provider change,2026-10-05,SEC-001 AUTH-001 OPS-003
+DOC-016,Dependency remediation record,docs/security/dependency-remediation-2026-10-04.md,Security,Approved candidate,Each dependency change,2026-10-05,DEP-001
