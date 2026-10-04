@@ -2,9 +2,9 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
-  createHmac,
   hkdfSync,
   randomBytes,
+  scryptSync,
   timingSafeEqual,
 } from 'crypto';
 
@@ -28,7 +28,7 @@ export function hashToken(token: string): string {
 
 /** Keyed lookup hash for long-lived bearer credentials such as refresh JWTs. */
 export function hashSecretToken(token: string, key: string): string {
-  return createHmac('sha256', key).update(token).digest('hex');
+  return scryptSync(token, key, 32).toString('hex');
 }
 
 function cookieKey(secret: string): Buffer {
