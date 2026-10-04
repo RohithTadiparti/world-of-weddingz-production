@@ -5,6 +5,6 @@
 "ACC-004","AWS administrator","Identity Center or role for bootstrap IAM S3 KMS budgets and OIDC","To be confirmed","GitHub bootstrap OIDC role","AWS and GitHub environments","Pending","","Prefer SSO and OIDC over access keys"
 "ACC-005","AWS S3 runtime","Media-prefix object access only","To be confirmed","Railway runtime principal","Railway variables","Pending","","No bucket admin permissions"
 "ACC-006","DNS provider","Zone read and DNS edit for production domain","To be confirmed","Scoped DNS token","GitHub production environment","Pending","","No global API key"
-"ACC-007","Operational email","Mailbox or SMTP provider and recipient list","To be confirmed","SMTP/API identity","GitHub or Railway secrets","Mock","","Log provider until approved"
+"ACC-007","Operational email","Zoho domain mailbox DNS authentication reports and app-password rotation","To be confirmed","Zoho SMTP identity","GitHub Railway or Kubernetes secrets","Approved candidate","","Low-volume beta only; owner must configure domain MFA app password and first delivery evidence"
 "ACC-008","Payment provider","Razorpay sandbox then production account","To be confirmed","Webhook/API credentials","Protected secret store","Deferred","","Separate onboarding gate"
 "ACC-009","SMS WhatsApp push identity","Provider sandbox then production accounts","To be confirmed","Provider credentials","Protected secret store","Deferred","","Separate onboarding gates"

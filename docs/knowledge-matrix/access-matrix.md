@@ -64,7 +64,9 @@ The DNS provider and zone ID must be recorded in `access.csv`. The token value m
 
 ## Email and integrations
 
-For the current phase, mail, SMS, WhatsApp, push, payment and identity verification remain mock/log providers. Before each is made live, create a separate account, sandbox/production credential pair, webhook secret, allowed-origin/IP policy, budget limit, owner and incident contact.
+Zoho Mail SMTP is the approved low-volume beta candidate. It requires a domain mailbox, owner MFA, an application-specific password, SPF/DKIM/DMARC access and sending-limit monitoring. Store `SMTP_USER` and `SMTP_PASSWORD` only in the deployment secret store. Follow [the Zoho Mail operating guide](../operations/zoho-mail.md) and move to a transactional provider such as ZeptoMail before sustained external traffic reaches 25 messages/hour or after any delivery restriction.
+
+SMS, WhatsApp, push, payment and identity verification remain mock/log providers until their separate onboarding gates. Before each is made live, create a separate account, sandbox/production credential pair, webhook secret, allowed-origin/IP policy, budget limit, owner and incident contact.
 
 ## Access handover checklist
 
