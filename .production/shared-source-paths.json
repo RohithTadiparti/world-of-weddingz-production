@@ -1,0 +1,27 @@
+{
+  "sharedPrefixes": [
+    "backend/",
+    "frontend/",
+    "mobile/",
+    "docker/",
+    "k8s/"
+  ],
+  "dependencyFileNames": [
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "requirements.txt",
+    "pyproject.toml",
+    "poetry.lock",
+    "Pipfile",
+    "Pipfile.lock",
+    "Gemfile",
+    "Gemfile.lock",
+    "go.mod",
+    "go.sum",
+    "Cargo.toml",
+    "Cargo.lock"
+  ]
+}

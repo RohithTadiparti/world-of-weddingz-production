@@ -9,3 +9,4 @@ QA-BASE-007,API inventory,426 Swagger operations,QA workbook 2026-10-04,Inventor
 QA-SEC-001,Security,Admin MFA provider startup WebSockets headers secrets dependencies,SEC-001 PR 56 and WOW-MD PR 37,"Provider policy 6 of 6; admin auth/JWT 49 of 49; source mirror 55 of 55; CI pending",Complete protected CI and live staged enrollment/mail smoke evidence,"SEC-001 SEC-002 SEC-003 DEP-001 GOV-001"
 QA-PERF-001,Performance,Railway ramp spike soak recovery,None,Not run,Measured limits with 30 percent headroom,QA-001
 QA-RES-001,Resilience,Backup restore and failed cutover,None,Not run,Successful restore and two rollback rehearsals,"QA-002 QA-003"
+QA-GOV-001,Source synchronization,Private-source report and shared-code mirror gate,PR 55 local evidence,19 of 19 governance and synchronization tests passed,Configure WOW_SYNC_TOKEN and capture first scheduled artifact,SYNC-002

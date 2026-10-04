@@ -8,3 +8,4 @@
 "ACC-007","Operational email","Zoho domain mailbox DNS authentication reports and app-password rotation","To be confirmed","Zoho SMTP identity","GitHub Railway or Kubernetes secrets","Approved candidate","","Low-volume beta only; owner must configure domain MFA app password and first delivery evidence"
 "ACC-008","Payment provider","Razorpay sandbox then production account","To be confirmed","Webhook/API credentials","Protected secret store","Deferred","","Separate onboarding gate"
 "ACC-009","SMS WhatsApp push identity","Provider sandbox then production accounts","To be confirmed","Provider credentials","Protected secret store","Deferred","","Separate onboarding gates"
+"ACC-010","WOW-MD source review","Private repository contents read for scheduled change reports","RohithTadiparti","Fine-grained WOW_SYNC_TOKEN","Production GitHub Actions secret","Pending","","Scope only to WOW-MD Contents read; rotate within 90 days"
