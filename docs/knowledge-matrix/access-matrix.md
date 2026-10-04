@@ -4,7 +4,7 @@ Never send credentials in chat, commit them, or place them in the Excel tracker.
 
 ## GitHub
 
-Current account-tier limitation (verified 2026-10-04): GitHub rejected private-repository branch protection with HTTP 403 because GitHub Pro is required, and rejected native secret scanning with HTTP 422. Dependabot alerts, automated security fixes, CodeQL and CI Gitleaks remain enabled or configured as compensating controls. Upgrade the owning account or transfer the repository to an eligible organization before public production, then make required PR reviews/checks and native push protection mandatory.
+Current state (verified 2026-10-04): the repository is temporarily public because GitHub Pro is unavailable. Main-branch protection requires pull requests, eight current checks, up-to-date branches, resolved conversations and linear history; administrators cannot bypass it. Native secret scanning, push protection, private vulnerability reporting, Dependabot, CodeQL and CI Gitleaks are enabled. Reassess visibility only if an account tier that preserves these controls for a private repository becomes available.
 
 Required account: repository owner or administrator for `RohithTadiparti/world-of-weddingz-production`.
 
@@ -23,7 +23,7 @@ Required account: project owner initially; later grant a least-privilege deploye
 Required capabilities:
 
 - create one project and four services: frontend, backend, PostgreSQL and Redis;
-- connect the private GitHub repository;
+- connect the GitHub repository;
 - manage variables, private networking, volumes, health checks, deploys and rollback;
 - view usage/cost and configure soft/hard spending alerts;
 - create a project token for GitHub Actions only when deployment automation is enabled;

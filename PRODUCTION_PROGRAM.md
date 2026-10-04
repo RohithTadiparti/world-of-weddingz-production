@@ -1,6 +1,6 @@
 # World of Weddingz production program
 
-This private repository is the production delivery line for World of Weddingz. It starts from the committed source snapshot `07218b4ab02a8702a4d8d9fdab7dc26e579ab7b4` from `RohithTadiparti/WOW-MD` and intentionally has new Git history.
+This repository is the production delivery line for World of Weddingz. It is temporarily public so GitHub's free branch-protection and native security controls can be enforced. It starts from the committed source snapshot `07218b4ab02a8702a4d8d9fdab7dc26e579ab7b4` from `RohithTadiparti/WOW-MD` and intentionally has new Git history.
 
 The application source remains recognizable, but production work follows the governance in `docs/governance/`. The canonical program registers live in `docs/tracking/registers/`. The Excel tracker is a generated management view, not the authoritative record.
 
