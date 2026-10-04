@@ -40,12 +40,10 @@ an allocation.
 docker compose -f docker/docker-compose.yml --profile seed run --rm seed-admin
 ```
 
-With nothing configured this seeds `admin@wow.com` / `admin123`, so a fresh
-database is not locked out of its own administration. Set `ADMIN_EMAIL` /
-`ADMIN_PASSWORD` to override — both together, and at least twelve characters —
-for any database that more than one person can reach, because that default
-password is published in the README. `SEED_ADMIN_REQUIRE_EXPLICIT=true` removes
-the fallback entirely, and the Kubernetes Job sets it.
+Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before running the command. Both values
+are required and the password must contain at least twelve characters unless
+the explicitly test-only weak-password override is enabled. The seeder fails
+closed rather than creating a documented fallback administrator.
 
 The seeder is idempotent — re-running promotes and reactivates an existing
 account instead of failing.

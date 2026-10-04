@@ -1,6 +1,6 @@
 # WOW, World of Weddingz
 
-> Production delivery and governance start at [PRODUCTION_PROGRAM.md](PRODUCTION_PROGRAM.md). This private repository has clean history and accepts changes through traced issues and pull requests.
+> Production delivery and governance start at [PRODUCTION_PROGRAM.md](PRODUCTION_PROGRAM.md). This clean-history repository is temporarily public to use GitHub's free protection and security controls, and accepts changes only through traced issues and pull requests.
 
 WOW is a full stack platform that carries a couple through the whole wedding journey. People discover and match with a partner, connect and chat once both sides agree, plan the wedding with an automatic timeline, book vendors and wedding planners with money held safely in escrow, run the individual ceremonies with guest lists and seating, arrange the honeymoon, and finally keep their photos and videos in shareable albums.
 
@@ -90,11 +90,11 @@ There is also `deploy-local.sh`, which wraps the same steps and waits for health
 docker compose -f docker/docker-compose.yml --profile seed run --rm seed-admin
 ```
 
-With nothing configured this creates **`admin@wow.com` / `admin123`**, so a fresh checkout has a way in. That password is published here, which means it is only ever as private as the database is — set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `docker/.env` for anything reachable by more than the person who cloned the repository. Both must be set together, and a password you choose has to be at least twelve characters.
+Set both `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `docker/.env` before running the seed. The seeder fails closed when either value is absent. Passwords must contain at least twelve characters unless the explicitly test-only weak-password override is enabled.
 
 The seeder is idempotent: running it again promotes and reactivates the existing account instead of failing.
 
-On Kubernetes the equivalent is `k8s/seed-admin-job.yaml`, run once per environment. That Job sets `SEED_ADMIN_REQUIRE_EXPLICIT=true`, which turns the fallback off and makes the Job fail if the Secret does not carry both values — an `envFrom` that silently resolves to nothing would otherwise put the public default into a cluster.
+On Kubernetes the equivalent is `k8s/seed-admin-job.yaml`, run once per environment. The Job fails if its Secret does not provide both required values.
 
 ## Configuration
 

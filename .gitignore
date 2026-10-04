@@ -47,6 +47,7 @@ qa-report/
 
 # Spreadsheet builder previews and scratch
 docs/tracking/.build/
+~$*.xlsx
 
 # Local editor settings (may hold personal tokens)
 .claude/settings.json
