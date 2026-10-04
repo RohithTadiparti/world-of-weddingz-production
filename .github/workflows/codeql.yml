@@ -1,8 +1,9 @@
 name: CodeQL
 
 # Static security analysis of the TypeScript in backend/, frontend/ and
-# mobile/, and of the workflows themselves. Findings appear under
-# Security → Code scanning, and on the pull request that introduces them.
+# mobile/, and of the workflows themselves. The current private GitHub tier
+# cannot accept native code-scanning uploads, so SARIF is retained as an
+# artifact until GitHub Advanced Security becomes available.
 on:
   push:
     branches: [main]
@@ -20,7 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
       actions: read
     strategy:
       fail-fast: false
@@ -50,3 +50,14 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: /language:${{ matrix.language }}
+          output: ../results
+          upload: false
+
+      - name: Retain SARIF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: ../results
+          if-no-files-found: error
+          retention-days: 30
