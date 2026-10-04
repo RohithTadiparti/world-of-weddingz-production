@@ -42,3 +42,11 @@ The secret must never appear in a register, workbook, issue, workflow output or 
 Production changes under shared backend, frontend, mobile, Docker/Kubernetes application, or dependency-manifest paths require a separate WOW-MD pull request. The production PR links that mirror PR and cannot pass the mirror gate without it. Reviewers must resolve conflicts in WOW-MD; automation must not replace complete files over ongoing UI/UX work.
 
 Production-only governance, evidence and infrastructure files do not require a source mirror. Dependency manifests and lockfiles are always treated as shared because a later source synchronization could otherwise restore vulnerable or incompatible versions.
+
+The required production PR fields are:
+
+- `Shared source impact: None` when no configured shared path changed, otherwise `Mirror required`;
+- `WOW-MD mirror PR: None` or the exact `https://github.com/RohithTadiparti/WOW-MD/pull/<number>` URL;
+- `Dependency changes: None` or a concise list of affected manifests/lockfiles.
+
+The required `registers` check calculates changed paths from the PR base/head SHAs. Any change under `backend/`, `frontend/`, `mobile/`, `docker/` or `k8s/` fails until the PR body identifies the WOW-MD mirror PR. This is a review linkage, not permission to overwrite source: the mirror PR resolves any conflict against current WOW-MD work before either side is considered synchronized.
