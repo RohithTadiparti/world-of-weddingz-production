@@ -6,6 +6,6 @@ QA-BASE-004,Fresh account lifecycle,Two six-role cohorts including recovery,QA w
 QA-BASE-005,Wedding lifecycle,Self-managed planner-assisted shared task and release,QA workbook 2026-10-04,3 of 3 passed,Repeat on Railway and AWS rehearsal,"REL-001 QA-002"
 QA-BASE-006,Database to UI reconciliation,46 exact comparisons,QA workbook 2026-10-04,46 matched,Automated source-target and UI reconciliation,"MIG-004 QA-002"
 QA-BASE-007,API inventory,426 Swagger operations,QA workbook 2026-10-04,Inventory complete with execution backlog,Permission/state matrix for critical operations,All API-changing items
-QA-SEC-001,Security,Admin MFA provider startup WebSockets headers secrets dependencies,Production readiness audit,Open,Focused abuse tests plus security workflows,"SEC-001 SEC-002 SEC-003 DEP-001 GOV-001"
+QA-SEC-001,Security,Admin MFA provider startup WebSockets headers secrets dependencies,SEC-001 PR 56 and WOW-MD PR 37,"Provider policy 6 of 6; admin auth/JWT 49 of 49; source mirror 55 of 55; CI pending",Complete protected CI and live staged enrollment/mail smoke evidence,"SEC-001 SEC-002 SEC-003 DEP-001 GOV-001"
 QA-PERF-001,Performance,Railway ramp spike soak recovery,None,Not run,Measured limits with 30 percent headroom,QA-001
 QA-RES-001,Resilience,Backup restore and failed cutover,None,Not run,Successful restore and two rollback rehearsals,"QA-002 QA-003"
