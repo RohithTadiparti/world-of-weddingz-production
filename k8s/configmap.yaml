@@ -7,11 +7,14 @@ metadata:
   namespace: wow
 data:
   NODE_ENV: "production"
+  DEPLOYMENT_TIER: "public-beta"
   PORT: "3000"
   API_PREFIX: "api"
   LOG_LEVEL: "info"
   CORS_ORIGINS: "https://app.wow.example.com"
   SWAGGER_ENABLED: "false"
+  COOKIE_SECURE: "true"
+  MFA_REQUIRED_FOR_ADMIN: "true"
   DB_PORT: "5432"
   DB_NAME: "wow_db"
   DB_SSL: "true"
@@ -34,6 +37,13 @@ data:
   PAYMENT_PROVIDER: "razorpay"
   PAYMENT_CURRENCY: "INR"
   MEDIA_STORAGE_PROVIDER: "s3"
+  MAIL_PROVIDER: "smtp"
+  # Use the exact SMTP host shown in the Zoho account's Server Configuration.
+  SMTP_HOST: "smtp.zoho.in"
+  SMTP_PORT: "465"
+  SMTP_SECURE: "true"
+  MAIL_FROM: "WOW <no-reply@your-domain.com>"
+  APP_BASE_URL: "https://app.wow.example.com"
   AI_PROVIDER: "mock"
   NEO4J_ENABLED: "false"
   KAFKA_ENABLED: "false"

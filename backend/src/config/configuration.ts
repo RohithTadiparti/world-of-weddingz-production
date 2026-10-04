@@ -21,6 +21,11 @@ const toList = (value: string | undefined, fallback: string[] = []): string[] =>
 export default () => ({
   runtime: {
     env: process.env.NODE_ENV || 'development',
+    deploymentTier: (process.env.DEPLOYMENT_TIER || 'local') as
+      | 'local'
+      | 'staging'
+      | 'public-beta'
+      | 'revenue',
     port: toNumber(process.env.PORT, 3000),
     host: process.env.HOST || '0.0.0.0',
     apiPrefix: process.env.API_PREFIX || 'api',
