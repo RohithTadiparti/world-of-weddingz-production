@@ -25,3 +25,15 @@ test('scheduled source review cannot merge or push either repository', () => {
   assert.doesNotMatch(workflow, /contents:\s*write/i);
   assert.match(workflow, /issues:\s*write/);
 });
+
+test('pull-request mirror gate checks out enough history to compare base and head', () => {
+  const governance = readFileSync(
+    new URL('../../.github/workflows/governance.yml', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(
+    governance,
+    /registers:[\s\S]*?steps:\s*\n\s*- uses:\s*actions\/checkout@v4\s*\n\s*with:\s*\n\s*fetch-depth:\s*0\s*\n\s*- uses:\s*actions\/setup-node@v4/,
+  );
+});
