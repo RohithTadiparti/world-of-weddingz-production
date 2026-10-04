@@ -10,6 +10,7 @@ import { AppConfigService } from './config/app-config.service';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { RedisIoAdapter } from './platform/websocket/redis-io.adapter';
 import { helmetOptions, shouldExposeSwagger } from './common/security/http-security';
+import { Logger as PinoLogger } from 'nestjs-pino';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -19,6 +20,7 @@ async function bootstrap() {
     rawBody: true,
   });
   const cfg = app.get(AppConfigService);
+  app.useLogger(app.get(PinoLogger));
 
   app.setGlobalPrefix(cfg.runtime.apiPrefix);
   app.use(helmet(helmetOptions));

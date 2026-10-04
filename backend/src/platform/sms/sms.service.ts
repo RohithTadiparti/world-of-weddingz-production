@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { SMS_PROVIDER, SmsProvider } from './sms.provider';
 import { AppConfigService } from '../../config/app-config.service';
+import { maskPhone } from '../../common/logging/log-redaction';
 
 /**
  * The messages the platform sends by SMS.
@@ -33,7 +34,7 @@ export class SmsService {
       await this.provider.send({ to, body });
       return true;
     } catch (err) {
-      this.logger.warn(`SMS to ${to} failed: ${(err as Error).message}`);
+      this.logger.warn(`SMS to ${maskPhone(to)} failed: ${(err as Error).name}`);
       return false;
     }
   }

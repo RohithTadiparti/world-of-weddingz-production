@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
+import { correlatedHeaders } from '../../common/logging/request-context';
+import { errorType, maskPhone } from '../../common/logging/log-redaction';
+import { DeliveryCaptureService } from '../delivery-capture/delivery-capture.service';
 
 export interface SmsMessage {
   /** E.164, because that is the only form a gateway will accept. */
@@ -24,10 +27,16 @@ export interface SmsProvider {
 export class LogSmsProvider implements SmsProvider {
   private readonly logger = new Logger('Sms');
 
+  constructor(@Optional() private readonly capture?: DeliveryCaptureService) {}
+
   async send(message: SmsMessage): Promise<void> {
-    // The link or the code is the whole point of these messages, so the body
-    // is logged intact rather than truncated.
-    this.logger.log(`[sms:log] to=${message.to}\n${message.body}`);
+    this.logger.log({
+      event: 'provider_delivery',
+      channel: 'sms',
+      destination: maskPhone(message.to),
+      delivered: true,
+    });
+    await this.capture?.store('sms', message.to, message);
   }
 }
 
@@ -51,10 +60,10 @@ export class HttpSmsProvider implements SmsProvider {
     try {
       const response = await fetch(sms.url, {
         method: 'POST',
-        headers: {
+        headers: correlatedHeaders({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${sms.apiKey}`,
-        },
+        }),
         body: JSON.stringify({
           sender: sms.senderId,
           template_id: sms.templateId || undefined,
@@ -70,7 +79,13 @@ export class HttpSmsProvider implements SmsProvider {
     } catch (err) {
       // A send failure must not roll back the action that triggered it — an
       // invitation row already exists and can be resent.
-      this.logger.error(`Failed to send SMS to ${message.to}`, err as Error);
+      this.logger.error({
+        event: 'provider_delivery_failure',
+        channel: 'sms',
+        destination: maskPhone(message.to),
+        delivered: false,
+        errorType: errorType(err),
+      });
       throw err;
     } finally {
       clearTimeout(timeout);

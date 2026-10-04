@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
+import { correlatedHeaders } from '../../common/logging/request-context';
+import { errorType, maskPhone } from '../../common/logging/log-redaction';
+import { DeliveryCaptureService } from '../delivery-capture/delivery-capture.service';
 
 export interface WhatsAppMessage {
   /** E.164, as every gateway requires. */
@@ -30,15 +33,21 @@ export interface WhatsAppProvider {
 export class LogWhatsAppProvider implements WhatsAppProvider {
   private readonly logger = new Logger('WhatsApp');
 
+  constructor(@Optional() private readonly capture?: DeliveryCaptureService) {}
+
   async send(message: WhatsAppMessage): Promise<void> {
     // Logged as the template plus its parameters rather than as an assembled
     // sentence, because that is what actually goes to Meta — a default that
     // renders the message would hide a template mismatch until the real
     // provider was switched on.
-    this.logger.log(
-      `[whatsapp:log] to=${message.to} template=${message.template}(${message.language}) ` +
-        `params=${JSON.stringify(message.params)}`,
-    );
+    this.logger.log({
+      event: 'provider_delivery',
+      channel: 'whatsapp',
+      destination: maskPhone(message.to),
+      template: message.template,
+      delivered: true,
+    });
+    await this.capture?.store('whatsapp', message.to, message);
   }
 }
 
@@ -61,10 +70,10 @@ export class CloudApiWhatsAppProvider implements WhatsAppProvider {
     try {
       const response = await fetch(`${wa.baseUrl}/${wa.phoneNumberId}/messages`, {
         method: 'POST',
-        headers: {
+        headers: correlatedHeaders({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${wa.token}`,
-        },
+        }),
         body: JSON.stringify({
           messaging_product: 'whatsapp',
           to: message.to,
@@ -86,11 +95,17 @@ export class CloudApiWhatsAppProvider implements WhatsAppProvider {
       });
 
       if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`WhatsApp returned ${response.status}${detail ? `: ${detail}` : ''}`);
+        throw new Error(`WhatsApp returned ${response.status}`);
       }
     } catch (err) {
-      this.logger.error(`WhatsApp to ${message.to} failed`, err as Error);
+      this.logger.error({
+        event: 'provider_delivery_failure',
+        channel: 'whatsapp',
+        destination: maskPhone(message.to),
+        template: message.template,
+        delivered: false,
+        errorType: errorType(err),
+      });
       throw err;
     } finally {
       clearTimeout(timeout);

@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { WHATSAPP_PROVIDER, WhatsAppProvider } from './whatsapp.provider';
 import { AppConfigService } from '../../config/app-config.service';
+import { maskPhone } from '../../common/logging/log-redaction';
 
 /**
  * WhatsApp, which nobody gets unless they asked for it.
@@ -33,7 +34,7 @@ export class WhatsAppService {
       });
       return true;
     } catch (err) {
-      this.logger.warn(`WhatsApp to ${to} failed: ${(err as Error).message}`);
+      this.logger.warn(`WhatsApp to ${maskPhone(to)} failed: ${(err as Error).name}`);
       return false;
     }
   }

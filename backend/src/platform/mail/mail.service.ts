@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { MAIL_PROVIDER, MailProvider } from './mail.provider';
 import { AppConfigService } from '../../config/app-config.service';
+import { maskEmail } from '../../common/logging/log-redaction';
 
 /**
  * Every transactional email the platform sends.
@@ -55,7 +56,9 @@ export class MailService {
                </div>`,
       });
     } catch {
-      this.logger.warn(`Mail "${subject}" to ${to} could not be delivered; the action itself succeeded.`);
+      this.logger.warn(
+        `Mail to ${maskEmail(to)} could not be delivered; the action itself succeeded.`,
+      );
     }
   }
 

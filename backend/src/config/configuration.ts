@@ -30,6 +30,8 @@ export default () => ({
     host: process.env.HOST || '0.0.0.0',
     apiPrefix: process.env.API_PREFIX || 'api',
     logLevel: process.env.LOG_LEVEL || 'info',
+    serviceName: process.env.SERVICE_NAME || 'backend',
+    release: process.env.RELEASE || 'unknown',
     corsOrigins: toList(process.env.CORS_ORIGINS, ['http://localhost:5173']),
     swaggerEnabled: toBool(process.env.SWAGGER_ENABLED, true),
   },
@@ -52,6 +54,11 @@ export default () => ({
     port: toNumber(process.env.REDIS_PORT, 6379),
     password: process.env.REDIS_PASSWORD || undefined,
     defaultTtlSeconds: toNumber(process.env.REDIS_DEFAULT_TTL, 300),
+  },
+
+  observability: {
+    testDeliveryCaptureEnabled: toBool(process.env.TEST_DELIVERY_CAPTURE_ENABLED, false),
+    testDeliveryCaptureKey: process.env.TEST_DELIVERY_CAPTURE_KEY || '',
   },
 
   /**
