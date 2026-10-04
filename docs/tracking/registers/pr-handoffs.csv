@@ -1,2 +1,2 @@
-WorkItem,PR,Branch,BaseCommit,HeadCommit,SourceCommits,Tests,Deployment,Rollback,ResidualRisks,Status,Updated
-GOV-002,,codex/gov-002-production-program,,,,Initial repository validation,Documentation and governance baseline,Revert initial commit before dependent work,None,In Progress,2026-10-04
+"WorkItem","PR","Branch","BaseCommit","HeadCommit","SourceCommits","Tests","Deployment","Rollback","ResidualRisks","Status","Updated"
+"GOV-002","https://github.com/RohithTadiparti/world-of-weddingz-production/pull/49","codex/gov-002-production-program","1e9f458","fb8afe5","07218b4ab02a8702a4d8d9fdab7dc26e579ab7b4","Register tests 2/2; credential scan clear; workbook formulas clear and 10 sheets visually reviewed","Documentation and governance only; no Railway deployment","Revert PR 49; bootstrap remains clean source snapshot","GitHub plan blocks protected private branches and native secret scanning; tracked by GOV-001","PR Open","2026-10-04"
