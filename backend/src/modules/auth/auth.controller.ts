@@ -42,6 +42,7 @@ import { Permission, permissionsFor } from '../../common/authz/permissions';
 import { ACCOUNT_TYPE_ROLE, AccountType, INDIVIDUAL_ROLES } from '../../common/enums';
 import { AppConfigService } from '../../config/app-config.service';
 import { ZohoSsoService } from './zoho-sso.service';
+import { sealTokenForCookie, unsealTokenFromCookie } from '../../common/util/tokens';
 
 /**
  * The ceiling on the credential-guessing surface: register, login, refresh and
@@ -140,7 +141,10 @@ export class AuthController {
     if (this.isNativeClient(req)) return result;
 
     const a = this.cfg.auth;
-    res.cookie(a.refreshCookieName, result.refreshToken, {
+    res.cookie(
+      a.refreshCookieName,
+      sealTokenForCookie(result.refreshToken, a.jwtRefreshSecret),
+      {
       httpOnly: true,
       secure: a.cookieSecure,
       sameSite: a.cookieSameSite,
@@ -149,7 +153,8 @@ export class AuthController {
       // to every ordinary API call.
       path: `/${this.cfg.runtime.apiPrefix}/auth`,
       maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+      },
+    );
     const { refreshToken, ...body } = result;
     void refreshToken;
     return body;
@@ -165,7 +170,10 @@ export class AuthController {
   /** Cookie first; body only for clients that cannot hold cookies. */
   private readRefreshToken(req: Request, dto?: RefreshDto): string | undefined {
     const cookies = (req as Request & { cookies?: Record<string, string> }).cookies;
-    return cookies?.[this.cfg.auth.refreshCookieName] ?? dto?.refreshToken;
+    const cookie = cookies?.[this.cfg.auth.refreshCookieName];
+    return cookie
+      ? unsealTokenFromCookie(cookie, this.cfg.auth.jwtRefreshSecret)
+      : dto?.refreshToken;
   }
 
   // ------------------------------------------------------------ sign-up flow
