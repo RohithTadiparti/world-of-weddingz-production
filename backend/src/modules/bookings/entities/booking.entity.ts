@@ -1,0 +1,299 @@
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { BookingStatus, ProviderType } from '../../../common/enums';
+import type { QuotationSummary } from '../booking-summary';
+
+export interface PlannerBrief {
+  location?: string | null;
+  guestCountMin?: number | null;
+  guestCountMax?: number | null;
+  weddingType?: string | null;
+  budgetMin?: number | null;
+  budgetMax?: number | null;
+}
+
+@Entity('bookings')
+@Index(['providerType', 'providerId'])
+export class Booking {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  /** The client the booking is *for*. Escrow refunds go back to this account. */
+  @Index()
+  @Column('uuid')
+  userId: string;
+
+  /**
+   * Who actually placed it. Equals `userId` for a self-service booking; for an
+   * agent booking on a client's behalf this is the agent, giving a clean audit
+   * trail of who acted.
+   */
+  @Index()
+  @Column('uuid')
+  bookedByUserId: string;
+
+  /** Which directory the provider lives in. */
+  @Column({ type: 'enum', enum: ProviderType, default: ProviderType.VENDOR })
+  providerType: ProviderType;
+
+  /** Vendor.id or PlannerProfile.id, depending on providerType. */
+  @Index()
+  @Column('uuid')
+  providerId: string;
+
+  @Index()
+  @Column({ type: 'enum', enum: BookingStatus, default: BookingStatus.REQUESTED })
+  status: BookingStatus;
+
+  /**
+   * What is owed in total, extras included.
+   *
+   * Every downstream reader — escrow, commission, the vendor's accounts —
+   * takes its figure from here, so an accepted add-on has to land in it.
+   */
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  amount: string;
+
+  /**
+   * The quotation before any add-ons, kept so `amount` can be recomputed.
+   *
+   * Written the first time an add-on is accepted and never again: re-summing
+   * from a stable base is what makes agreeing a second extra — or the same one
+   * twice — arrive at the right number rather than compounding (EZ1-I215).
+   * Null on every booking that has never had an add-on, which is most of them.
+   */
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
+  baseAmount: string | null;
+
+  @Column({ default: 'INR' })
+  currency: string;
+
+  @Column({ type: 'date', nullable: true })
+  eventDate: string | null;
+
+  /**
+   * The published window this booking holds.
+   *
+   * A booking without one is a legacy row or a planner engagement; for a vendor
+   * the slot is what stops the same afternoon being sold twice.
+   */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  slotId: string | null;
+
+  /** The wedding event this is for — the reception, the mehendi. */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  eventId: string | null;
+
+  /**
+   * What the buyer actually needs: guest count, menu, timings, anything the
+   * provider must know to price the job. Mandatory on a vendor request, because
+   * a quotation written without it is a guess.
+   */
+  @Column({ type: 'text', nullable: true })
+  requirements: string | null;
+
+  // ------------------------------------------------------------ the catalog
+  //
+  // Which service was booked, at which published price, and the answers to
+  // that service's booking form. All three are nullable: a booking made before
+  // the catalog existed has no service to point at and must keep loading.
+
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  vendorServiceId: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  offeringId: string | null;
+
+  /**
+   * The buyer's answers to the service's BOOKING-scope attributes, validated
+   * against them at request time.
+   *
+   * Structured, unlike `requirements` above, which stays because a buyer
+   * always has something to say that no form thought to ask.
+   */
+  @Column({ type: 'jsonb', default: {} })
+  serviceAnswers: Record<string, unknown>;
+
+  /** Plates, hours, days — whatever the offering's pricing model counts. */
+  @Column({ type: 'int', nullable: true })
+  quantity: number | null;
+
+  /**
+   * The total the buyer was shown when they asked: the chosen price times the
+   * quantity where the price counts something. Not what is owed — `amount`
+   * stays zero until a quotation is agreed — but what the vendor is quoting
+   * against. Null for a quote-only price or a request with no price chosen.
+   */
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
+  estimatedAmount: string | null;
+
+  /** Designs the buyer attached for reference: uploaded image URLs. */
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  referenceImages: string[];
+
+  /**
+   * On a planner request: the services the couple ticked on the planner's
+   * profile, as keys of PLANNER_SERVICE_KEYS. Empty on every vendor booking.
+   */
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  requestedServices: string[];
+
+  /**
+   * What the buyer hopes to spend. Optional on purpose — the provider quotes
+   * against the requirements, and forcing a number out of someone who does not
+   * have one only produces a fictional one.
+   */
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
+  expectedBudget: string | null;
+
+  /**
+   * What a couple told a wedding planner about the wedding: guest count, type,
+   * place and budget range (the services are `requestedServices`). Null on vendor bookings
+   * and on planner requests made before the brief existed.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  plannerBrief: PlannerBrief | null;
+
+  /**
+   * When the provider took the request on, before any price was agreed. A
+   * planner accepts a couple's request and then quotes, so "accepted" and
+   * "priced" are two separate moments.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  providerAcceptedAt: Date | null;
+
+  /** Set when the provider confirms they have started. */
+  @Column({ type: 'timestamptz', nullable: true })
+  startedAt: Date | null;
+
+  /** Set when the provider says the work is delivered. */
+  @Column({ type: 'timestamptz', nullable: true })
+  completedAt: Date | null;
+
+  /**
+   * When the provider said the work was done, and what they showed for it.
+   *
+   * "Mark as delivered" recorded a status change and nothing else, so a buyer
+   * being asked to release money had only the provider's word for it and an
+   * administrator settling a dispute had no record of what was handed over
+   * (EZ1-I228). Notes and evidence are optional -- a photographer's delivery is
+   * a gallery link, a caterer's is nothing at all -- but when they are given
+   * they stay on the booking.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  deliveredAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  deliveryNotes: string | null;
+
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  deliveryEvidence: string[];
+
+  /**
+   * When the buyer accepted the delivery.
+   *
+   * The step the escrow flow was missing. Held money became releasable on the
+   * balance being paid, which is the buyer's *money* arriving rather than the
+   * buyer *agreeing the work was done* -- and those are different facts. Until
+   * this is set on a booking that was delivered, `settle` refuses.
+   *
+   * Null on every booking that predates the delivery flow, which is why the
+   * refusal is conditioned on `deliveredAt` rather than on this being absent.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  deliveryAcceptedAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  notes: string;
+
+  @Column({ type: 'text', nullable: true })
+  cancellationReason: string | null;
+
+  /** Who cancelled it, so the other side is told (EZ1-I77). */
+  @Column({ type: 'uuid', nullable: true })
+  cancelledByUserId: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  cancelledAt: Date | null;
+
+  /**
+   * The quotation this booking was struck on, if it came through one.
+   *
+   * Points at a row that is never edited in place, which is what makes the
+   * agreed price and terms reconstructable months later when somebody argues
+   * about them.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  acceptedQuotationId: string | null;
+
+  @CreateDateColumn({ type: 'timestamptz' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz' })
+  updatedAt: Date;
+
+  /*
+   * Filled in when a provider's queue is listed, and never stored.
+   *
+   * All of it lives on the client, the event and the payments already; a
+   * stored copy would be stale the moment a couple renamed their reception.
+   * They are here so a booking row can be answered without opening three
+   * other screens.
+   */
+  clientName?: string | null;
+  clientEmail?: string | null;
+  clientPhone?: string | null;
+  /** The client's own city and first photo, for the provider's booking detail (EZ1-I109). */
+  clientCity?: string | null;
+  clientPhoto?: string | null;
+  eventName?: string | null;
+  eventVenue?: string | null;
+  eventCity?: string | null;
+  expectedGuests?: number | null;
+  serviceName?: string | null;
+  /** The package the customer picked, resolved from offeringId (EZ1-I33). */
+  offeringName?: string | null;
+  /** The furthest this booking's money has got, not a list of transactions. */
+  paymentStatus?: string | null;
+  /**
+   * What has actually been collected against this booking so far (EZ1-I259).
+   *
+   * Summed from the payments that are neither failed nor refunded, so a
+   * confirmed job can show what is paid and what is left without the row
+   * asking for its own instalment breakdown.
+   */
+  paidAmount?: string | null;
+  /** Who cancelled it, resolved for display (EZ1-I77). */
+  cancelledByName?: string | null;
+  cancelledByRole?: string | null;
+  /** The buyer's own review of this booking, when they have written one (EZ1-I114). */
+  myReview?: { rating: number; comment: string } | null;
+  /**
+   * True on a buyer-side list when the row belongs to the caller's match-fixed
+   * partner rather than the caller (EZ1-I160). Lets the shared wedding view mark
+   * "booked by your partner" without a second lookup, and is never stored.
+   */
+  sharedFromPartner?: boolean;
+  /** The newest quotation, and where the price negotiation stands (EZ1-I264). */
+  quotation?: QuotationSummary | null;
+  /**
+   * Asked for on a date the provider never published a window for (EZ1-I266).
+   * Worked out on the server so the row, its badge and the tab count share one
+   * rule.
+   */
+  requestOnDate?: boolean;
+  /** The instalments collected so far, so an action that needs one can say so. */
+  collectedMilestones?: string[];
+  /** The booked listing's city, and whether it is a venue — where its bookings are held. */
+  providerCity?: string | null;
+  providerIsVenue?: boolean;
+}

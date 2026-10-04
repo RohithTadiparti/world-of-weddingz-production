@@ -1,0 +1,330 @@
+import { useQuery } from '@tanstack/react-query';
+import { Link, useParams } from 'react-router-dom';
+import { ArrowLeft } from '@phosphor-icons/react';
+import { api, apiMessage } from '../lib/api';
+import { formatDate } from '../lib/dates';
+import { BOOKING_STATUS_LABEL } from '../lib/permissions';
+import {
+  TASK_STATUS_LABEL,
+  bookingAmountLabel,
+  humanize,
+  labelFrom,
+  paymentStatusLabel,
+} from '../lib/labels';
+import { Loading } from '../components/ui/Feedback';
+
+/**
+ * One client, everything about their wedding, on one screen.
+ *
+ * The numbers here are not recomputed for the planner. Budget, guest counts
+ * and planning progress all come from the same service that draws the couple's
+ * own dashboard, so the two sides of a wedding are looking at the same figures.
+ * A second derivation would drift, and the planner's copy is the one nobody
+ * would notice drifting.
+ */
+
+interface Detail {
+  client: {
+    userId: string;
+    name: string;
+    bride: string | null;
+    groom: string | null;
+    email: string | null;
+    phone: string | null;
+    city: string | null;
+    status: string;
+  };
+  wedding: {
+    planId: string;
+    weddingDate: string | null;
+    /** Worked out from the wedding's functions when the plan carries no date. */
+    derivedWeddingDate?: string | null;
+    countdown: { weddingDate: string | null; daysAway: number | null; passed: boolean };
+    functions: number;
+    venues: string[];
+    cities: string[];
+  };
+  progress: unknown;
+  guests: Record<string, unknown>;
+  budget: {
+    budgeted: string;
+    committed: string;
+    remaining: string;
+    overBudget: boolean;
+    categories: { category: string; budgeted: string; committed: string; remaining: string }[];
+  };
+  events: {
+    id: string;
+    name: string;
+    date: string | null;
+    venue: string;
+    city: string | null;
+    startTime: string | null;
+    budget: string | null;
+    status: string;
+  }[];
+  tasks: { id: string; title: string; category: string; dueDate: string | null; status: string }[];
+  vendors: {
+    bookingId: string;
+    name: string;
+    category: string;
+    service: string | null;
+    package: string | null;
+    status: string;
+    paymentStatus: string | null;
+    amount: string;
+    currency: string;
+    eventDate: string | null;
+    /** The newest offer, while nothing has been agreed. */
+    quotation?: { amount: string; currency?: string; stage?: string } | null;
+  }[];
+}
+
+const TASK_TONE: Record<string, string> = {
+  done: 'bg-emerald-50 text-emerald-800',
+  in_progress: 'bg-amber-50 text-amber-800',
+  pending: 'bg-gray-100 text-gray-600',
+};
+
+export default function PlannerClientDetail() {
+  const { userId } = useParams<{ userId: string }>();
+
+  const { data, isPending, error } = useQuery<Detail>({
+    queryKey: ['planner-client', userId],
+    queryFn: async () => (await api.get(`/planner/clients/${userId}`)).data,
+    enabled: Boolean(userId),
+    retry: false,
+  });
+
+  if (isPending) return <Loading rows={6} />;
+  if (error) {
+    return (
+      <div className="card">
+        <p className="alert-critical">
+          {apiMessage(error, 'That client could not be opened.')}
+        </p>
+        <Link className="btn-outline mt-3 inline-flex" to="/my-clients">
+          Back to clients
+        </Link>
+      </div>
+    );
+  }
+
+  const { client, wedding, budget, events, tasks, vendors } = data;
+  const money = (v: string | number) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
+  const doneCount = tasks.filter((t) => t.status === 'done').length;
+  const weddingDate =
+    wedding.weddingDate ?? wedding.derivedWeddingDate ?? wedding.countdown?.weddingDate ?? null;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Link className="inline-flex items-center gap-1 text-sm text-gray-500" to="/my-clients">
+          <ArrowLeft size={14} aria-hidden />
+          All clients
+        </Link>
+        <h1 className="page-title mt-1">{client.name}</h1>
+        <p className="page-subtitle">
+          {[client.bride, client.groom].filter(Boolean).join(' & ') || 'Client'}
+          {client.city ? ` · ${client.city}` : ''}
+        </p>
+        {/* Quick actions into the rest of the workspace (EZ1-I56). */}
+        <div className="mt-2 flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
+          <Link
+            className="btn-outline btn-sm h-9 shrink-0"
+            to={`/planner/plan/${wedding.planId}/timeline`}
+          >
+            View wedding plan
+          </Link>
+          {/*
+            Both of these used to drop the client. Events auto-selects the first
+            client when no ?host= is given, so from client B you got client A's
+            functions with nothing saying so; and /bookings renders a planner's
+            own incoming queue, which never contains the client's vendor
+            bookings at all. Both now stay on this client (council review).
+          */}
+          <Link className="btn-outline btn-sm h-9 shrink-0" to={`/events?host=${client.userId}`}>
+            Events &amp; tasks
+          </Link>
+          <a className="btn-outline btn-sm h-9 shrink-0" href="#vendors">
+            Bookings
+          </a>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {/* The countdown beside it is worked out from the wedding's own dates
+            when the plan carries none, so the date is read from the same place
+            rather than saying "Not set" next to a number of days. */}
+        <Stat label="Wedding" value={formatDate(weddingDate, 'Not set')} />
+        <Stat
+          label="Days away"
+          value={
+            wedding.countdown.daysAway == null
+              ? '-'
+              : wedding.countdown.passed
+                ? 'Passed'
+                : String(wedding.countdown.daysAway)
+          }
+        />
+        <Stat label="Functions" value={String(wedding.functions)} />
+        <Stat label="Tasks done" value={`${doneCount} of ${tasks.length}`} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Section title="Client">
+          <Row label="Email" value={client.email ?? '-'} />
+          <Row label="Bride" value={client.bride ?? '-'} />
+          <Row label="Groom" value={client.groom ?? '-'} />
+          <Row label="Status" value={humanize(client.status)} />
+        </Section>
+
+        {/*
+          The budget is the couple's own figures, not a planner-side copy: the
+          same service draws both, so the two sides never disagree about what
+          has been committed.
+        */}
+        <Section title="Budget">
+          <Row label="Planned" value={money(budget.budgeted)} />
+          <Row label="Committed" value={money(budget.committed)} />
+          <Row
+            label="Remaining"
+            value={money(budget.remaining)}
+            tone={budget.overBudget ? 'text-red-700' : undefined}
+          />
+          {budget.categories.slice(0, 5).map((c) => (
+            <Row
+              key={c.category}
+              label={humanize(c.category)}
+              // A category with spending but no budget line of its own read
+              // "₹4,50,000 of ₹0", which looks like an overspend of everything.
+              value={
+                Number(c.budgeted) > 0
+                  ? `${money(c.committed)} of ${money(c.budgeted)}`
+                  : `${money(c.committed)} committed · no budget set`
+              }
+            />
+          ))}
+        </Section>
+      </div>
+
+      <div className="card">
+        <h2 className="section-title">Events</h2>
+        {events.length === 0 ? (
+          <p className="mt-1 text-sm text-gray-500">No functions have been added yet.</p>
+        ) : (
+          <div className="mt-2 divide-y">
+            {/* Each function opens the shared event workspace (EZ1-I84). */}
+            {events.map((e) => (
+              <Link
+                key={e.id}
+                to={`/my-clients/${client.userId}/events/${e.id}`}
+                className="flex flex-wrap items-baseline justify-between gap-2 py-2 hover:bg-gray-50"
+              >
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{e.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {[e.venue, e.city].filter(Boolean).join(', ') || 'Venue not set'}
+                    {e.startTime ? ` · ${e.startTime}` : ''}
+                  </p>
+                </div>
+                <p className="text-sm text-gray-600">
+                  {e.date ? formatDate(e.date) : 'Date not set'}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 className="section-title">Tasks</h2>
+        {tasks.length === 0 ? (
+          <p className="mt-1 text-sm text-gray-500">
+            Nothing on the plan yet. Tasks are added from the wedding plan.
+          </p>
+        ) : (
+          <div className="mt-2 divide-y">
+            {tasks.map((t) => (
+              <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{t.title}</p>
+                  <p className="text-xs text-gray-500">
+                    {humanize(t.category, 'General')}
+                    {t.dueDate ? ` · due ${formatDate(t.dueDate)}` : ''}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-sm px-2 py-0.5 text-xs ${TASK_TONE[t.status] ?? TASK_TONE.pending}`}
+                >
+                  {labelFrom(TASK_STATUS_LABEL, t.status)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card" id="vendors">
+        <h2 className="section-title">Vendors and services</h2>
+        {vendors.length === 0 ? (
+          <p className="mt-1 text-sm text-gray-500">Nothing booked yet.</p>
+        ) : (
+          <div className="mt-2 divide-y">
+            {vendors.map((v) => (
+              <div key={v.bookingId} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900">{v.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {humanize(v.category)}
+                    {/* What was booked, not just from whom (EZ1-I56). */}
+                    {v.service ? ` · ${v.service}` : ''}
+                    {v.package ? ` · ${v.package}` : ''}
+                    {v.eventDate ? ` · ${formatDate(v.eventDate)}` : ''}
+                  </p>
+                </div>
+                <div className="text-right">
+                  {/* The latest offer, or "Not yet priced" — never ₹0. */}
+                  <p className="text-sm font-medium">{bookingAmountLabel(v)}</p>
+                  <p className="text-xs text-gray-500">
+                    {BOOKING_STATUS_LABEL[v.status] ?? humanize(v.status)}
+                    {/* Where the money has got to (EZ1-I56), in the neutral
+                        words used for somebody watching rather than paying. */}
+                    {v.paymentStatus ? ` · ${paymentStatusLabel(v.paymentStatus, 'admin')}` : ''}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="card text-center">
+      <p className="page-title">{value}</p>
+      <p className="text-xs text-gray-500">{label}</p>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="card">
+      <h2 className="section-title">{title}</h2>
+      <dl className="mt-2 space-y-1 text-sm">{children}</dl>
+    </div>
+  );
+}
+
+function Row({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="capitalize text-gray-500">{label}</dt>
+      <dd className={`truncate text-right font-medium ${tone ?? 'text-gray-900'}`}>{value}</dd>
+    </div>
+  );
+}

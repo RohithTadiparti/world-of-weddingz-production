@@ -1,0 +1,236 @@
+import { BusinessStatus } from '../../common/enums';
+import { SOCIAL_LINK_FIELDS } from '../../common/dto/social-links.dto';
+
+/**
+ * What a business may do, in each state it can be in.
+ *
+ * Written as data rather than scattered through the service, because the whole
+ * point of a state machine is that the answer to "can I edit this now?" is in
+ * one place. Ten `if (status === …)` checks in ten methods is how a business
+ * ends up editable during its own verification.
+ */
+export interface BusinessRules {
+  /** Business identity: name, category, GST, PAN, registration, address. */
+  editIdentity: boolean;
+  /**
+   * The presentational identity fields — about, contact number, portfolio —
+   * once the legally-checked ones are locked (EZ1-I207). True wherever editing
+   * is possible at all, but the point of it is the verified/live case: there
+   * `editIdentity` is false, yet a vendor still needs to fix a phone number or
+   * swap a photo without sending the whole listing back through verification.
+   * Which fields these are lives in `POST_VERIFICATION_EDITABLE_FIELDS`.
+   */
+  editPresentational: boolean;
+  /** Services, packages, prices. Manageable for far longer than identity is. */
+  editCatalog: boolean;
+  /** Publish availability and take bookings. */
+  trade: boolean;
+  /** Ask somebody to look at it. */
+  submit: boolean;
+  /** Appears in search. */
+  visible: boolean;
+  /** What the vendor is told, in the state they are in. */
+  note: string;
+}
+
+export const BUSINESS_RULES: Record<BusinessStatus, BusinessRules> = {
+  [BusinessStatus.DRAFT]: {
+    editIdentity: true,
+    editPresentational: true,
+    editCatalog: true,
+    trade: false,
+    submit: true,
+    visible: false,
+    note: 'Being set up. Nobody else can see it yet.',
+  },
+  [BusinessStatus.READY_FOR_REVIEW]: {
+    editIdentity: true,
+    editPresentational: true,
+    editCatalog: true,
+    trade: false,
+    submit: true,
+    visible: false,
+    note: 'Everything needed is filled in. Look it over, then submit it.',
+  },
+  [BusinessStatus.FIRST_REVIEW]: {
+    // Still editable: the point of a review step is to find things to change.
+    editIdentity: true,
+    editPresentational: true,
+    editCatalog: true,
+    trade: false,
+    submit: true,
+    visible: false,
+    note: 'Check it over. You can still go back and edit anything.',
+  },
+  [BusinessStatus.PENDING_VERIFICATION]: {
+    editIdentity: false,
+    editPresentational: false,
+    editCatalog: false,
+    trade: false,
+    submit: false,
+    visible: false,
+    note: 'Submitted. An officer will visit — the details are locked until then.',
+  },
+  [BusinessStatus.VERIFICATION_IN_PROGRESS]: {
+    editIdentity: false,
+    editPresentational: false,
+    editCatalog: false,
+    trade: false,
+    submit: false,
+    visible: false,
+    note: 'An officer is verifying this now.',
+  },
+  [BusinessStatus.VERIFIED]: {
+    editIdentity: false,
+    // The legally-checked details are locked, but the shop-window ones — about,
+    // contact, photos — stay the vendor's to change (EZ1-I207).
+    editPresentational: true,
+    editCatalog: true,
+    trade: true,
+    submit: false,
+    visible: true,
+    note: 'Verified. Your prices and services stay yours to change; the legal details do not.',
+  },
+  [BusinessStatus.LIVE]: {
+    // The verified identity is what was checked, so it stays locked. The
+    // catalog is the shop floor and has to keep moving.
+    editIdentity: false,
+    // Presentational fields stay editable while live, same as verified (EZ1-I207).
+    editPresentational: true,
+    editCatalog: true,
+    trade: true,
+    visible: true,
+    submit: false,
+    note: 'Live and taking bookings.',
+  },
+  [BusinessStatus.REVERIFICATION_REQUIRED]: {
+    // The whole point: edit access comes back so the problem can be fixed.
+    editIdentity: true,
+    editPresentational: true,
+    editCatalog: true,
+    trade: false,
+    submit: true,
+    visible: false,
+    note: 'Something needs correcting. Fix it and submit again.',
+  },
+  [BusinessStatus.REJECTED]: {
+    editIdentity: false,
+    editPresentational: false,
+    editCatalog: false,
+    trade: false,
+    submit: false,
+    visible: false,
+    note: 'Refused. This listing cannot be edited — create a new one instead.',
+  },
+};
+
+/**
+ * Which states may follow which.
+ *
+ * A table rather than a set of guards, so an illegal move is impossible to
+ * write rather than merely unlikely.
+ */
+const ALLOWED: Record<BusinessStatus, BusinessStatus[]> = {
+  [BusinessStatus.DRAFT]: [BusinessStatus.READY_FOR_REVIEW],
+  [BusinessStatus.READY_FOR_REVIEW]: [BusinessStatus.DRAFT, BusinessStatus.FIRST_REVIEW],
+  [BusinessStatus.FIRST_REVIEW]: [BusinessStatus.DRAFT, BusinessStatus.PENDING_VERIFICATION],
+  [BusinessStatus.PENDING_VERIFICATION]: [
+    BusinessStatus.VERIFICATION_IN_PROGRESS,
+    // Straight to verified as well: an officer who writes up a visit has made
+    // one, whether or not they pressed "start" beforehand. The gate that
+    // matters is that findings exist, and that is enforced on the request —
+    // insisting on a button here would refuse a decision the officer is
+    // entitled to make because of how they navigated to it.
+    BusinessStatus.VERIFIED,
+    BusinessStatus.REVERIFICATION_REQUIRED,
+    BusinessStatus.REJECTED,
+  ],
+  [BusinessStatus.VERIFICATION_IN_PROGRESS]: [
+    BusinessStatus.VERIFIED,
+    BusinessStatus.REVERIFICATION_REQUIRED,
+    BusinessStatus.REJECTED,
+  ],
+  [BusinessStatus.VERIFIED]: [BusinessStatus.LIVE, BusinessStatus.REVERIFICATION_REQUIRED],
+  [BusinessStatus.LIVE]: [BusinessStatus.REVERIFICATION_REQUIRED],
+  // Back to the beginning of the editing loop, not straight to verification:
+  // the vendor has to look at it again before anybody else does.
+  [BusinessStatus.REVERIFICATION_REQUIRED]: [BusinessStatus.DRAFT, BusinessStatus.FIRST_REVIEW],
+  // Terminal. A refused listing is archived and a new one created; letting it
+  // move would be letting a vendor edit their way around a refusal.
+  [BusinessStatus.REJECTED]: [],
+};
+
+export function canTransition(from: BusinessStatus, to: BusinessStatus): boolean {
+  return ALLOWED[from]?.includes(to) ?? false;
+}
+
+/**
+ * The business-detail fields an administrator may single out for correction
+ * (EZ1-I205).
+ *
+ * These are exactly the identity and compliance fields an officer checks on the
+ * visit — the ones worth sending a listing back over. Pricing, catalog and
+ * bookings are not here: they have their own edit paths and are never what a
+ * verification turns on. Kept as data so the correction DTO and the update-path
+ * guard read the same list and cannot drift.
+ */
+export const CORRECTABLE_BUSINESS_FIELDS = [
+  'name',
+  // Opens the categories list (EZ1-I263); there is no free-text Other any more.
+  'category',
+  'description',
+  'city',
+  'gstNumber',
+  'panNumber',
+  'registrationNumber',
+  'tradingSince',
+  'registeredAddress',
+  'contactPhone',
+  'complianceDocuments',
+  'portfolio',
+] as const;
+
+export type CorrectableBusinessField = (typeof CORRECTABLE_BUSINESS_FIELDS)[number];
+
+/**
+ * Other names clients have used for a correctable field.
+ *
+ * The listing edits a list of categories now, and the vendor change request
+ * shipped asking for 'categories'. The correction key is still 'category',
+ * because that is what the edit lock checks, so the plural is read as it.
+ */
+const CORRECTABLE_FIELD_ALIASES: Record<string, CorrectableBusinessField> = {
+  categories: 'category',
+};
+
+/** Maps field names to their correction keys, dropping repeats. */
+export function normaliseCorrectionFields(fields: unknown): unknown {
+  if (!Array.isArray(fields)) return fields;
+  const mapped = fields.map((field) =>
+    typeof field === 'string' ? (CORRECTABLE_FIELD_ALIASES[field] ?? field) : field,
+  );
+  return [...new Set(mapped)];
+}
+
+/**
+ * The identity fields a vendor may still change once the listing is verified or
+ * live (EZ1-I207).
+ *
+ * Deliberately only the presentational ones — the description, the contact
+ * number, the portfolio and the social links. None of these is what an officer verified on the
+ * visit, so changing one does not invalidate the verification. Everything an
+ * officer actually checked (name, category, PAN, GST, registration number,
+ * trading-since, registered address, compliance documents) stays locked and can
+ * only move through the correction/reverification path. Kept as data so the
+ * update-path guard and the client's read-only rendering read the same list.
+ */
+export const POST_VERIFICATION_EDITABLE_FIELDS = [
+  'description',
+  'contactPhone',
+  'portfolio',
+  ...SOCIAL_LINK_FIELDS,
+] as const;
+
+export function rulesFor(status: BusinessStatus): BusinessRules {
+  return BUSINESS_RULES[status] ?? BUSINESS_RULES[BusinessStatus.DRAFT];
+}

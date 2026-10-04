@@ -1,0 +1,413 @@
+# Full local stack: PostgreSQL + Redis + backend (production image) + frontend.
+# Usage:  docker compose -f docker/docker-compose.yml up --build
+#
+# Secrets come from docker/.env (copy docker/.env.example). The defaults below
+# are development-only; the backend refuses to boot in production with them.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wow-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-wow_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-wow_password}
+      POSTGRES_DB: ${DB_NAME:-wow_db}
+    ports:
+      - "${DB_PORT_HOST:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-wow_user} -d ${DB_NAME:-wow_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: wow-redis
+    ports:
+      - "${REDIS_PORT_HOST:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile
+    image: wow-backend:local
+    container_name: wow-backend
+    ports:
+      # Host port is configurable so the stack can coexist with other projects.
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      - media_store:/app/media-store
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: api
+      # The frontend is served same-origin through nginx, so the browser calls
+      # /api and never crosses an origin. Keep both entries for direct dev use.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173,http://localhost:8081}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-wow_user}
+      DB_PASSWORD: ${DB_PASSWORD:-wow_password}
+      DB_NAME: ${DB_NAME:-wow_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # NOTE: supply real secrets via docker/.env or your secret manager.
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-characters-long}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production-min-32-chars}
+      # Mail: 'log' writes invitation and reset links to this container's log.
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-log}
+      MAIL_FROM: ${MAIL_FROM:-WOW <no-reply@wow.local>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      # Where every link the platform hands out points: the SPA, not the API.
+      # Invitations, password resets and RSVP links are all built from this.
+      #
+      # The fallback follows FRONTEND_PORT rather than hard-coding 8080, which
+      # pointed at nothing on any stack that had moved the web port. It is
+      # still only useful on the machine running the stack -- set APP_BASE_URL
+      # to the address your users actually reach the portal on, or every link
+      # you send is unopenable for whoever receives it (EZ1-I232).
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${FRONTEND_PORT:-8080}}
+      # Payments. The gateway keys were missing here, so a deployment could put
+      # real Razorpay credentials in docker/.env and still run on the mock
+      # provider, because the container never received them — the escrow would
+      # look like it worked and no money would move.
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      PAYMENT_CURRENCY: ${PAYMENT_CURRENCY:-INR}
+      PAYMENT_COMMISSION_PERCENT: ${PAYMENT_COMMISSION_PERCENT:-10}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      # Which methods a buyer may choose. Cash is off by default and sits
+      # outside escrow entirely — see configuration.ts.
+      PAYMENT_METHODS: ${PAYMENT_METHODS:-card,upi,netbanking}
+      PAYMENT_CASH_ENABLED: ${PAYMENT_CASH_ENABLED:-false}
+      PAYMENT_CASH_MAX_AMOUNT: ${PAYMENT_CASH_MAX_AMOUNT:-25000}
+      PAYMENT_CASH_COMMISSION_OWED: ${PAYMENT_CASH_COMMISSION_OWED:-true}
+      # SMS. Missing here for the same reason and with the same effect: an OTP
+      # that silently goes to a log file instead of a phone.
+      SMS_PROVIDER: ${SMS_PROVIDER:-log}
+      SMS_URL: ${SMS_URL:-}
+      SMS_API_KEY: ${SMS_API_KEY:-}
+      SMS_SENDER_ID: ${SMS_SENDER_ID:-WOWMAT}
+      SMS_TEMPLATE_ID: ${SMS_TEMPLATE_ID:-}
+      # Customer support. Blank means the channel is not offered, rather than
+      # offered and unanswered.
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
+      SUPPORT_PHONE: ${SUPPORT_PHONE:-}
+      SUPPORT_WHATSAPP: ${SUPPORT_WHATSAPP:-}
+      SUPPORT_HOURS: ${SUPPORT_HOURS:-}
+      SUPPORT_URL: ${SUPPORT_URL:-}
+      SUPPORT_RESPONSE_TIME: ${SUPPORT_RESPONSE_TIME:-}
+      # Business switches. With INDIVIDUAL_USER_ENABLED=false the platform runs
+      # as an agent-only brokerage; SERVICES_REQUIRE_MATCH_FIXED=true makes
+      # matchmaking the front door to the marketplace instead of a shop anyone
+      # may walk into.
+      INDIVIDUAL_USER_ENABLED: ${INDIVIDUAL_USER_ENABLED:-true}
+      SERVICES_REQUIRE_MATCH_FIXED: ${SERVICES_REQUIRE_MATCH_FIXED:-false}
+      CHAT_REDACT_CONTACTS: ${CHAT_REDACT_CONTACTS:-true}
+      # Push and WhatsApp both default to `log`, which writes what would have
+      # gone out rather than pretending it did.
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-log}
+      PUSH_SERVER_KEY: ${PUSH_SERVER_KEY:-}
+      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-log}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_LANGUAGE: ${WHATSAPP_LANGUAGE:-en}
+      # Payout bank details. This stack runs as production, where a blank
+      # PAYOUT_DETAILS_KEY means bank details are refused, so set one (32+
+      # characters) in docker/.env. Keep it: accounts saved under a key cannot
+      # be read without it.
+      PAYOUT_DETAILS_KEY: ${PAYOUT_DETAILS_KEY:-}
+      SUPPORTED_PAYOUT_BANKS: ${SUPPORTED_PAYOUT_BANKS:-}
+      IFSC_LOOKUP_BASE_URL: ${IFSC_LOOKUP_BASE_URL:-https://ifsc.razorpay.com}
+      # Where the mock storage keeps uploaded files, and the origin a browser
+      # reaches them on. The app's own origin, so the upload is same-origin and
+      # the URL works from a phone on the network rather than only from the
+      # machine the stack runs on.
+      MEDIA_MOCK_DIR: ${MEDIA_MOCK_DIR:-/app/media-store}
+      MEDIA_MOCK_BASE_URL: ${MEDIA_MOCK_BASE_URL:-}
+      # Where uploads live. `mock` is the disk above: public URLs, nothing to
+      # set up. `s3` is a private bucket: the API stores object keys and hands
+      # out links that expire, and refuses to boot without a bucket and region.
+      # Credentials may be left blank to use the instance/task role; the
+      # standard AWS_* variables work too. For the local MinIO below:
+      #   MEDIA_STORAGE_PROVIDER=s3 S3_BUCKET=wow-media S3_REGION=us-east-1
+      #   S3_ENDPOINT=http://minio:9000 S3_PUBLIC_ENDPOINT=http://localhost:9100
+      MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-mock}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-10485760}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_PRESIGN_EXPIRY: ${S3_PRESIGN_EXPIRY:-900}
+      S3_GET_EXPIRY: ${S3_GET_EXPIRY:-3600}
+      MATCH_MIN_SCORE: ${MATCH_MIN_SCORE:-50}
+      # The three escrow instalments. They must total 100 or the API refuses to
+      # boot, because a set summing to 90 would under-charge every booking.
+      ESCROW_ADVANCE_PERCENT: ${ESCROW_ADVANCE_PERCENT:-30}
+      ESCROW_SECOND_PERCENT: ${ESCROW_SECOND_PERCENT:-30}
+      ESCROW_FINAL_PERCENT: ${ESCROW_FINAL_PERCENT:-40}
+      AGENT_PROFILE_FEE: ${AGENT_PROFILE_FEE:-2000}
+      AGENT_SETTLEMENT_FEE: ${AGENT_SETTLEMENT_FEE:-25000}
+      # Read only by the one-shot admin seeder, never by the running API.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Test-only opt-in for the shared local test login; leave false elsewhere.
+      SEED_ADMIN_ALLOW_WEAK_PASSWORD: ${SEED_ADMIN_ALLOW_WEAK_PASSWORD:-false}
+      # Optional integrations. Off by default; start them with `--profile full`
+      # and set the ENABLED flags to true to activate.
+      NEO4J_ENABLED: ${NEO4J_ENABLED:-false}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-wow_password}
+      KAFKA_ENABLED: ${KAFKA_ENABLED:-false}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: creates or promotes the bootstrap administrator, then exits.
+  # ADMIN is not self-registerable through the API by design, so this is the
+  # supported way to get the first admin account.
+  #   docker compose -f docker/docker-compose.yml --profile seed run --rm seed-admin
+  seed-admin:
+    image: wow-backend:local
+    container_name: wow-seed-admin
+    profiles: ["seed"]
+    command: ["node", "dist/database/seed-admin.js"]
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-wow_user}
+      DB_PASSWORD: ${DB_PASSWORD:-wow_password}
+      DB_NAME: ${DB_NAME:-wow_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-characters-long}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production-min-32-chars}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SEED_ADMIN_ALLOW_WEAK_PASSWORD: ${SEED_ADMIN_ALLOW_WEAK_PASSWORD:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # The starting service catalog: categories, services and the questions each
+  # one asks. A deployment without it has an empty catalog, which means no
+  # vendor can put a priced service on a listing and therefore no listing can
+  # ever be submitted for verification — the whole marketplace is inert. The
+  # admin seeder was wired up here and this one was not, so a fresh install
+  # looked fine until the first vendor tried to sell something.
+  #
+  #   docker compose -f docker/docker-compose.yml --profile seed run --rm seed-catalog
+  #
+  # Idempotent and non-destructive: it fills in what is missing and changes
+  # nothing an administrator has since edited.
+  seed-catalog:
+    image: wow-backend:local
+    container_name: wow-seed-catalog
+    profiles: ["seed"]
+    command: ["node", "dist/database/seed-catalog.js"]
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-wow_user}
+      DB_PASSWORD: ${DB_PASSWORD:-wow_password}
+      DB_NAME: ${DB_NAME:-wow_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-characters-long}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production-min-32-chars}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # One sign-in per role, for walking the interface locally. Writes nothing
+  # unless DEMO_PASSWORD is set in docker/.env; never set it on a stack anyone
+  # else can reach.
+  #
+  #   docker compose -f docker/docker-compose.yml --profile seed run --rm seed-demo
+  seed-demo:
+    image: wow-backend:local
+    container_name: wow-seed-demo
+    profiles: ["seed"]
+    command: ["node", "dist/database/seed-demo.js"]
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-wow_user}
+      DB_PASSWORD: ${DB_PASSWORD:-wow_password}
+      DB_NAME: ${DB_NAME:-wow_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-characters-long}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production-min-32-chars}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot Android test build (docker/android-build/build-apk.sh). Publishes
+  # wow.apk and version.json into ./downloads, which the frontend serves and
+  # the /app page turns into a QR code. No Expo account needed:
+  #   BUILD_COMMIT=$(git rev-parse --short HEAD) \
+  #     docker compose -f docker/docker-compose.yml --profile mobile run --rm build-android
+  build-android:
+    image: reactnativecommunity/react-native-android:latest
+    profiles: ["mobile"]
+    command: ["bash", "/build/build-apk.sh"]
+    environment:
+      # The API the app talks to, baked into the bundle at build time.
+      EXPO_PUBLIC_API_URL: ${MOBILE_API_URL:-https://test.worldofweddingz.com/api}
+      BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
+      # arm64-v8a covers every current phone; add ",armeabi-v7a" for old ones.
+      ANDROID_ARCHS: ${ANDROID_ARCHS:-arm64-v8a}
+      # Only used when docker/android-keys/release.jks exists.
+      ANDROID_KEY_ALIAS: ${ANDROID_KEY_ALIAS:-upload}
+      ANDROID_KEYSTORE_PASSWORD: ${ANDROID_KEYSTORE_PASSWORD:-}
+    volumes:
+      - ../mobile:/src/mobile:ro
+      - ../frontend:/src/frontend:ro
+      - ./android-build:/build:ro
+      - ./android-keys:/keys:ro
+      - ${ANDROID_OUT_DIR:-./downloads}:/out
+      # The image keeps Gradle's home here; caching it makes a rebuild minutes, not half an hour.
+      - android_gradle:/opt/gradle-home
+      - android_npm:/root/.npm
+    restart: "no"
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: wow-frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    # Android test builds, served at /downloads/. Git-ignored; drop a new APK
+    # in and it is live without rebuilding the image.
+    volumes:
+      - ./downloads:/usr/share/nginx/html/downloads:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ---- Optional integrations (start with: docker compose --profile full up) ----
+  neo4j:
+    image: neo4j:5-community
+    container_name: wow-neo4j
+    profiles: ["full"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-wow_password}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: wow-kafka
+    profiles: ["full"]
+    environment:
+      KAFKA_CFG_NODE_ID: "0"
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    restart: unless-stopped
+
+  # An S3-compatible store on this machine, to run the API against a private
+  # bucket without an AWS account. Off unless asked for:
+  #   docker compose -f docker/docker-compose.yml --profile s3 up -d minio minio-init
+  # then set MEDIA_STORAGE_PROVIDER=s3 and the S3_* values shown on the backend.
+  # The API reaches it as minio:9000 and a browser as localhost:9100; the
+  # credentials are local-only defaults, never ones to reuse.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: wow-minio
+    profiles: ["s3"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-wowminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-wowminio-local-only}
+    ports:
+      - "${MINIO_PORT:-9100}:9000"
+      - "${MINIO_CONSOLE_PORT:-9101}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot: creates the bucket (private: no anonymous policy is set) and lets
+  # the web app PUT and GET from the browser.
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: wow-minio-init
+    profiles: ["s3"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-wowminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-wowminio-local-only}
+      S3_BUCKET: ${S3_BUCKET:-wow-media}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/$$S3_BUCKET &&
+      mc anonymous set none local/$$S3_BUCKET
+      "
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
+  # Uploaded photographs. A named volume rather than the container filesystem,
+  # because "does the photograph survive a refresh" is the question people
+  # actually ask, and a rebuild is a very thorough refresh.
+  media_store:
+  android_gradle:
+  android_npm:
+  neo4j_data:
+  kafka_data:
+  minio_data:

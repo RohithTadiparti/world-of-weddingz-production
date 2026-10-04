@@ -1,0 +1,252 @@
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import {
+  GovernmentIdType,
+  NetworkVisibility,
+  ProfileClaimStatus,
+  ProfileLifecycle,
+  ProfileVisibility,
+} from '../../../common/enums';
+import { User } from '../../auth/entities/user.entity';
+
+export interface ProfilePreferences {
+  religion?: string;
+  community?: string;
+  education?: string;
+  lifestyle?: string[]; // e.g. ['non-smoker','vegetarian']
+  preferredAgeMin?: number;
+  preferredAgeMax?: number;
+  preferredLocations?: string[];
+}
+
+/**
+ * A marriage profile.
+ *
+ * A profile is NOT the same thing as an account. An agent or a family member
+ * can build a complete profile — photos, preferences, contact details — for
+ * somebody who has never signed up, and that profile is matchable straight
+ * away. `userId` stays null until the subject accepts an invitation and claims
+ * it, at which point they own it and the steward keeps read access.
+ *
+ * This is why matchmaking keys on profile ids rather than user ids.
+ */
+@Entity('profiles')
+export class Profile {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  /** The account that owns this profile. Null while the profile is unclaimed. */
+  @Index({ unique: true })
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
+  @OneToOne(() => User, (user) => user.profile, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'userId' })
+  user: User | null;
+
+  /**
+   * The agent or family member who built and looks after this profile. Set for
+   * steward-created profiles and retained after claiming, so the agency keeps
+   * its book of business.
+   */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  managedByUserId: string | null;
+
+  /**
+   * How the steward is related to the person whose profile this is.
+   *
+   * "Father", "elder brother", "maternal uncle". Only meaningful for a family
+   * member stewarding a relative — an agency's relationship to a client is
+   * commercial and is recorded on the agency, not here.
+   *
+   * Worth storing because it is the question everybody on the other side asks
+   * first. A profile run by the father reads very differently from one run by
+   * a cousin, and until now the platform knew there was a steward but not who
+   * they were to the person.
+   */
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  stewardRelation: string | null;
+
+  /**
+   * Whether this steward is here for a bride or a groom.
+   *
+   * Asked of a family member on their own profile, and stored here rather than
+   * inferred from `gender`: the account holder's own gender says nothing about
+   * whose match they are looking for, and reading one as the other is how a
+   * father looking for a groom ends up listed as a bride.
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  managingFor: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'managedByUserId' })
+  managedBy: User | null;
+
+  @Index()
+  @Column({
+    type: 'enum',
+    enum: ProfileClaimStatus,
+    default: ProfileClaimStatus.SELF,
+  })
+  claimStatus: ProfileClaimStatus;
+
+  /**
+   * Where an invitation would be sent, if the subject ever wants an account.
+   * Optional on purpose: a family walking into an agency hands over a phone
+   * number far more often than an email address, and plenty of clients never
+   * want a login at all — the agent is their entire interface.
+   *
+   * Kept separate from `users.email`: the subject may claim with it and later
+   * change their account email without breaking the agency's records.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  contactEmail: string | null;
+
+  /**
+   * The primary way to reach this person, and the practical identity key for a
+   * walk-in client. Required when a steward builds the profile.
+   */
+  @Index()
+  @Column({ type: 'varchar', nullable: true })
+  contactPhone: string | null;
+
+  /**
+   * Whether the wider vetted-agent network can find this profile. Moving to
+   * POOL is circulation, so it requires live circulation consent.
+   */
+  @Index()
+  @Column({ type: 'enum', enum: NetworkVisibility, default: NetworkVisibility.PRIVATE })
+  networkVisibility: NetworkVisibility;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  pooledAt: Date | null;
+
+  @Column()
+  displayName: string;
+
+  @Index()
+  @Column({ nullable: true })
+  gender: string;
+
+  @Column({ type: 'date', nullable: true })
+  dateOfBirth: string | null;
+
+  @Index()
+  @Column({ nullable: true })
+  city: string;
+
+  /**
+   * The account holder's own postal address.
+   *
+   * Distinct from the biodata's `communicationAddress`, which is part of what a
+   * family circulates. This one is never shared — it exists so every account
+   * type, including vendors and planners who have no biodata, has somewhere to
+   * put an address that survives a reload.
+   */
+  @Column({ type: 'text', nullable: true })
+  address: string | null;
+
+  /**
+   * The number a family can say out loud.
+   *
+   * A uuid identifies a profile perfectly and communicates nothing: nobody
+   * reads one over the phone, writes it on a shortlist, or types it into a
+   * search box. Families were identifying a match by name and city instead,
+   * which collides constantly. Assigned by the database on insert, never
+   * reused, and unique.
+   */
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 12, insert: false, update: false })
+  profileCode: string;
+
+  /**
+   * When this profile was last doing something.
+   *
+   * Distinct from the presence key in Redis, which knows only whether a socket
+   * is open right now. "Recently active" is the question a family actually
+   * asks before spending an interest — a profile last seen in March is a
+   * profile that will not answer.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  lastActiveAt: Date | null;
+
+  @Column({ type: 'jsonb', default: {} })
+  preferences: ProfilePreferences;
+
+  @Column({ type: 'jsonb', default: [] })
+  photos: string[];
+
+  @Column({ type: 'text', nullable: true })
+  bio: string;
+
+  @Index()
+  @Column({ type: 'enum', enum: ProfileVisibility, default: ProfileVisibility.MATCHES_ONLY })
+  visibility: ProfileVisibility;
+
+  @Column({ default: false })
+  profileCompleted: boolean;
+
+  /**
+   * Whether this profile is in play.
+   *
+   * Deactivation is a pause the client asks for — a family stepping back for a
+   * few months — and is reversible. Archiving is the end of the engagement.
+   * Neither deletes anything: the consent record, the circulation history and
+   * the agency's own books all have to outlive the search itself.
+   */
+  @Index()
+  @Column({ type: 'enum', enum: ProfileLifecycle, default: ProfileLifecycle.ACTIVE })
+  lifecycle: ProfileLifecycle;
+
+  // ------------------------------------------------------------- identity
+  //
+  // The number itself is never stored. `governmentIdHash` is an HMAC under a
+  // server-side pepper, and its unique index is what stops the same person
+  // holding two profiles — the chronic problem in this market.
+
+  @Column({ type: 'enum', enum: GovernmentIdType, nullable: true })
+  governmentIdType: GovernmentIdType | null;
+
+  @Index({ unique: true, where: '"governmentIdHash" IS NOT NULL' })
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  governmentIdHash: string | null;
+
+  /** The only part of the number anyone sees again. */
+  @Column({ type: 'varchar', length: 4, nullable: true })
+  governmentIdLast4: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  idSubmittedAt: Date | null;
+
+  /** Set by a verification officer who saw the document and the person. */
+  @Column({ type: 'timestamptz', nullable: true })
+  idVerifiedAt: Date | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  idVerifiedByUserId: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  deactivatedAt: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  archivedAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  lifecycleReason: string | null;
+
+  @CreateDateColumn({ type: 'timestamptz' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ type: 'timestamptz' })
+  updatedAt: Date;
+}

@@ -1,0 +1,372 @@
+import { FormEvent, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { api, apiMessage } from '../lib/api';
+import { useAuth } from '../store/auth';
+import PasswordField from '../components/PasswordField';
+import type { AccountType } from '../lib/permissions';
+import { EMAIL_PATTERN, GMAIL_PATTERN, MOBILE_10_PATTERN, NAME_PATTERN } from '../lib/permissions';
+
+/**
+ * Sign-up is a two-step choice: first *what kind of account*, then the details.
+ * The account type decides which persona (and therefore which permission set)
+ * the new account gets, so it is the first thing we ask for.
+ *
+ * Which types exist is the server's to say, not ours. GET /auth/account-types
+ * mirrors the INDIVIDUAL_USER_ENABLED switch, so with Individual sign-up closed
+ * the option is not offered at all rather than offered and then refused with a
+ * 403 after the visitor has filled the whole form in (council review).
+ */
+interface AccountTypeOption {
+  type: AccountType;
+  label: string;
+  description: string;
+  /** Individual accounts additionally pick bride/groom/family. */
+  requiresRole: boolean;
+  roles?: string[];
+}
+
+
+const ROLE_LABELS: Record<string, string> = {
+  bride: 'Bride',
+  groom: 'Groom',
+  family: 'Family member',
+};
+
+export default function Register() {
+  const nav = useNavigate();
+  const setAuth = useAuth((s) => s.setAuth);
+
+  const { data: catalogue, isPending: typesPending } = useQuery<{
+    individualUserEnabled: boolean;
+    accountTypes: AccountTypeOption[];
+  }>({
+    queryKey: ['account-types'],
+    queryFn: async () => (await api.get('/auth/account-types')).data,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const accountTypes = catalogue?.accountTypes ?? [];
+  // Nothing is chosen until the visitor picks; until then the first type the
+  // server offered stands in, so the default can never be a closed flow.
+  const [chosenType, setChosenType] = useState<AccountType | null>(null);
+  const [chosenRole, setChosenRole] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  // An individual gives first and last name separately, as the biodata asks
+  // them; every other account type keeps one "Your name" box.
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+
+  const accountType: AccountType = chosenType ?? accountTypes[0]?.type ?? 'individual';
+  const selected = accountTypes.find((a) => a.type === accountType);
+  const roles = selected?.roles ?? [];
+  const role = chosenRole && roles.includes(chosenRole) ? chosenRole : (roles[0] ?? 'bride');
+  // Every account is reached on its mobile number — it is what an OTP goes to
+  // and how the other side gets in touch — so it is required at sign-up for all
+  // personas, not offered as an optional afterthought.
+  const phoneRequired = true;
+  const isIndividual = accountType === 'individual';
+  const name = isIndividual
+    ? [firstName.trim(), lastName.trim()].filter(Boolean).join(' ')
+    : displayName.trim();
+
+  /**
+   * The same rules the server applies, checked before the round trip.
+   *
+   * Field-level and specific: "Enter a 10-digit mobile number" beats a single
+   * banner saying the form is invalid, because it says which field and what to
+   * do about it. The server still enforces all of this.
+   */
+  function validate(): Record<string, string> {
+    const errors: Record<string, string> = {};
+    const digits = phone.replace(/\s|-/g, '').replace(/^\+91/, '');
+
+    if (isIndividual) {
+      const letters = 'A name may only contain letters and spaces';
+      if (!firstName.trim()) errors.firstName = 'Enter your first name';
+      else if (!NAME_PATTERN.test(firstName.trim())) errors.firstName = letters;
+      if (!lastName.trim()) errors.lastName = 'Enter your last name';
+      else if (!NAME_PATTERN.test(lastName.trim())) errors.lastName = letters;
+    } else if (!name) errors.displayName = 'Enter your name';
+
+    if (!EMAIL_PATTERN.test(email.trim())) errors.email = 'Enter a valid email address';
+    // Every portal registers with a Gmail address (EZ1-I104).
+    else if (!GMAIL_PATTERN.test(email.trim())) {
+      errors.email = 'Registration requires a @gmail.com email address';
+    }
+
+    if (phoneRequired && !digits) errors.phone = 'Enter your mobile number';
+    else if (digits && !MOBILE_10_PATTERN.test(digits)) {
+      errors.phone = 'Enter a 10-digit Indian mobile number, starting 6 to 9';
+    }
+
+    if (password.length < 8) errors.password = 'At least 8 characters';
+    else if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
+      errors.password = 'Needs an uppercase letter, a lowercase letter and a digit';
+    }
+
+    if (!confirm) errors.confirm = 'Type the password again';
+    // The same words the app uses, so a vendor who signed up on one and is
+    // being talked through the other is not told two different things.
+    else if (confirm !== password) errors.confirm = 'Password and Confirm Password do not match.';
+
+    return errors;
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError('');
+
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    setLoading(true);
+    try {
+      const payload: Record<string, unknown> = {
+        email: email.trim(),
+        password,
+        accountType,
+        displayName: name,
+      };
+      if (phone.trim()) payload.phone = phone.replace(/\s|-/g, '');
+      // `role` is only meaningful where the server said the type needs one; it
+      // derives the role from accountType for every other persona.
+      if (selected?.requiresRole) payload.role = role;
+
+      const { data } = await api.post('/auth/register', payload);
+      setAuth(data);
+      // Agents land on agency registration: nothing else works until an
+      // administrator has approved them.
+      if (accountType === 'agent') nav('/agency');
+      else nav(accountType === 'individual' ? '/profile' : '/');
+    } catch (err) {
+      setError(apiMessage(err, 'Could not register. The email may already be in use.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-4 py-10">
+      <form onSubmit={submit} className="card w-full max-w-2xl space-y-6" noValidate>
+        <div>
+          <h1 className="page-title">Create your WOW account</h1>
+          <p className="page-subtitle">
+            Pick the kind of account you need. This decides what you can do on the platform, and
+            you cannot change it later without contacting support.
+          </p>
+        </div>
+
+        {error && <p className="alert-critical">{error}</p>}
+
+        <fieldset>
+          <legend className="label">I am joining as</legend>
+          {typesPending && <p className="text-sm text-gray-500">Loading the account types…</p>}
+          {!typesPending && accountTypes.length === 0 && (
+            <p className="alert-critical">
+              Sign-up is closed at the moment. Please try again later.
+            </p>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {accountTypes.map((opt, i) => {
+              const active = opt.type === accountType;
+              return (
+                <button
+                  type="button"
+                  key={opt.type}
+                  onClick={() => {
+                    setChosenType(opt.type);
+                    setChosenRole(null);
+                  }}
+                  aria-pressed={active}
+                  className={`rounded-lg border p-3 text-left transition ${
+                    active
+                      ? 'border-brand bg-brand-light ring-1 ring-brand'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <span className="font-serif text-[1.75rem] leading-none text-gold" aria-hidden>
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <p className="mt-2 font-serif text-[1.375rem] leading-tight text-brand">{opt.label}</p>
+                  <p className="mt-0.5 text-xs text-gray-500">{opt.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        {roles.length > 0 && (
+          <div>
+            <label className="label" htmlFor="role">
+              Who is this profile for?
+            </label>
+            <select
+              id="role"
+              className="input"
+              value={role}
+              onChange={(e) => setChosenRole(e.target.value)}
+            >
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABELS[r] ?? r}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {isIndividual && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="firstName">
+                First name
+              </label>
+              <input
+                id="firstName"
+                className="input"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                maxLength={60}
+                autoComplete="given-name"
+                aria-invalid={Boolean(fieldErrors.firstName)}
+              />
+              {fieldErrors.firstName && (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.firstName}</p>
+              )}
+            </div>
+            <div>
+              <label className="label" htmlFor="lastName">
+                Last name
+              </label>
+              <input
+                id="lastName"
+                className="input"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                maxLength={60}
+                autoComplete="family-name"
+                aria-invalid={Boolean(fieldErrors.lastName)}
+              />
+              {fieldErrors.lastName && (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.lastName}</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          {!isIndividual && (
+            <div>
+              <label className="label" htmlFor="displayName">
+                Your name
+              </label>
+              <input
+                id="displayName"
+                className="input"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                maxLength={120}
+                aria-invalid={Boolean(fieldErrors.displayName)}
+              />
+              {fieldErrors.displayName && (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.displayName}</p>
+              )}
+            </div>
+          )}
+          <div>
+            <label className="label" htmlFor="email">
+              Email
+            </label>
+            <input
+              id="email"
+              className="input"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              aria-invalid={Boolean(fieldErrors.email)}
+            />
+            {fieldErrors.email && (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.email}</p>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <label className="label" htmlFor="phone">
+            Mobile number{' '}
+            {!phoneRequired && <span className="font-normal text-gray-400">(optional)</span>}
+          </label>
+          <input
+            id="phone"
+            className="input"
+            inputMode="numeric"
+            placeholder="9876543210"
+            maxLength={13}
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            aria-invalid={Boolean(fieldErrors.phone)}
+          />
+          {fieldErrors.phone ? (
+            <p className="mt-1 text-xs text-red-600">{fieldErrors.phone}</p>
+          ) : (
+            <p className="mt-1 text-xs text-gray-500">
+              Ten digits, starting 6 to 9. The +91 is added for you.
+            </p>
+          )}
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <PasswordField
+            label="Password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="new-password"
+            minLength={8}
+            error={fieldErrors.password}
+            hint="At least 8 characters, with an uppercase letter, a lowercase letter and a digit."
+          />
+          {/*
+            Typed twice, because it is typed blind and used once.
+            
+            An account is created from a password nobody can read back, and the
+            first time anybody discovers a typo is when they try to sign in and
+            cannot — by which point the only way back is a reset email. The
+            check is here and not on the server on purpose: the server never
+            sees the second field, and it should not, because what is being
+            checked is that the person typed what they meant, not anything
+            about the account.
+          */}
+          <PasswordField
+            label="Confirm password"
+            value={confirm}
+            onChange={setConfirm}
+            autoComplete="new-password"
+            error={fieldErrors.confirm}
+            hint="Type it again so a slip does not lock you out."
+          />
+        </div>
+
+        <button className="btn w-full" disabled={loading || !selected}>
+          {loading ? 'Creating...' : `Create ${selected ? `${selected.label.toLowerCase()} ` : ''}account`}
+        </button>
+
+        <p className="text-center text-sm text-gray-500">
+          Have an account?{' '}
+          <Link className="text-brand" to="/login">
+            Sign in
+          </Link>
+        </p>
+      </form>
+    </div>
+  );
+}

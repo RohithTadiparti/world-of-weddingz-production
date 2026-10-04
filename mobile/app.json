@@ -1,0 +1,92 @@
+{
+  "expo": {
+    "name": "WOW",
+    "slug": "wow",
+    "owner": "rohtisvr-wow",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "wow",
+    "userInterfaceStyle": "automatic",
+
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.worldofweddings.app",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "WOW uses the camera for video calls with the people you are matched with, and to add photographs to your profile and albums.",
+        "NSMicrophoneUsageDescription": "WOW uses the microphone for voice and video calls with the people you are matched with.",
+        "NSPhotoLibraryUsageDescription": "WOW needs your photo library to add photographs to your profile and to your wedding albums."
+      },
+      "bitcode": false
+    },
+
+    "android": {
+      "package": "com.worldofweddings.app",
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "backgroundColor": "#C41E63",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+
+      "predictiveBackGestureEnabled": false,
+
+      "blockedPermissions": ["android.permission.SYSTEM_ALERT_WINDOW"],
+
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH"
+      ]
+    },
+
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#C41E63",
+          "dark": {
+            "backgroundColor": "#120C10"
+          },
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      "expo-secure-store",
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "WOW needs your photo library to add photographs to your profile and to your wedding albums."
+        }
+      ],
+      "@config-plugins/react-native-webrtc"
+    ],
+
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "10ed36de-7b79-4f59-90b5-efd92ab9cf58"
+      }
+    }
+  }
+}

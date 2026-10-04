@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+e2e-results/
+# OCR runtime copied from node_modules by frontend/scripts/copy-ocr-assets.mjs
+frontend/public/ocr/
+
+# Environment and secrets
+.env
+.env.*.local
+
+# Logs
+*.log
+
+# OS and editor
+.DS_Store
+.idea/
+.vscode/
+.fuse_hidden*
+
+# Local compose secrets
+docker/.env
+
+# Android test builds served by the frontend container
+docker/downloads/
+# Android release signing key and its password (docker/android-build/build-apk.sh)
+docker/android-keys/
+
+mobile/.env
+
+# Agent/workstation artifacts
+.superpowers/
+.superdesign/
+.claude/
+outputs/
+qa-report/
+
+# Terraform local state and plans
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Spreadsheet builder previews and scratch
+docs/tracking/.build/
+
+# Local editor settings (may hold personal tokens)
+.claude/settings.json
+.claude/settings.local.json

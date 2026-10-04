@@ -1,0 +1,81 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsDateString,
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+
+export class QuotationLineDto {
+  @ApiProperty({ example: 'Mandap decoration' })
+  @IsString()
+  @MaxLength(200)
+  description: string;
+
+  @ApiProperty({ example: 25000 })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100_000_000)
+  amount: number;
+}
+
+export class SendQuotationDto {
+  @ApiProperty({ example: 75000, minimum: 1 })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  @Max(100_000_000)
+  amount: number;
+
+  @ApiPropertyOptional({ type: [QuotationLineDto], maxItems: 50 })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => QuotationLineDto)
+  lines?: QuotationLineDto[];
+
+  /** Planner quotations only: does this include arranging vendors? (EZ1-I143) */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  vendorsIncluded?: boolean;
+
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  notes?: string;
+
+  @ApiPropertyOptional({
+    maxLength: 4000,
+    description:
+      'What the price is conditional on: cancellation, overtime, travel, guest-count changes. ' +
+      'Carried onto the booking when it is accepted, so a dispute argues from the terms that ' +
+      'were actually agreed rather than from whatever the latest quotation says.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  terms?: string;
+
+  @ApiPropertyOptional({ description: 'When the offer lapses. Defaults to 14 days out.' })
+  @IsOptional()
+  @IsDateString()
+  validUntil?: string;
+}
+
+export class RespondQuotationDto {
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}

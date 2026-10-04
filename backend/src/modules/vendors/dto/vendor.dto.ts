@@ -1,0 +1,379 @@
+import { ApiProperty, ApiPropertyOptional, IntersectionType, PartialType } from '@nestjs/swagger';
+import { SocialLinksDto } from '../../../common/dto/social-links.dto';
+import { CATEGORY_SLUG, MAX_CATEGORIES } from '../vendor-categories';
+import { Type } from 'class-transformer';
+import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
+import { ArrayMaxSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { Transform } from 'class-transformer';
+import { ReviewStatus } from '../../../common/enums';
+import {
+  GSTIN_MESSAGE,
+  GSTIN_PATTERN,
+  MOBILE_MESSAGE,
+  MOBILE_PATTERN,
+  PAN_MESSAGE,
+  PAN_PATTERN,
+  normaliseMobile,
+  upperCaseTrim,
+} from '../../../common/util/identity-fields';
+import { PaginationDto } from '../../../common/dto/pagination.dto';
+
+export class VendorPackageDto {
+  @ApiProperty({ maxLength: 100 })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  name: string;
+
+  @ApiProperty({ minimum: 0, maximum: 100_000_000 })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100_000_000)
+  price: number;
+}
+
+export class VendorPricingDto {
+  @ApiPropertyOptional({ maxLength: 3, example: 'INR' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  currency?: string;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 100_000_000 })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100_000_000)
+  startingAt?: number;
+
+  /**
+   * What the starting price is *per*: a plate, an hour, a day, an event.
+   *
+   * A number on its own is not a price in this market — ₹30,000 for a caterer
+   * means something entirely different per plate than per event, and a family
+   * comparing two vendors cannot do it without this. The form has always
+   * offered the field; the DTO did not accept it, and because unknown
+   * properties are rejected outright the whole listing failed to save with
+   * "property unit should not exist". Anyone who typed into the box lost the
+   * listing; anyone who left it empty did not.
+   */
+  @ApiPropertyOptional({ maxLength: 40, example: 'plate' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  unit?: string;
+
+  /** Anything that qualifies the price — minimum numbers, what is included. */
+  @ApiPropertyOptional({ maxLength: 500, example: 'Minimum 100 plates. Service staff included.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
+
+  @ApiPropertyOptional({ type: [VendorPackageDto], maxItems: 20 })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => VendorPackageDto)
+  packages?: VendorPackageDto[];
+}
+
+/**
+ * Registration details. Optional at listing time and required before approval:
+ * an officer checks them on the visit, and a vendor with nothing to show does
+ * not get activated.
+ */
+export class VendorComplianceDto {
+  @ApiPropertyOptional({ example: '29ABCDE1234F1Z5', description: '15-character GSTIN' })
+  @IsOptional()
+  @Transform(upperCaseTrim)
+  @Matches(GSTIN_PATTERN, { message: GSTIN_MESSAGE })
+  gstNumber?: string;
+
+  @ApiPropertyOptional({ example: 'ABCDE1234F' })
+  @IsOptional()
+  @Transform(upperCaseTrim)
+  @Matches(PAN_PATTERN, { message: PAN_MESSAGE })
+  panNumber?: string;
+
+  @ApiPropertyOptional({ maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  registrationNumber?: string;
+
+  /** When the business started trading — a date (EZ1-I21). Optional. */
+  @ApiPropertyOptional({ example: '2018-06-01', description: 'ISO date the business started' })
+  @IsOptional()
+  @IsDateString()
+  @IsNotFutureDate({ message: 'Trading since cannot be in the future' })
+  tradingSince?: string;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  registeredAddress?: string;
+
+  @ApiPropertyOptional({ example: '9876543210' })
+  @IsOptional()
+  @Transform(normaliseMobile)
+  @Matches(MOBILE_PATTERN, { message: MOBILE_MESSAGE })
+  contactPhone?: string;
+
+  @ApiPropertyOptional({ type: [String], maxItems: 10, description: 'Certificate URLs' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsUploadedUrl({ each: true })
+  complianceDocuments?: string[];
+}
+
+export class CreateVendorDto extends IntersectionType(VendorComplianceDto, SocialLinksDto) {
+  @ApiProperty({ maxLength: 120 })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  name: string;
+
+  /**
+   * One to five catalogue category slugs, in the order chosen (EZ1-I263). The
+   * service checks the count and that each is an active catalogue category, and
+   * refuses anything else by name.
+   */
+  @ApiPropertyOptional({ type: [String], example: ['catering', 'cakes'], maxItems: MAX_CATEGORIES })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_CATEGORIES, { message: `Choose at most ${MAX_CATEGORIES} categories` })
+  @IsString({ each: true })
+  @Matches(CATEGORY_SLUG, { each: true, message: 'That is not a category' })
+  categories?: string[];
+
+  /**
+   * The single category app builds from before EZ1-I263 send. Read as a list
+   * of one, so those builds keep saving; new clients send `categories`.
+   */
+  @ApiPropertyOptional({ deprecated: true, example: 'catering' })
+  @IsOptional()
+  @IsString()
+  @Matches(CATEGORY_SLUG, { message: 'That is not a category' })
+  category?: string;
+
+  /** Sent by the same older builds alongside "Other". Accepted and ignored. */
+  @ApiPropertyOptional({ deprecated: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  otherCategory?: string;
+
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+
+  @ApiPropertyOptional({ maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
+
+  /*
+   * Pricing is not part of the business record.
+   *
+   * It belongs to an Offering, under a Service, under the Catalog — which is
+   * where a price has a model behind it, is what the marketplace reads, and is
+   * what a quotation is built from. This field was a second, free-text answer
+   * to the same question, editable only on My Business and visible only there,
+   * so a vendor who filled in both had no way to tell which one a buyer saw.
+   *
+   * Removed from the payload rather than ignored: the API refuses unknown
+   * fields, so a client still sending it is told, instead of having it
+   * silently dropped and believing the price was saved.
+   */
+
+  @ApiPropertyOptional({ type: [String], maxItems: 30, description: 'Absolute media URLs' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsUploadedUrl({ each: true })
+  @MaxLength(2048, { each: true })
+  portfolio?: string[];
+}
+
+/**
+ * Update payload. Every field optional, and deliberately NOT a passthrough of
+ * the entity: ratingAvg, ratingCount, isApproved and ownerUserId are server-
+ * owned and are rejected by the global whitelist pipe if a client sends them.
+ */
+export class UpdateVendorDto extends PartialType(CreateVendorDto) {}
+
+/**
+ * How the vendor grid is ordered (EZ1-I164). "Recommended" is the default and
+ * unchanged — highest rated first — so an unsorted search still lands on the
+ * page that used to be hard-coded.
+ */
+export enum VendorSort {
+  RECOMMENDED = 'recommended',
+  RATING = 'rating',
+  REVIEWS = 'reviews',
+  PRICE_ASC = 'price_asc',
+  PRICE_DESC = 'price_desc',
+  RECENT = 'recent',
+}
+
+export class VendorSearchDto extends PaginationDto {
+  /** A catalogue category slug: a business listed under it among any of its categories. */
+  @ApiPropertyOptional({ example: 'catering' })
+  @IsOptional()
+  @IsString()
+  @Matches(CATEGORY_SLUG, { message: 'That is not a category' })
+  category?: string;
+
+  @ApiPropertyOptional({ maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
+
+  /** Substring match on the business name, so the grid narrows as you type. */
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: VendorSort })
+  @IsOptional()
+  @IsEnum(VendorSort)
+  sort?: VendorSort;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 5 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(5)
+  minRating?: number;
+}
+
+/** Which slice of the review queue an administrator is looking at. */
+export class AdminReviewQueryDto {
+  @ApiPropertyOptional({ enum: ReviewStatus })
+  @IsOptional()
+  @IsEnum(ReviewStatus)
+  status?: ReviewStatus;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID('4')
+  vendorId?: string;
+}
+
+export class ModerateReviewDto {
+  @ApiProperty({ enum: ReviewStatus })
+  @IsEnum(ReviewStatus)
+  status: ReviewStatus;
+
+  /**
+   * Required for anything but publishing, enforced in the service rather than
+   * here: whether a reason is needed depends on which status was chosen, and a
+   * DTO cannot see one field while validating another without a custom rule
+   * that would be harder to read than the check itself.
+   */
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+export class CreateReviewDto {
+  @ApiProperty({ minimum: 1, maximum: 5 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating: number;
+
+  @ApiPropertyOptional({ maxLength: 1500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1500)
+  comment?: string;
+}
+
+/**
+ * The bank account a provider wants to be paid into.
+ *
+ * The account number is sealed before it is stored and never comes back in a
+ * response; the IFSC is resolved again on the server rather than trusting the
+ * client's lookup.
+ */
+export class PayoutBankAccountDto {
+  @ApiProperty({ maxLength: 120 })
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(2)
+  @MaxLength(120)
+  accountHolderName: string;
+
+  @ApiProperty({ maxLength: 120 })
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(2)
+  @MaxLength(120)
+  bankName: string;
+
+  @ApiProperty({ enum: ['savings', 'current'] })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @IsIn(['savings', 'current'], { message: 'Choose a savings or current account' })
+  accountType: 'savings' | 'current';
+
+  @ApiProperty({ example: '123456789012', description: '9 to 18 digits.' })
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.replace(/\s+/g, '') : value))
+  @Matches(/^\d{9,18}$/, { message: 'Enter a valid account number' })
+  accountNumber: string;
+
+  @ApiProperty({ example: 'HDFC0001234' })
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @Matches(/^[A-Z]{4}0[A-Z0-9]{6}$/, { message: 'Enter a valid IFSC code' })
+  ifsc: string;
+}
+
+/**
+ * The gateway's linked account for a provider, so escrow has somewhere to go.
+ *
+ * Set by the provider themselves once they have completed payout onboarding.
+ * Deliberately its own route rather than a field on the listing form: it is the
+ * one value on a business record that decides where money lands, and burying it
+ * among the portfolio URLs is how it gets changed by accident.
+ */
+export class PayoutAccountDto {
+  @ApiPropertyOptional({
+    example: 'acc_JDQrLYlYnCTZKp',
+    description:
+      'Razorpay Route linked account id. An empty string with no bank account clears the ' +
+      'payout account entirely.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^(acc_[A-Za-z0-9]+)?$/, {
+    message: 'That is not a linked account id — they look like acc_XXXXXXXX',
+  })
+  payoutAccountId?: string;
+
+  @ApiPropertyOptional({
+    type: () => PayoutBankAccountDto,
+    description: 'Bank details for onboarding when there is no linked account id yet.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PayoutBankAccountDto)
+  bankAccount?: PayoutBankAccountDto;
+}

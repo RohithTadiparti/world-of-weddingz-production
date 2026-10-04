@@ -1,0 +1,67 @@
+version: 2
+
+# Security fixes arrive as soon as an advisory is published, whatever this
+# schedule says. The schedule below only governs routine version bumps, which
+# are grouped so a week's minor and patch updates land as one pull request per
+# project rather than dozens.
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      backend-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      frontend-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Expo pins React Native and its native modules to one SDK, and a version
+  # outside that set builds but crashes on device. SDK upgrades are done with
+  # `npx expo install --fix`, not one package at a time. So the SDK-bound
+  # packages take patch releases only (what Expo itself ships within an SDK),
+  # and nothing takes a major bump automatically.
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      mobile-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: 'expo'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: 'expo-*'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: 'react-native'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: 'react-native-*'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: 'react'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: 'react-dom'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: docker
+    directory: /docker
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: terraform
+    directory: /terraform
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups:
+      actions:
+        patterns: ['*']

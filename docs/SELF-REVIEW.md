@@ -1,0 +1,367 @@
+# Self-review
+
+Six rounds of work are recorded here. Round 1 introduced the personas and
+RBAC; round 2 closed every gap round 1 listed and added agent-built profiles
+with email invitations; round 3 reworked intake and built circulation after the
+domain correction below; round 4 implemented the Phase 1 specification —
+In-Person verification, Match Fixed, and money that follows outcomes; round 5
+implemented the 115-page issues specification; round 6 closed the backlog this
+document had been carrying since round 2.
+
+**The list in section D is now historical.** Every item in it has been either
+built or deferred for a stated reason — see section F. The last section is what
+was left undone on purpose.
+
+---
+
+## A. Round 1 — personas and authorization
+
+- Seven roles across four self-registerable account types, chosen in the UI.
+- A permission matrix (`common/authz/permissions.ts`) plus a global
+  `PermissionsGuard`, applied to every controller.
+- Ownership checks in every service that mutates a record it did not create.
+- Wedding planner as a first-class bookable provider.
+- Bookings generalised from vendor-only to any provider.
+- Hardened DTOs across every module.
+
+Bugs fixed: self-registration as `admin`; escrow release/refund by any
+authenticated user; cross-vendor booking confirmation; event guest-list and RSVP
+IDOR; disputes on strangers' bookings; ungated reviews; refresh sitting behind
+the access-token guard; `JwtStrategy` trusting the token body for `role`; login
+timing enumeration.
+
+---
+
+## B. Round 2 — profiles without accounts, and the gap list
+
+### B1. Agent-built profiles (new requirement)
+
+`profiles.userId` is now nullable. An agent or family member builds a complete,
+matchable profile — photos, preferences, contact details — for somebody who has
+never signed up. Interests moved from user ids to **profile ids**, which is what
+makes an unclaimed profile a first-class matchmaking citizen.
+
+See [PROFILES-AND-INVITATIONS.md](PROFILES-AND-INVITATIONS.md).
+
+### B2. Email invitations (new requirement)
+
+A steward supplies an email **and a mobile number** — both mandatory — and sends
+an invitation. The subject follows the link, sets **their own** password, and
+takes ownership; the steward's write access ends at that moment. There is no
+"create client account" endpoint any more, which is what closes the old hole
+where an agent knew their client's credentials.
+
+### B3. Solo users are unaffected
+
+Self-registration remains fully open. A person who signs up directly has
+`managedByAgentId = null`, signs in with their own password, browses and books
+without any agent involvement, and may approach any user or agent. Covered by
+its own section in `scripts/verify-invites.sh`.
+
+### B4. Every gap round 1 listed
+
+| Was | Now |
+| --- | --- |
+| Agents unvetted | `agent_profiles.isApproved`; admin approves before any stewardship |
+| Agent chose the client's password | Invitation flow; the subject sets it |
+| No email at all | `MailService` + `log`/`smtp` providers; verification, reset, invites, RSVP |
+| One refresh token per user | `refresh_sessions`: per-device, rotated, with reuse detection |
+| Tokens in `localStorage` | Refresh token in an httpOnly cookie; access token in memory only |
+| Commission never applied | `splitAmount`; escrow releases the payout, platform keeps the fee |
+| No payment webhooks | Signed webhook endpoint, HMAC over the raw body, replay-protected |
+| Planner engagement free | Requires a confirmed or completed booking |
+| No guest RSVP | Signed single-purpose RSVP links |
+| Full profiles leaked in search | `toPublicProfile`: age band, photos gated on a match |
+| `family` a duplicate of `bride` | Family members steward relatives, capped separately |
+| `PAGINATION_MAX_LIMIT` ignored | Bounds read from config |
+| No audit log | Append-only `audit_events` on every privileged/money-moving action |
+| No admin MFA | TOTP, mandatory for admins by config |
+| No brute-force lockout | Per-account lockout after `MAX_FAILED_LOGINS` |
+| Rate limits per process | Redis-backed, keyed per account when signed in |
+
+### B5. Bugs found during round 2
+
+Three real defects, all caught by the live suites rather than by review:
+
+1. **`AgentsService.listClients` returned 500.** A raw join alias combined with
+   `orderBy` + `skip/take` made TypeORM build an ORDER BY over columns it had no
+   metadata for. Rewritten as a scoped query plus a second profile lookup.
+2. **Two logins in the same second produced byte-identical JWTs** (same claims,
+   same `iat`), colliding on the session table's unique token hash. Refresh and
+   access tokens now carry a random `jti` — which also means a refresh token is
+   genuinely unpredictable.
+3. **Container healthchecks probed the wrong loopback family.** nginx listens on
+   IPv4 only, `localhost` resolves to `::1` inside the container, so the
+   frontend reported unhealthy while serving traffic correctly.
+
+---
+
+## C. Round 3 — how an agency actually works
+
+A domain correction: in the Indian matrimony market the family hands their
+details to the agent **directly**, and the agent then **circulates** the
+biodata. Two things in round 2 were wrong as a result.
+
+### What was wrong
+
+1. **Email was mandatory on an agency-built profile.** I had treated the
+   invitation as the point of the flow. A walk-in family gives a phone number
+   far more often than an email address, and many clients never want a login at
+   all — the agent is their whole interface. Phone is now the required
+   identifier and the practical identity key (with duplicate detection on it);
+   email is optional, and only needed to send an invitation. Claiming is a
+   feature, not the destination.
+2. **Circulation did not exist.** `assertManages` walled every agent off from
+   every other one, which is right for access control but left the agent's
+   actual job with nowhere to happen.
+
+### What was built
+
+- **Consent in two scopes.** Intake (the agency may hold the details) is
+  separate from circulation (they may leave the agency); the second expires and
+  must be re-confirmed; records are append-only. Method, who gave it and their
+  relationship to the subject, callback number, date, capturing agent and notes
+  are all captured — a parent very often speaks for the person here.
+- **Five circulation paths**, all consent-gated, all revocable, all read-only:
+  to another agency, to a platform user, as a signed biodata link, into a
+  vetted-agent pool, and as a printable sheet.
+- **Cross-agent proposal threads** hanging off the existing interest record,
+  because a pairing is negotiated agent-to-agent before the families meet.
+- **Withdrawal that actually withdraws**: revoking consent pulls the profile out
+  of the pool immediately and kills links already in circulation, because
+  consent is re-checked when a link is opened, not only when it is created.
+
+### Bug found while verifying
+
+`@ValidateNested()` does not reject a **missing** nested object, so a request
+with no consent block passed validation and then crashed the service. Fixed with
+`@IsDefined()` — worth remembering wherever a required nested DTO appears.
+
+---
+
+## Verification
+
+- **84 unit tests** — permission matrix, guards, booking authorization and the
+  commission split, auth (registration, lockout, MFA, recovery, refresh), and
+  the consent state machine.
+- **118 live checks** (`scripts/verify-rbac.sh`) — the RBAC matrix end to end.
+- **76 live checks** (`scripts/verify-invites.sh`) — stewardship, invitations,
+  claiming, sessions, lockout, webhooks, audit, 2FA, pagination.
+- **73 live checks** (`scripts/verify-circulation.sh`) — phone-first intake,
+  duplicate detection, both consent scopes, all five circulation paths,
+  read-only enforcement, withdrawal, and cross-agent threads.
+
+267 live assertions in total, all passing against the running containers from an
+empty database.
+
+---
+
+## What was still missing (rounds 2–4)
+
+Kept as written, because the record of what was known-broken and for how long is
+more useful than a tidied list. Section F says what happened to each.
+
+### D1. SMS is not wired — now the biggest gap
+
+Mobile numbers are collected, validated, and treated as the identity key, but
+never actually used. Since intake went phone-first this is worse than it was: an
+agent can build a profile with no email at all, and then has **no** way to reach
+that family through the platform. Invitations still go by email only.
+
+*Fix:* an `SmsProvider` alongside `MailProvider` (the pattern is already there),
+invitations over both channels, and phone-number verification — which matters
+more than email verification in this market.
+
+### D2. No re-linking when the subject self-registers first
+
+If an agent builds a profile for someone who then signs up on their own, the
+invitation is refused (`ConflictException`) and there is no way to connect the
+two. The agent's work is stranded.
+
+*Fix:* a claim-request flow — the agent asks, the existing account approves, and
+the profile transfers.
+
+### D3. Escrow release is still a log line for real money
+
+`RazorpayPaymentProvider.release` logs rather than transferring. Real
+hold-and-release needs Razorpay Route with linked accounts and a KYC flow for
+every vendor and planner. The commission split is computed and recorded
+correctly, but nothing moves until Route is configured.
+
+### D4. Webhooks record but never reconcile
+
+The webhook endpoint verifies the signature, drops replays and stores the
+provider's status — deliberately without touching the booking state machine. But
+nothing reconciles a divergence: if the gateway says refunded and we say held,
+no alert fires.
+
+*Fix:* a scheduled reconciliation job over payments where `providerStatus`
+disagrees with `status`.
+
+### D5. MFA has no recovery codes
+
+If an admin loses their authenticator they are locked out, and admins cannot
+disable 2FA on themselves by design. The only way back is a database edit.
+
+*Fix:* single-use recovery codes issued at setup.
+
+### D6. Photos are URLs, not uploads
+
+The managed-profile editor takes a URL. There is a media module with S3 presign,
+but the two are not connected, so an agent must upload elsewhere first.
+
+*Fix:* wire `POST /media/albums/:id/presign` into the profile photo editor.
+
+### D7. Still no frontend tests
+
+`frontend/src/lib/permissions.ts` mirrors the backend matrix by hand and can
+drift silently. There is no component or e2e test of any kind.
+
+*Fix (cheap):* a test that fetches `/auth/me/permissions` per persona and diffs
+against the mirror. Generating the client constants from the backend enum at
+build time would be better.
+
+### D8. Data-subject rights are half-built
+
+Consent is now recorded properly — who gave it, how, when, and in which scope —
+and it can be withdrawn, which was the biggest part of the gap round 2 flagged.
+Still missing: no data export, no deletion endpoint, no retention policy, no
+automatic purge of unclaimed profiles that are never invited or never accepted,
+and no unsubscribe link on an invitation.
+
+*Fix:* an export and erasure path, plus a scheduled purge keyed on consent age.
+
+### D9. Audit trail is write-only in practice
+
+Events are recorded and readable by admins, but nothing alerts on them. Escrow
+release and account suspension are the two worth paging on.
+
+### D10. Session cleanup is manual
+
+`SessionsService.pruneExpired` exists and nothing calls it, so
+`refresh_sessions` grows without bound.
+
+*Fix:* a scheduled job, or a `ttlSecondsAfterFinished`-style cleanup task.
+
+### D11. Circulation has no reach analytics
+
+An agency can see who holds a profile and whether a link was opened, but not
+which shares led anywhere. There is no "3 of your 12 shares produced a proposal"
+view, which is exactly what an agent would want.
+
+### D12. The pool has no quality control
+
+Any approved agency can put any consented profile into the network pool; nothing
+rate-limits it or flags stale listings, so one agency could flood it.
+
+*Fix:* a per-agency pool quota, and automatic de-listing as consent nears expiry.
+
+### D13. `RolesGuard` is now dead code
+
+The permission guard replaced it everywhere. It is still registered, still
+tested, and still harmless — but it is a second authorization mechanism nobody
+uses, which is a trap for the next person.
+
+---
+
+## E. Round 4 — the Phase 1 specification
+
+Full treatment in [PHASE-1-OPERATIONS.md](PHASE-1-OPERATIONS.md). The short
+version, and what each piece cost:
+
+| Built | The decision behind it |
+| --- | --- |
+| **In-Person verification** | Registration stops granting access. `in_person` is a role with the narrowest permission row on the platform, created only by an admin, and an officer cannot allocate their own work. |
+| **Support cases** | Raising one against a booking freezes the escrow *and* the booking together, and only a recorded settlement moves either. That is what makes escrow a control rather than a label. |
+| **Match Fixed** | Two confirmations, one per side. The second provisions accounts, closes matchmaking, settles the agency and unlocks services. One account may hold both sides — an agency matching two of its own clients is ordinary here. |
+| **Forced password reset** | A provisioned account can reach exactly one route until it replaces the emailed password, enforced by a global guard and a decorator rather than a path list. |
+| **Agency fees** | Profile fee and success fee, both held in escrow until the outcome they were charged for happened. |
+| **Vendor compliance and calendar** | GST/PAN/registered address, and a capacity check that runs inside the confirming transaction with the row locked — double-booking is the one failure a wedding vendor cannot recover from. |
+| **Quotations** | A wedding cannot be priced from a listing. Re-quoting supersedes rather than edits, and line items must add up. |
+| **Escrow milestones** | 30/30/40, paid in order, balance computed as the remainder so rounding never loses a rupee. The three percentages must total 100 or the app refuses to boot. |
+| **Identity** | HMAC under a server-side pepper with a unique index. The number itself is never stored — a plain hash of a 12-digit number is reversible in minutes. |
+| **Chat redaction** | Contact details stripped before storage, not on render. A number that reached the database has already leaked. |
+| **Profile lifecycle** | Pause and close, neither of which deletes anything: consent records and circulation history have to outlive the search. |
+
+### E1. Defects this round found in existing code
+
+- **A password change did not end sessions.** Refresh sessions were revoked but
+  access tokens kept working for their full 15 minutes. Fixed with a
+  `tokenVersion` counter minted into every token — a first attempt compared the
+  token's issue time against `passwordChangedAt`, which flaked once under a
+  clock that moved backwards, and two clocks only have to disagree once.
+- **Match notifications had been failing silently.** The consumer still expected
+  user ids after matchmaking moved to profile ids, so every match notification
+  died on a not-null violation in a swallowed catch. It now resolves a profile
+  to its owner, or to the steward who runs it when there is no account.
+- **A duplicate GST number produced a 500.** Now a conflict, with a message that
+  says which field.
+
+### E2. What round 4 did not close
+
+- **SMS, still.** It has now cost something concrete: a walk-in client with no
+  email address cannot be handed an account when their match is fixed, so the
+  agent keeps operating the profile indefinitely.
+- **Officer geography.** `region` is recorded and then ignored by allocation.
+- **Milestone reminders.** Instalments are enforced in order but nobody is
+  chased for the balance.
+
+---
+
+## F. Round 6 — closing the backlog
+
+Every item D1–D13 and the round-4 leftovers, and what became of them.
+
+| # | Was | Now |
+| - | --- | --- |
+| D1 | SMS collected and never used | `SmsProvider` alongside `MailProvider` (`log` / `http`), invitations over both channels, and phone verification with a hashed, attempt-limited code. A profile with a number and no email can now be invited, and the address is collected when they claim it. |
+| D2 | Agent's work stranded when the subject self-registered first | `profile_claim_requests`. The agent asks; the subject decides. Accepting replaces their untouched registration stub — a profile they have actually filled in is refused instead, because two real profiles is a merge and silently picking one loses the other. |
+| D3 | Escrow release is a log line | **Still deferred.** Needs Razorpay Route, linked accounts and per-vendor KYC. The commission split is computed and recorded correctly; nothing moves until Route is configured. |
+| D4 | Webhooks recorded, never reconciled | Hourly job comparing our status against the gateway's, raising `payment.reconciliation_mismatch`. It deliberately does not auto-correct: money moving on a schedule with nobody in the loop is how a reconciliation job becomes the incident. |
+| D5 | MFA had no recovery codes | Ten single-use bcrypt-hashed codes issued at setup, shown once, regenerable with the password alone — asking for an authenticator code would be useless to the person who has lost theirs. Login accepts one in place of a TOTP. |
+| D6 | Profile photos were URLs, not uploads | `POST /media/profile-photo/presign` plus a `PhotoUploader` component. The file goes browser → storage directly, never through the API. |
+| D7 | No frontend tests | `vitest`, with a mirror test that reads the backend enum off disk and fails if the client's copy drifts. Verified to fail by deliberately renaming a permission. |
+| D8 | Data-subject rights half-built | Export (everything held, as one JSON document) and erasure. Erasure is refused while money is in flight, deletes the personal record, and anonymises the account rather than orphaning the financial trail. A weekly job purges unclaimed profiles past a two-year retention limit. |
+| D9 | Audit trail write-only | The six events worth waking somebody for emit a structured `warn` that a log-based alerting rule keys on. Deliberately not an outbound call from inside the audited request. |
+| D10 | `pruneExpired` never called | Nightly, alongside spent phone codes. |
+| D11 | No circulation reach analytics | `GET /circulation/profiles/:id/reach`, and a panel on the profile row. "Opened, then silence" is reported separately, because it is the number an agent can act on. |
+| D12 | Pool had no quality control | A per-agency quota (`POOL_QUOTA_PER_AGENCY`), and a nightly job that de-lists a profile a week before its circulation consent lapses. |
+| D13 | `RolesGuard` was dead code | Removed, along with its decorator and its tests. |
+| E2 | Phone-only client could not be handed an account at Match Fixed | They get an SMS invitation instead of an emailed password, and choose their own password — which is better than what email-holders get. |
+| E2 | Milestone reminders | Daily job, three days after a booking stalls at a payment step, by notification and SMS. |
+| E2 | Officer geography ignored | **Still deferred.** `region` is recorded and allocation still ranks purely by open workload. Geography-aware allocation needs a service-area model that does not exist yet, and guessing at one would produce worse allocations than ignoring it. |
+| ENH-12 | In-app calling | Built: WebRTC signalling over the existing socket, reusing the chat authorization rule exactly. Media is peer-to-peer. **Partly deferred** — public STUN covers most networks; the tail behind symmetric NAT needs a TURN relay, which is a procurement decision. A call that cannot connect says so rather than ringing forever. |
+
+### F1. Defects this round found
+
+- **A support case could be raised against any booking id.** Raising one freezes
+  escrow, so guessing a uuid froze a stranger's money. Now checked against
+  participation.
+- **The claim transfer was unreachable for everybody it was built for.**
+  Registration seeds a profile from the sign-up form, and the first version
+  refused to transfer when the subject already had one — which is everybody who
+  has ever signed up. It now replaces an untouched stub and refuses only a
+  profile with real content on it.
+- **Narrowing the agent's booking scope silently broke agency fee collection**,
+  because fee payment had been borrowing `BOOKING_PAY`. It has its own
+  capability now, which is what it should have had from the start.
+
+## Deliberate non-goals
+
+- **Kept the modulith.** Module boundaries are clean enough to extract later.
+- **Kept the mock payment/AI/media/Aadhaar/SMS providers.** Every one of them
+  now has a real provider behind the same interface, selected by an environment
+  variable. Swapping them needs credentials and is a deployment decision, not a
+  code change.
+- **Did not build TURN.** Calling works peer-to-peer today. Relaying the tail of
+  calls that cannot traverse NAT means paying for bandwidth per minute of
+  conversation, which is a commercial decision rather than a technical one.
+- **Did not renumber migrations.** Phases 3 to 6 are additive and reversible,
+  so existing environments migrate forward cleanly.
+- **Represented the spec's "Quotation Accepted" and "Payment Pending" as two
+  real states.** Acceptance walks the booking through both in one request, so
+  the intermediate state is short-lived — but it is a state the machine can be
+  interrupted in, and collapsing it would have lost that.
+- **`interests` migration drops unresolvable rows.** Moving from user ids to
+  profile ids, any interest whose profile could not be resolved is deleted
+  rather than guessed at. On a real deployment, check the row count first.

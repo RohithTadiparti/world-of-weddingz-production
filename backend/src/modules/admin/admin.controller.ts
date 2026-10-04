@@ -1,0 +1,392 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { AdminService } from './admin.service';
+import { AdminConsoleService } from './admin-console.service';
+import { AdminActivityService } from './admin-activity.service';
+import { AdminAccountsService } from './admin-accounts.service';
+import { AdminBookingsService } from './admin-bookings.service';
+import { AdminReportsService } from './admin-reports.service';
+import { AdminPendingCountsService } from './admin-pending-counts.service';
+import { AgencyService } from '../agents/agency.service';
+import { AuditService } from '../../platform/audit/audit.service';
+import { RejectAgencyDto } from '../agents/dto/agency.dto';
+import { AuditQueryDto } from './dto/admin.dto';
+import {
+  AdminUserQueryDto,
+  DisputeQueryDto,
+  RaiseDisputeDto,
+  ResolveDisputeDto,
+  UpdateUserStatusDto,
+} from './dto/admin.dto';
+import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { Permission } from '../../common/authz/permissions';
+import { BookingsService } from '../bookings/bookings.service';
+import { VendorServicesService } from '../catalog/vendor-services.service';
+import { DecidePriceChangeDto } from './dto/console.dto';
+import {
+  ActivityQueryDto,
+  AdminBookingQueryDto,
+  AdminTransactionQueryDto,
+  DirectoryQueryDto,
+  ReportQueryDto,
+} from './dto/console.dto';
+
+@ApiTags('admin')
+@ApiBearerAuth()
+@Controller('admin')
+export class AdminController {
+  constructor(
+    private readonly admin: AdminService,
+    private readonly agency: AgencyService,
+    private readonly audit: AuditService,
+    private readonly bookings: BookingsService,
+    private readonly console: AdminConsoleService,
+    private readonly feed: AdminActivityService,
+    private readonly accounts: AdminAccountsService,
+    private readonly consoleBookings: AdminBookingsService,
+    private readonly consoleReports: AdminReportsService,
+    private readonly adminPendingCounts: AdminPendingCountsService,
+    private readonly vendorServices: VendorServicesService,
+  ) {}
+
+  // ---------------------------------------------------------- the console
+  //
+  // One admin page could show approvals, analytics and disputes. What it could
+  // not do was answer a question about a particular account, a particular
+  // business or a particular booking — which is how every real admin session
+  // starts, because somebody has complained about something specific.
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({
+    summary: 'What has been happening, across the platform',
+    description:
+      'Not the audit trail. That records privileged actions — who approved what, who moved ' +
+      'money. This is the ordinary life of the platform: sign-ups, listings, bookings, ' +
+      'complaints. Assembled from the newest rows of each source rather than by a union.',
+  })
+  @Get('activity')
+  activity(@Query() q: ActivityQueryDto) {
+    return this.feed.activity(q);
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({ summary: 'Action-required counts for the Admin Portal navigation' })
+  @Get('pending-counts')
+  pendingCounts(@CurrentUser() actor: AuthUser) {
+    return this.adminPendingCounts.getCounts(actor.userId);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'The accounts directory, searchable and filterable by state',
+    description: 'Suspended accounts are the ones people arrive looking for.',
+  })
+  @Get('directory')
+  directory(@Query() q: DirectoryQueryDto) {
+    return this.accounts.directory(q);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'One account, and everything hanging off it',
+    description:
+      'Profiles, businesses, bookings, cases raised and cases assigned, in one read. The ' +
+      'alternative is filtering six lists by a uuid, which is how the wrong account gets ' +
+      'suspended. Password and MFA columns are never selected.',
+  })
+  @Get('accounts/:id')
+  accountDetail(@Param('id', ParseUUIDPipe) id: string) {
+    return this.accounts.accountDetail(id);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'One marriage profile in full (EZ1-I185)',
+    description:
+      "What opens when an administrator clicks a profile in an agency's associated-profiles " +
+      'list: the whole profile, not just the matchmaking-facing subset. The government id ' +
+      'number is never stored and never returned.',
+  })
+  @Get('profiles/:id')
+  profileDetail(@Param('id', ParseUUIDPipe) id: string) {
+    return this.accounts.profileDetail(id);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'One vendor business in full (EZ1-I188)',
+    description:
+      'Registration and compliance, every service in the catalogue with its offerings and ' +
+      'selected categories, uploaded documents, verification history and bookings taken — what opens ' +
+      'when an administrator clicks a business on a vendor account.',
+  })
+  @Get('businesses/:id')
+  businessDetail(@Param('id', ParseUUIDPipe) id: string) {
+    return this.console.businessDetail(id);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'One booking, with everybody attached to it',
+    description:
+      'Client, the agency behind them, provider, every payment and any dispute, in one read. ' +
+      'A dispute is argued over exactly this set of facts, and gathering them by filtering six ' +
+      'lists on a uuid is how the wrong booking gets refunded.',
+  })
+  @Get('bookings/:id')
+  bookingDetail(@Param('id', ParseUUIDPipe) id: string) {
+    return this.consoleBookings.bookingDetail(id);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'Administrators and field officers, listed apart',
+    description:
+      'They are not variants of one thing. One decides who gets access; the other goes to an ' +
+      'address and writes down what they saw — and only the second has a workload.',
+  })
+  @Get('staff/:kind')
+  staff(@Param('kind') kind: 'admin' | 'in_person') {
+    return this.console.staff(kind === 'admin' ? 'admin' : 'in_person');
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({
+    summary: 'Verification officers as a management roster (EZ1-I212)',
+    description:
+      'Every officer with their coverage, account status, presence and the shape of their ' +
+      'queue — verifications and cases split into pending, in progress and completed — so an ' +
+      'administrator can see who to send the next visit to. Availability lands with EZ1-I210.',
+  })
+  @Get('officers')
+  officers() {
+    return this.console.officers();
+  }
+
+  @RequirePermissions(Permission.ADMIN_VENDOR_APPROVE)
+  @ApiOperation({
+    summary: 'Every business on the platform, by lifecycle state',
+    description:
+      'Businesses, not vendor accounts — one account can hold several, and "how many listings ' +
+      'are stuck in first review" is a question about the listings.',
+  })
+  @Get('businesses')
+  businesses(@Query() q: DirectoryQueryDto) {
+    return this.console.businesses(q);
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({
+    summary: 'Every booking, across all stages',
+    description:
+      'A vendor sees their incoming work and a buyer their own; nobody could see the whole ' +
+      'book. That is where a dispute starts, and it is the only way to notice forty bookings ' +
+      'sitting unpaid for a fortnight.',
+  })
+  @Get('bookings')
+  allBookings(@Query() q: AdminBookingQueryDto) {
+    return this.consoleBookings.allBookings(q);
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({ summary: 'Every payment/transaction, with parties and escrow status (EZ1-I111)' })
+  @Get('transactions')
+  transactions(@Query() q: AdminTransactionQueryDto) {
+    return this.consoleBookings.transactions(q);
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({
+    summary: 'One payment in full: parties, service, event, escrow position and history (EZ1-I202)',
+  })
+  @Get('transactions/:id')
+  transactionDetail(@Param('id', ParseUUIDPipe) id: string) {
+    return this.consoleBookings.transactionDetail(id);
+  }
+
+  @RequirePermissions(Permission.ADMIN_VENDOR_APPROVE)
+  @ApiOperation({
+    summary: 'Price changes on live listings waiting for a look',
+    description:
+      'Empty unless CATALOG_REVIEW_THRESHOLD_PERCENT is set. The listing keeps selling at the ' +
+      'old price while one of these is outstanding — taking a shop off sale while somebody ' +
+      "reviews it punishes the vendor for the platform's caution.",
+  })
+  @Get('catalog/price-changes')
+  pendingPriceChanges() {
+    return this.vendorServices.pendingPriceChanges();
+  }
+
+  @RequirePermissions(Permission.ADMIN_VENDOR_APPROVE)
+  @ApiOperation({
+    summary: 'Approve or refuse a held price change',
+    description:
+      'Approving applies it; refusing leaves the price where it was. Either way the hold is ' +
+      'cleared, so a vendor is never left with a proposal nobody will answer.',
+  })
+  @Put('catalog/price-changes/:offeringId')
+  decidePriceChange(
+    @Param('offeringId', ParseUUIDPipe) offeringId: string,
+    @Body() dto: DecidePriceChangeDto,
+  ) {
+    return this.vendorServices.decidePriceChange(offeringId, dto.approve === true);
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({
+    summary: 'Reports over a window: users, agents, vendors, bookings, financial, verification',
+    description:
+      'One route rather than six, because they differ only in which counts they ask for and ' +
+      'all six want the same window handled the same way. Defaults to the last thirty days — ' +
+      'a report with no window means "everything ever", which reads as a catastrophic month.',
+  })
+  @Get('reports')
+  report(@Query() q: ReportQueryDto) {
+    return this.consoleReports.report(q);
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({
+    summary: 'New users and new bookings per day over the window (EZ1-I198)',
+    description:
+      'The daily shape behind the report totals, for the Reports dashboard growth chart. ' +
+      'Every day in the window is present, so a quiet day is a zero rather than a gap.',
+  })
+  @Get('reports/timeseries')
+  reportTimeseries(@Query() q: AdminBookingQueryDto) {
+    return this.consoleReports.growthSeries(q);
+  }
+
+  // -------------------------------------------------------- agency vetting
+
+  /**
+   * Agents can build profiles and invite real people to create accounts, so an
+   * unvetted agent is the highest-leverage account type on the platform. These
+   * two routes are the gate.
+   */
+  @RequirePermissions(Permission.ADMIN_AGENT_APPROVE)
+  @Get('agents/pending')
+  pendingAgents() {
+    return this.agency.listPending();
+  }
+
+  @RequirePermissions(Permission.ADMIN_AGENT_APPROVE)
+  @Put('agents/:id/approve')
+  approveAgent(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.agency.approve(actor, id);
+  }
+
+  @RequirePermissions(Permission.ADMIN_AGENT_APPROVE)
+  @Put('agents/:id/reject')
+  rejectAgent(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectAgencyDto,
+  ) {
+    return this.agency.reject(actor, id, dto.reason);
+  }
+
+  // ------------------------------------------------------------- audit trail
+
+  @RequirePermissions(Permission.ADMIN_AUDIT_READ)
+  @ApiOperation({ summary: 'Append-only trail of privileged and money-moving actions' })
+  @Get('audit')
+  auditLog(@Query() q: AuditQueryDto) {
+    return this.audit.list(q.page, q.limit, {
+      action: q.action,
+      actorUserId: q.actorUserId,
+      resourceId: q.resourceId,
+    });
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @Get('users')
+  users(@Query() q: AdminUserQueryDto) {
+    return this.admin.listUsers(q.page, q.limit, q.role);
+  }
+
+  @RequirePermissions(Permission.ADMIN_USERS_READ)
+  @ApiOperation({ summary: 'Suspend or reinstate any account' })
+  @Put('users/:id/status')
+  setUserStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUserStatusDto) {
+    return this.admin.setUserStatus(id, dto);
+  }
+
+  @RequirePermissions(Permission.ADMIN_VENDOR_APPROVE)
+  @Get('vendors/pending')
+  pendingVendors() {
+    return this.admin.listPendingVendors();
+  }
+
+  /**
+   * Deliberately absent: there is no route that approves a vendor listing.
+   *
+   * A listing is activated by the officer who visited the registered address,
+   * through `PUT /verification/requests/:id/decide`. Leaving an administrative
+   * shortcut here would make the visit optional, which is the one thing the
+   * whole verification flow exists to prevent.
+   */
+
+  @RequirePermissions(Permission.ADMIN_VENDOR_APPROVE)
+  @Get('planners/pending')
+  pendingPlanners() {
+    return this.admin.listPendingPlanners();
+  }
+
+  @RequirePermissions(Permission.ADMIN_VENDOR_APPROVE)
+  @Put('planners/:id/approve')
+  approvePlanner(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.admin.approvePlanner(actor, id);
+  }
+
+  /**
+   * Pays out what the platform owes but could not move.
+   *
+   * Runs nightly on its own; this is the same sweep on demand, for when a
+   * provider rings up to say their onboarding has cleared and they would like
+   * their money today rather than tomorrow.
+   */
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @ApiOperation({ summary: 'Retry payouts that had nowhere to go' })
+  @HttpCode(200)
+  @Post('payouts/retry')
+  retryPayouts() {
+    return this.bookings.retryPendingPayouts();
+  }
+
+  @RequirePermissions(Permission.ADMIN_ANALYTICS_READ)
+  @Get('analytics')
+  analytics() {
+    return this.admin.analytics();
+  }
+
+  @RequirePermissions(Permission.ADMIN_DISPUTE_RESOLVE)
+  @Get('disputes')
+  disputes(@Query() q: DisputeQueryDto) {
+    return this.admin.listDisputes(q.status);
+  }
+
+  @RequirePermissions(Permission.ADMIN_DISPUTE_RESOLVE)
+  @Put('disputes/:id/resolve')
+  resolve(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ResolveDisputeDto) {
+    return this.admin.resolveDispute(id, dto);
+  }
+
+  /** Any party to a booking may raise a dispute on it. */
+  @RequirePermissions(Permission.DISPUTE_RAISE)
+  @Post('disputes')
+  raise(@CurrentUser() actor: AuthUser, @Body() dto: RaiseDisputeDto) {
+    return this.admin.raiseDispute(actor, dto);
+  }
+}

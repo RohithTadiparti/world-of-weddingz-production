@@ -1,0 +1,884 @@
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, apiMessage } from '../lib/api';
+import { BOOKING_STATUS_LABEL, Permission, can } from '../lib/permissions';
+import { useAuth } from '../store/auth';
+import RsvpDashboard from '../components/RsvpDashboard';
+import ShareInvitation from '../components/ShareInvitation';
+import WeddingInvitationCard from '../components/WeddingInvitationCard';
+import { formatDate } from '../lib/dates';
+
+interface WEvent {
+  id: string;
+  name: string;
+  venue?: string;
+  eventDate?: string | null;
+  eventType?: string | null;
+  category?: string | null;
+  venueAddress?: string | null;
+  city?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  expectedGuests?: number | null;
+  budget?: string | null;
+  theme?: string | null;
+  specialRequirements?: string | null;
+  description?: string | null;
+  imageUrl?: string | null;
+  status?: EventStatus;
+  /** Coming / not coming / not yet answered, for this day alone. */
+  rsvp?: { coming: number; notComing: number; noReply: number };
+}
+
+type EventStatus = 'upcoming' | 'ongoing' | 'completed' | 'cancelled';
+
+const STATUS_LABEL: Record<EventStatus, string> = {
+  upcoming: 'Upcoming',
+  ongoing: 'Today',
+  completed: 'Done',
+  cancelled: 'Cancelled',
+};
+
+const STATUS_TONE: Record<EventStatus, string> = {
+  upcoming: 'bg-sky-50 text-sky-800',
+  ongoing: 'bg-emerald-50 text-emerald-800',
+  completed: 'bg-gray-100 text-gray-600',
+  cancelled: 'bg-red-50 text-red-700',
+};
+
+const CATEGORY_LABEL: Record<string, string> = {
+  main: 'Main event',
+  pre_wedding: 'Pre-wedding',
+  post_wedding: 'Post-wedding',
+};
+
+interface EventSummary {
+  total: number;
+  upcoming: number;
+  ongoing: number;
+  completed: number;
+  cancelled: number;
+}
+
+interface Guest {
+  id: string;
+  name: string;
+  /** Email address, where there is one. */
+  contact?: string;
+  phone?: string | null;
+  /** How many people the invitation covers — the family, not the person. */
+  partySize?: number | null;
+  relation?: string | null;
+}
+
+interface EventVendor {
+  bookingId: string;
+  status: string;
+  amount: string;
+  providerId: string;
+  providerName: string;
+  category: string | null;
+}
+
+/**
+ * The wedding as a series of days.
+ *
+ * A wedding is not one event — it is the mehendi, the haldi, the ceremony and
+ * the reception, each with its own venue, its own guests and its own vendors.
+ * Everything here hangs off whichever day is selected, so the couple can look
+ * at one of them at a time rather than at a single undifferentiated list.
+ */
+export default function Events() {
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<string | null>(null);
+  // Hiring a planner is a buyer's action. A planner has EVENT_MANAGE_OWN and so
+  // reaches this page, but must not be offered a planner to hire (EZ1-I120);
+  // BOOKING_CREATE is exactly the buyer capability they lack.
+  const canHirePlanner = can(useAuth((s) => s.user?.permissions ?? []), Permission.BOOKING_CREATE);
+
+  /*
+   * Whose wedding this is.
+   *
+   * Empty for a couple, which is what makes the picker below appear only for a
+   * planner without asking the client about roles: the endpoint answers with
+   * the weddings this account was engaged for, and a couple is engaged on
+   * none. A planner working three weddings at once could not previously reach
+   * any of them — Events listed the planner's own days, of which there are
+   * none, because a planner is not the one getting married.
+   */
+  /*
+   * Whose wedding this is, seeded from the address bar.
+   *
+   * A planner arriving from a booking already knows which couple they are
+   * looking at, and making them pick that couple again out of a dropdown is
+   * how a booking and its events end up feeling like two unrelated records
+   * (EZ1-I195, EZ1-I196). `?host=` carries it; the picker still works for
+   * everything else, and the server refuses a client this planner is not
+   * engaged on either way.
+   */
+  const [eventParams] = useSearchParams();
+  const [host, setHost] = useState(eventParams.get('host') ?? '');
+  const { data: engaged } = useQuery({
+    queryKey: ['engaged-hosts'],
+    queryFn: async () =>
+      (await api.get('/events/engaged')).data as { userId: string; name: string }[],
+    retry: false,
+  });
+  const clients = engaged ?? [];
+  // A planner is not the one getting married, so "Your own" is always an empty
+  // Events page for them. When they are engaged on a wedding, land them on the
+  // first client's functions automatically so the couple's days appear without
+  // a manual pick (EZ1-I196) — read from the couple's own events, never a copy.
+  // Fires once; a deliberate switch back to "Your own" afterwards is respected.
+  const autoSelected = useRef(false);
+  useEffect(() => {
+    if (!autoSelected.current && host === '' && clients.length > 0) {
+      autoSelected.current = true;
+      setHost(clients[0].userId);
+      setSelected(null);
+    }
+  }, [clients, host]);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [statusFilter, setStatusFilter] = useState<EventStatus | ''>('');
+  /*
+   * How the days are shown.
+   *
+   * A list is right when you know which day you want and are moving between
+   * them; cards are right when you are looking at the shape of the whole
+   * wedding and want the date, the venue and the numbers at a glance. Neither
+   * is better, which is why it is a choice rather than a redesign.
+   */
+  const [view, setView] = useState<'list' | 'cards'>('list');
+  const [search, setSearch] = useState('');
+  // The three fields everybody fills in stay visible; the rest are behind a
+  // disclosure, because a fourteen-field form for "add the mehendi" is a form
+  // people abandon.
+  const [more, setMore] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+
+  const [name, setName] = useState('');
+  const [venue, setVenue] = useState('');
+  const [date, setDate] = useState('');
+  const [guestName, setGuestName] = useState('');
+  const [guestPhone, setGuestPhone] = useState('');
+  const [guestParty, setGuestParty] = useState('');
+  const [guestCategory, setGuestCategory] = useState('');
+
+  const { data: events = [] } = useQuery({
+    queryKey: ['events', statusFilter, search, host],
+    queryFn: async () =>
+      (
+        await api.get('/events', {
+          params: {
+            ...(statusFilter ? { status: statusFilter } : {}),
+            ...(search ? { q: search } : {}),
+            // Only sent when a planner has chosen a wedding. A couple never
+            // sends it and the server would refuse it anyway.
+            ...(host ? { hostUserId: host } : {}),
+          },
+        })
+      ).data as WEvent[],
+  });
+
+  // Counted on the server from the same rows the list below shows, so the two
+  // cannot disagree — which is the failure that stops somebody believing a
+  // summary at all.
+  const { data: summary } = useQuery({
+    // Keyed on the host too, or switching client leaves the previous
+    // wedding's counters sitting above the new one's list (EZ1-I232).
+    queryKey: ['event-summary', host],
+    queryFn: async () =>
+      (
+        await api.get('/events/summary', {
+          params: { ...(host ? { hostUserId: host } : {}) },
+        })
+      ).data as EventSummary,
+    retry: false,
+  });
+  const { data: guests = [] } = useQuery({
+    queryKey: ['guests'],
+    queryFn: async () => (await api.get('/events/guests')).data as Guest[],
+  });
+  const { data: guestList } = useQuery({
+    queryKey: ['guest-list', selected],
+    queryFn: async () => (await api.get(`/events/${selected}/guest-list`)).data,
+    enabled: Boolean(selected),
+  });
+  const { data: vendors = [] } = useQuery<EventVendor[]>({
+    queryKey: ['event-vendors', selected],
+    queryFn: async () => (await api.get(`/events/${selected}/vendors`)).data,
+    enabled: Boolean(selected),
+  });
+
+  async function act(fn: () => Promise<unknown>, keys: string[]) {
+    setError('');
+    try {
+      await fn();
+      for (const key of keys) qc.invalidateQueries({ queryKey: [key] });
+    } catch (err) {
+      setError(apiMessage(err, 'That did not work.'));
+    }
+  }
+
+  async function createEvent(e: FormEvent) {
+    e.preventDefault();
+    await act(
+      () =>
+        api.post('/events', {
+          // A planner working a client's wedding creates the day on that shared
+          // wedding, not their own empty Events page (EZ1-I144). The couple sends
+          // nothing and the server keys the event to them.
+          hostUserId: host || undefined,
+          name,
+          venue: venue || undefined,
+          eventDate: date || undefined,
+          eventType: draft.eventType || undefined,
+          category: draft.category || undefined,
+          venueAddress: draft.venueAddress || undefined,
+          city: draft.city || undefined,
+          startTime: draft.startTime || undefined,
+          endTime: draft.endTime || undefined,
+          expectedGuests: draft.expectedGuests ? Number(draft.expectedGuests) : undefined,
+          budget: draft.budget || undefined,
+          theme: draft.theme || undefined,
+          specialRequirements: draft.specialRequirements || undefined,
+          description: draft.description || undefined,
+        }),
+      ['events', 'event-summary'],
+    );
+    setName('');
+    setVenue('');
+    setDate('');
+    setDraft({});
+    setMore(false);
+  }
+
+  async function addGuest(e: FormEvent) {
+    e.preventDefault();
+    await act(
+      () =>
+        api.post('/events/guests', {
+          name: guestName,
+          phone: guestPhone || undefined,
+          partySize: guestParty ? Number(guestParty) : undefined,
+          relation: guestCategory || undefined,
+        }),
+      ['guests'],
+    );
+    setGuestName('');
+    setGuestPhone('');
+    setGuestParty('');
+    setGuestCategory('');
+  }
+
+  const current = events.find((e) => e.id === selected);
+  const invitedIds: string[] =
+    guestList?.invites?.map((i: { guestId: string }) => i.guestId) ?? [];
+
+  return (
+    <div className="space-y-6">
+      {/*
+        Which wedding, for somebody running several.
+
+        Shown only when the account is engaged on at least one, so a couple
+        never sees it and nothing here asks about roles.
+      */}
+      {clients.length > 0 && (
+        <div className="card flex flex-wrap items-center gap-3">
+          <label className="label mb-0" htmlFor="wedding">
+            Working on
+          </label>
+          <select
+            id="wedding"
+            className="input w-auto py-1.5 text-sm"
+            value={host}
+            onChange={(e) => {
+              setHost(e.target.value);
+              // The day selected belonged to the previous wedding.
+              setSelected(null);
+            }}
+          >
+            <option value="">Your own</option>
+            {clients.map((client) => (
+              <option key={client.userId} value={client.userId}>
+                {client.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div>
+        <h1 className="page-title">Events</h1>
+        <p className="page-subtitle">
+          Each day of the wedding, with its guests and the vendors booked for it.
+        </p>
+      </div>
+
+      {error && <p className="alert-critical">{error}</p>}
+
+      <WeddingInvitationCard />
+
+      {/* Status counts live on the filter tabs below rather than as summary tiles. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="input max-w-xs"
+          placeholder="Search by name, venue or city"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {(['', 'upcoming', 'ongoing', 'completed', 'cancelled'] as const).map((value) => {
+          const count = !summary
+            ? null
+            : value === ''
+              ? summary.total
+              : value === 'upcoming'
+                ? summary.upcoming
+                : value === 'ongoing'
+                  ? summary.ongoing
+                  : value === 'completed'
+                    ? summary.completed
+                    : summary.cancelled;
+          return (
+            <button
+              key={value || 'all'}
+              className={`rounded-sm border px-3 py-1 text-xs ${
+                statusFilter === value
+                  ? 'border-brand bg-brand text-brand-fg'
+                  : 'border-gray-300 text-gray-700 hover:border-brand'
+              }`}
+              onClick={() => setStatusFilter(value)}
+            >
+              {value ? STATUS_LABEL[value] : 'All'}
+              {count != null && (
+                <span
+                  className={`ml-1.5 tabular-nums ${
+                    statusFilter === value ? 'text-brand-fg' : 'text-gray-400'
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4">
+          <div className="card">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h2 className="section-title">Your days</h2>
+              <div className="flex gap-1">
+                {(['list', 'cards'] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setView(v)}
+                    className={`rounded-sm px-2 py-0.5 text-xs ${
+                      view === v ? 'bg-brand-light text-brand-dark' : 'text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    {v === 'list' ? 'List' : 'Cards'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className={view === 'cards' ? 'grid gap-3 sm:grid-cols-2' : 'space-y-3'}>
+              {events.map((ev) => (
+                <div key={ev.id}>
+                  {editing === ev.id ? (
+                    <EditEvent
+                      event={ev}
+                      onCancel={() => setEditing(null)}
+                      onSave={async (body) => {
+                        await act(() => api.put(`/events/${ev.id}`, body), ['events']);
+                        setEditing(null);
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className={`flex h-full flex-col gap-3 rounded-sm border p-4 ${
+                        selected === ev.id
+                          ? 'border-brand bg-brand-light'
+                          : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <button className="min-w-0 space-y-2 text-left" onClick={() => setSelected(ev.id)}>
+                        {/* 1. Date — the card's anchor, above the name. */}
+                        <span className="block text-[11px] font-semibold uppercase tracking-wide text-brand-dark">
+                          {formatDate(ev.eventDate)}
+                        </span>
+
+                        {/* 2. Event details — name, then its category and type. */}
+                        <span className="block">
+                          <span className="block text-sm font-semibold leading-snug text-gray-900">
+                            {ev.name}
+                          </span>
+                          {(ev.category ||
+                            (ev.eventType &&
+                              ev.eventType.trim().toLowerCase() !==
+                                ev.name.trim().toLowerCase())) && (
+                            <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-gray-400">
+                              {ev.category && (
+                                <span>{CATEGORY_LABEL[ev.category] ?? ev.category}</span>
+                              )}
+                              {/* The event type is shown only when it says something
+                                  the name does not — a "Mehendi" event typed as type
+                                  "Mehendi" printed the word twice on the card, which
+                                  is the reported duplication (EZ1-I91). */}
+                              {ev.eventType &&
+                                ev.eventType.trim().toLowerCase() !==
+                                  ev.name.trim().toLowerCase() && (
+                                  <span>
+                                    {ev.category && (
+                                      <span aria-hidden className="mr-1.5 text-gray-300">
+                                        ·
+                                      </span>
+                                    )}
+                                    {ev.eventType}
+                                  </span>
+                                )}
+                            </span>
+                          )}
+                        </span>
+
+                        {/*
+                          3. Status — where this day stands, on the day itself.
+
+                          The RSVP panel only ever appeared for the one day you
+                          had selected, so "how many are coming to the sangeet"
+                          took a click per day and the page that was meant to
+                          summarise the wedding summarised nothing.
+                        */}
+                        {(ev.status ||
+                          (ev.rsvp &&
+                            ev.rsvp.coming + ev.rsvp.notComing + ev.rsvp.noReply > 0)) && (
+                          <span className="flex flex-wrap items-center gap-1">
+                            {ev.status && (
+                              <span
+                                className={`rounded-sm px-2 py-0.5 text-[10px] font-medium ${STATUS_TONE[ev.status]}`}
+                              >
+                                {STATUS_LABEL[ev.status]}
+                              </span>
+                            )}
+                            {ev.rsvp &&
+                              ev.rsvp.coming + ev.rsvp.notComing + ev.rsvp.noReply > 0 && (
+                                <>
+                                  <span className="rounded-sm bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-800">
+                                    {ev.rsvp.coming} coming
+                                  </span>
+                                  <span className="rounded-sm bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800">
+                                    {ev.rsvp.noReply} not answered
+                                  </span>
+                                  <span className="rounded-sm bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">
+                                    {ev.rsvp.notComing} not coming
+                                  </span>
+                                </>
+                              )}
+                          </span>
+                        )}
+
+                        {/*
+                          4. Location, time and guest facts on one aligned row,
+                          dot-separated. Budget sits here rather than only behind
+                          "More details" so a planner comparing days sees it
+                          without opening each one (EZ1-I17); theme travels with
+                          the shared event so a hired planner sees it (EZ1-I84).
+                        */}
+                        {(ev.venue ||
+                          ev.startTime ||
+                          ev.expectedGuests ||
+                          (ev.budget && Number(ev.budget) > 0) ||
+                          ev.theme) && (
+                          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+                            {[
+                              ev.venue ? ev.venue : null,
+                              ev.startTime
+                                ? `${ev.startTime.slice(0, 5)}${
+                                    ev.endTime ? `–${ev.endTime.slice(0, 5)}` : ''
+                                  }`
+                                : null,
+                              ev.expectedGuests ? `${ev.expectedGuests} expected` : null,
+                              ev.budget && Number(ev.budget) > 0
+                                ? `₹${Number(ev.budget).toLocaleString('en-IN')}`
+                                : null,
+                              ev.theme ? ev.theme : null,
+                            ]
+                              .filter((f): f is string => Boolean(f))
+                              .map((fact, i) => (
+                                <span key={i} className="inline-flex items-center gap-2">
+                                  {i > 0 && (
+                                    <span aria-hidden className="text-gray-300">
+                                      ·
+                                    </span>
+                                  )}
+                                  {fact}
+                                </span>
+                              ))}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* 5. Actions — one consistent area, right in list view,
+                          a divided footer row in cards view. */}
+                      <div className="mt-auto flex flex-wrap items-center gap-1 border-t border-gray-100 pt-2">
+                        {/*
+                          Straight to the vendors for this day. It was only
+                          reachable after selecting the day and scrolling the
+                          right-hand panel, which is a long way from "add a
+                          button to redirect to the Vendors page".
+                        */}
+                        <Link
+                          className="rounded-sm px-2 py-1 text-xs text-brand-dark hover:bg-gray-100"
+                          to={`/vendors?eventId=${ev.id}`}
+                          title={`Book vendors for ${ev.name}`}
+                        >
+                          Vendors
+                        </Link>
+                        {/* Hire a Planner sits next to Vendors here (EZ1-I108),
+                            the second half of the wedding's marketplace — but
+                            only for a buyer, never for a planner (EZ1-I120). */}
+                        {canHirePlanner && (
+                          <Link
+                            className="rounded-sm px-2 py-1 text-xs text-brand-dark hover:bg-gray-100"
+                            to="/wedding-planners"
+                            title="Hire a wedding planner"
+                          >
+                            Hire a Planner
+                          </Link>
+                        )}
+                        <button
+                          className="rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+                          onClick={() => setEditing(ev.id)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+                          onClick={() =>
+                            act(() => api.delete(`/events/${ev.id}`), ['events'])
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {events.length === 0 && (
+                <p className="text-sm text-gray-400">Nothing planned yet.</p>
+              )}
+            </div>
+          </div>
+
+          <form onSubmit={createEvent} className="card space-y-2">
+            <h2 className="section-title">Add a day</h2>
+            <input
+              className="input"
+              placeholder="Mehendi"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+            <input
+              className="input"
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+            <input
+              className="input"
+              placeholder="Venue"
+              value={venue}
+              onChange={(e) => setVenue(e.target.value)}
+            />
+
+            <button
+              type="button"
+              className="block text-left text-xs text-brand-strong underline underline-offset-2"
+              onClick={() => setMore(!more)}
+            >
+              {more ? 'Fewer details' : 'More details: times, guests, budget'}
+            </button>
+
+            {more && (
+              <div className="space-y-2 border-t pt-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    className="input"
+                    placeholder="Type, e.g. Sangeet"
+                    value={draft.eventType ?? ''}
+                    onChange={(e) => setDraft({ ...draft, eventType: e.target.value })}
+                  />
+                  <select
+                    className="input"
+                    value={draft.category ?? ''}
+                    onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+                  >
+                    <option value="">Category</option>
+                    <option value="pre_wedding">Pre-wedding</option>
+                    <option value="main">Main event</option>
+                    <option value="post_wedding">Post-wedding</option>
+                  </select>
+                  <input
+                    className="input"
+                    type="time"
+                    title="Start time"
+                    value={draft.startTime ?? ''}
+                    onChange={(e) => setDraft({ ...draft, startTime: e.target.value })}
+                  />
+                  <input
+                    className="input"
+                    type="time"
+                    title="End time"
+                    value={draft.endTime ?? ''}
+                    onChange={(e) => setDraft({ ...draft, endTime: e.target.value })}
+                  />
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    placeholder="Guests expected"
+                    value={draft.expectedGuests ?? ''}
+                    onChange={(e) => setDraft({ ...draft, expectedGuests: e.target.value })}
+                  />
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    placeholder="Budget"
+                    value={draft.budget ?? ''}
+                    onChange={(e) => setDraft({ ...draft, budget: e.target.value })}
+                  />
+                </div>
+                <input
+                  className="input"
+                  placeholder="City"
+                  value={draft.city ?? ''}
+                  onChange={(e) => setDraft({ ...draft, city: e.target.value })}
+                />
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Venue address"
+                  value={draft.venueAddress ?? ''}
+                  onChange={(e) => setDraft({ ...draft, venueAddress: e.target.value })}
+                />
+                <input
+                  className="input"
+                  placeholder="Theme / preferences"
+                  value={draft.theme ?? ''}
+                  onChange={(e) => setDraft({ ...draft, theme: e.target.value })}
+                />
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Special requirements — anything the planner or vendors must know"
+                  value={draft.specialRequirements ?? ''}
+                  onChange={(e) => setDraft({ ...draft, specialRequirements: e.target.value })}
+                />
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Notes: decoration, food, anything the vendors need"
+                  value={draft.description ?? ''}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                />
+              </div>
+            )}
+            <button className="btn">Add</button>
+          </form>
+        </div>
+
+        <div className="space-y-4 lg:col-span-2">
+          {!current && (
+            <p className="card text-sm text-gray-500">
+              Pick a day on the left to see its guests and vendors.
+            </p>
+          )}
+
+          {current && (
+            <>
+              <div className="card">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="section-title">Vendors for {current.name}</h2>
+                  {/*
+                    The event travels with the link. It used to drop it, so an
+                    organiser who pressed this landed on a vendor list with
+                    nothing selected and had to find the same day again from a
+                    dropdown — having just been looking at it.
+                  */}
+                  <Link className="btn-outline" to={`/vendors?eventId=${current.id}`}>
+                    Book someone for this day
+                  </Link>
+                </div>
+                <div className="divide-y">
+                  {vendors.map((v) => (
+                    <div key={v.bookingId} className="flex items-center justify-between py-2 text-sm">
+                      <div>
+                        <p className="font-medium text-gray-900">{v.providerName}</p>
+                        <p className="text-xs uppercase tracking-wide text-gray-400">
+                          {v.category ?? 'Provider'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-gray-700">
+                          {Number(v.amount) > 0 ? `₹${Number(v.amount).toLocaleString('en-IN')}` : '-'}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {BOOKING_STATUS_LABEL[v.status] ?? v.status}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                  {vendors.length === 0 && (
+                    <p className="py-2 text-sm text-gray-400">
+                      Nobody booked for this day yet.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/*
+                The link goes above the guest list on purpose.
+
+                Adding guests by hand is the fallback now, not the route in: a
+                host who has just made a day wants to send it to everybody, and
+                the replies are what build the list underneath.
+              */}
+              <div className="card">
+                <h2 className="section-title mb-2">Invite people to {current.name}</h2>
+                <ShareInvitation eventId={current.id} eventName={current.name} />
+              </div>
+
+              <RsvpDashboard eventId={current.id} />
+
+              <div className="card">
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="section-title">Guests for {current.name}</h2>
+                  {guestList && (
+                    <p className="text-sm text-gray-600">
+                      {guestList.summary.attending} of {guestList.summary.total} attending
+                    </p>
+                  )}
+                </div>
+                <div className="divide-y">
+                  {guests.map((g) => (
+                    <div key={g.id} className="flex items-center justify-between py-2 text-sm">
+                      <span>
+                        {g.name}
+                        {g.phone ? <span className="text-gray-500"> · {g.phone}</span> : null}
+                        {g.relation ? <span className="text-gray-400"> · {g.relation}</span> : null}
+                        {g.partySize && g.partySize > 1 ? (
+                          <span className="text-gray-400"> · party of {g.partySize}</span>
+                        ) : null}
+                      </span>
+                      {invitedIds.includes(g.id) ? (
+                        <span className="text-xs text-gray-400">Invited</span>
+                      ) : (
+                        <button
+                          className="btn-outline"
+                          onClick={() =>
+                            act(
+                              () => api.post(`/events/guests/${g.id}/invite`, { eventIds: [current.id] }),
+                              ['guest-list', 'guests'],
+                            )
+                          }
+                        >
+                          Send invitation
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {guests.length === 0 && (
+                    <p className="py-2 text-sm text-gray-400">No guests on your list yet.</p>
+                  )}
+                </div>
+
+                <form onSubmit={addGuest} className="mt-3 flex flex-wrap gap-2 border-t pt-3">
+                  <input
+                    className="input flex-1"
+                    placeholder="Guest name"
+                    value={guestName}
+                    onChange={(e) => setGuestName(e.target.value)}
+                    required
+                  />
+                  {/*
+                    A separate mobile column, because chasing an RSVP happens by
+                    phone and "email or phone" in one box means neither can be
+                    dialled or written to reliably.
+                  */}
+                  <input
+                    className="input w-40"
+                    placeholder="Phone number"
+                    inputMode="tel"
+                    value={guestPhone}
+                    onChange={(e) => setGuestPhone(e.target.value)}
+                  />
+                  <input
+                    className="input w-36"
+                    placeholder="Guest category"
+                    value={guestCategory}
+                    onChange={(e) => setGuestCategory(e.target.value)}
+                  />
+                  <input
+                    className="input w-28"
+                    type="number"
+                    min={1}
+                    placeholder="Party size (optional)"
+                    title="How many people this invitation covers"
+                    value={guestParty}
+                    onChange={(e) => setGuestParty(e.target.value)}
+                  />
+                  <button className="btn">Add guest</button>
+                </form>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditEvent({
+  event,
+  onSave,
+  onCancel,
+}: {
+  event: WEvent;
+  onSave: (body: Record<string, string | undefined>) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(event.name);
+  const [date, setDate] = useState(event.eventDate ?? '');
+  const [venue, setVenue] = useState(event.venue ?? '');
+
+  return (
+    <form
+      className="space-y-2 rounded-sm border border-brand/40 p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave({ name, eventDate: date || undefined, venue: venue || undefined });
+      }}
+    >
+      <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+      <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      <input
+        className="input"
+        placeholder="Venue"
+        value={venue}
+        onChange={(e) => setVenue(e.target.value)}
+      />
+      <div className="flex gap-2">
+        <button className="btn">Save</button>
+        <button type="button" className="btn-outline" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}

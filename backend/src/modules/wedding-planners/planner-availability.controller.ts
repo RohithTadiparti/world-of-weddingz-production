@@ -1,0 +1,156 @@
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AvailabilityService } from '../vendors/availability.service';
+import {
+  AvailabilityQueryDto,
+  BlockSlotDto,
+  CreateSlotDto,
+  UpdateSlotDto,
+} from '../vendors/dto/availability.dto';
+import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
+import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { Permission } from '../../common/authz/permissions';
+import { ProviderType } from '../../common/enums';
+
+/**
+ * A planner's calendar, on the same machinery as a vendor's.
+ *
+ * A planner takes bookings against dates exactly as a caterer does, and
+ * bookings have carried `providerType` since they were written — availability
+ * was the one part of that story keyed to vendors alone, so a planner had no
+ * way to publish the weeks they could take work in and a couple looking at
+ * them had nothing to read.
+ *
+ * These delegate to the same service rather than reimplementing it. Slots,
+ * capacity, blocking, clash detection and the rolling six-month window are the
+ * same question for both, and two copies would drift on the first bug fixed in
+ * only one of them. The single genuine difference — whose listing this is —
+ * lives in the service's ownership check, which now asks the right table.
+ */
+@ApiTags('planner-availability')
+@ApiBearerAuth()
+@Controller('wedding-planners/:id/availability')
+export class PlannerAvailabilityController {
+  constructor(private readonly availability: AvailabilityService) {}
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @ApiOperation({ summary: 'Publish a week you can take work in' })
+  @Post('slots')
+  create(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateSlotDto,
+  ) {
+    return this.availability.create(actor, ProviderType.PLANNER, id, dto);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @Put('slots/:slotId')
+  update(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('slotId', ParseUUIDPipe) slotId: string,
+    @Body() dto: UpdateSlotDto,
+  ) {
+    return this.availability.update(actor, ProviderType.PLANNER, id, slotId, dto);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @Delete('slots/:slotId')
+  remove(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('slotId', ParseUUIDPipe) slotId: string,
+  ) {
+    return this.availability.remove(actor, ProviderType.PLANNER, id, slotId);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Hold a week back without deleting it' })
+  @Post('slots/:slotId/block')
+  block(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('slotId', ParseUUIDPipe) slotId: string,
+    @Body() dto: BlockSlotDto,
+  ) {
+    return this.availability.block(actor, ProviderType.PLANNER, id, slotId, dto);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @HttpCode(200)
+  @Post('slots/:slotId/unblock')
+  unblock(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('slotId', ParseUUIDPipe) slotId: string,
+  ) {
+    return this.availability.unblock(actor, ProviderType.PLANNER, id, slotId);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @Get('slots')
+  list(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: AvailabilityQueryDto,
+  ) {
+    return this.availability.list(actor, ProviderType.PLANNER, id, q.from, q.to);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @Get('summary')
+  summary(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: AvailabilityQueryDto,
+  ) {
+    return this.availability.summary(actor, ProviderType.PLANNER, id, q.from, q.to);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @ApiOperation({ summary: 'The slots behind one summary card' })
+  @Get('slots/by/:bucket')
+  bucket(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('bucket') bucket: 'published' | 'open' | 'requested' | 'booked' | 'full' | 'blocked',
+    @Query() q: AvailabilityQueryDto,
+  ) {
+    return this.availability.filtered(actor, ProviderType.PLANNER, id, bucket, q.from, q.to);
+  }
+
+  @RequirePermissions(Permission.PLANNER_LISTING_MANAGE)
+  @Get('calendar')
+  calendar(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: AvailabilityQueryDto,
+  ) {
+    return this.availability.calendar(actor, ProviderType.PLANNER, id, q.from, q.to);
+  }
+
+  /**
+   * Slots a buyer can actually book, so the Hire-a-Planner flow can check a
+   * planner's availability before requesting a booking (EZ1-I113) — the same
+   * availability-first path the vendor flow already offers. Any signed-in user
+   * may look; only full and blocked windows are hidden.
+   */
+  /**
+   * Each published day as a couple reads it on the profile's calendar:
+   * available, limited, booked or not available. No counts beyond openings
+   * left, and no block reasons; those stay on the owner's `calendar`.
+   */
+  @ApiOperation({ summary: 'Day-by-day availability for the public profile calendar' })
+  @Get('days')
+  days(@Param('id', ParseUUIDPipe) id: string, @Query() q: AvailabilityQueryDto) {
+    return this.availability.publicDays(ProviderType.PLANNER, id, q.from, q.to);
+  }
+
+  @ApiOperation({ summary: 'Bookable slots for a buyer checking availability (EZ1-I113)' })
+  @Get('bookable')
+  bookable(@Param('id', ParseUUIDPipe) id: string, @Query() q: AvailabilityQueryDto) {
+    return this.availability.listBookable(ProviderType.PLANNER, id, q.from, q.to);
+  }
+}

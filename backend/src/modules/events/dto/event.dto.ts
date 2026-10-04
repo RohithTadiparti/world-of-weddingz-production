@@ -1,0 +1,376 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsDateString,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsNumberString,
+  IsOptional,
+  IsBoolean,
+  IsString,
+  IsUUID,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
+import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsStrictString } from '../../../common/decorators/strict-type.decorator';
+import { Transform } from 'class-transformer';
+import { EventCategory, EventStatus, RsvpStatus } from '../../../common/enums';
+import { MOBILE_MESSAGE, MOBILE_PATTERN, normaliseMobile } from '../../../common/util/identity-fields';
+
+export class CreateEventDto {
+  /**
+   * The couple this event is for, when an engaged planner creates it (EZ1-I144).
+   * Omitted by the couple themselves. The server refuses a host the caller is
+   * not engaged on, so the event lands on the shared wedding either way.
+   */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional() @IsUUID('4')
+  hostUserId?: string;
+
+  @ApiProperty({ example: 'Mehendi', minLength: 1, maxLength: 120 })
+  @IsStrictString() @MinLength(1) @MaxLength(120)
+  name: string;
+
+  @ApiPropertyOptional({ format: 'date' })
+  @IsOptional() @IsDateString()
+  eventDate?: string;
+
+  @ApiPropertyOptional({ maxLength: 240 })
+  @IsOptional() @IsString() @MaxLength(240)
+  venue?: string;
+
+  @ApiPropertyOptional({ example: 'Sangeet', maxLength: 60 })
+  @IsOptional() @IsString() @MaxLength(60)
+  eventType?: string;
+
+  @ApiPropertyOptional({ enum: EventCategory })
+  @IsOptional() @IsEnum(EventCategory)
+  category?: EventCategory;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional() @IsString() @MaxLength(500)
+  venueAddress?: string;
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsOptional() @IsString() @MaxLength(120)
+  city?: string;
+
+  @ApiPropertyOptional({ example: '19:00', description: '24-hour HH:MM.' })
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a 24-hour time like 19:00' })
+  startTime?: string;
+
+  @ApiPropertyOptional({ example: '23:00' })
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a 24-hour time like 23:00' })
+  endTime?: string;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 100000 })
+  @IsOptional() @IsInt() @Min(0) @Max(100_000)
+  expectedGuests?: number;
+
+  @ApiPropertyOptional({ example: '250000.00' })
+  @IsOptional() @IsNumberString()
+  budget?: string;
+
+  @ApiPropertyOptional({ maxLength: 4000 })
+  @IsOptional() @IsString() @MaxLength(4000)
+  description?: string;
+
+  @ApiPropertyOptional({ maxLength: 240, description: 'Theme / preferences (EZ1-I84)' })
+  @IsOptional() @IsString() @MaxLength(240)
+  theme?: string;
+
+  @ApiPropertyOptional({ maxLength: 4000, description: 'Special requirements (EZ1-I84)' })
+  @IsOptional() @IsString() @MaxLength(4000)
+  specialRequirements?: string;
+
+  @ApiPropertyOptional({ maxLength: 4000, description: "Planner's execution notes (EZ1-I84)" })
+  @IsOptional() @IsString() @MaxLength(4000)
+  plannerNotes?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional() @IsUploadedUrl()
+  imageUrl?: string;
+
+  @ApiPropertyOptional({ enum: EventStatus })
+  @IsOptional() @IsEnum(EventStatus)
+  status?: EventStatus;
+}
+
+/** Everything on an event is amendable — dates move, venues fall through. */
+export class UpdateEventDto {
+  @ApiPropertyOptional({ minLength: 1, maxLength: 120 })
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(120)
+  name?: string;
+
+  @ApiPropertyOptional({ format: 'date' })
+  @IsOptional() @IsDateString()
+  eventDate?: string;
+
+  @ApiPropertyOptional({ maxLength: 240 })
+  @IsOptional() @IsString() @MaxLength(240)
+  venue?: string;
+
+  @ApiPropertyOptional({ example: 'Sangeet', maxLength: 60 })
+  @IsOptional() @IsString() @MaxLength(60)
+  eventType?: string;
+
+  @ApiPropertyOptional({ enum: EventCategory })
+  @IsOptional() @IsEnum(EventCategory)
+  category?: EventCategory;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional() @IsString() @MaxLength(500)
+  venueAddress?: string;
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsOptional() @IsString() @MaxLength(120)
+  city?: string;
+
+  @ApiPropertyOptional({ example: '19:00', description: '24-hour HH:MM.' })
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a 24-hour time like 19:00' })
+  startTime?: string;
+
+  @ApiPropertyOptional({ example: '23:00' })
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a 24-hour time like 23:00' })
+  endTime?: string;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 100000 })
+  @IsOptional() @IsInt() @Min(0) @Max(100_000)
+  expectedGuests?: number;
+
+  @ApiPropertyOptional({ example: '250000.00' })
+  @IsOptional() @IsNumberString()
+  budget?: string;
+
+  @ApiPropertyOptional({ maxLength: 4000 })
+  @IsOptional() @IsString() @MaxLength(4000)
+  description?: string;
+
+  @ApiPropertyOptional({ maxLength: 240, description: 'Theme / preferences (EZ1-I84)' })
+  @IsOptional() @IsString() @MaxLength(240)
+  theme?: string;
+
+  @ApiPropertyOptional({ maxLength: 4000, description: 'Special requirements (EZ1-I84)' })
+  @IsOptional() @IsString() @MaxLength(4000)
+  specialRequirements?: string;
+
+  @ApiPropertyOptional({ maxLength: 4000, description: "Planner's execution notes (EZ1-I84)" })
+  @IsOptional() @IsString() @MaxLength(4000)
+  plannerNotes?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional() @IsUploadedUrl()
+  imageUrl?: string;
+
+  @ApiPropertyOptional({ enum: EventStatus })
+  @IsOptional() @IsEnum(EventStatus)
+  status?: EventStatus;
+}
+
+export class CreateGuestDto {
+  @ApiProperty({ minLength: 1, maxLength: 120 })
+  @IsString() @MinLength(1) @MaxLength(120)
+  name: string;
+
+  @ApiPropertyOptional({
+    example: '9876543210',
+    description: 'Mobile number. Chasing an RSVP happens by phone, so this is worth having.',
+  })
+  @IsOptional()
+  @Transform(normaliseMobile)
+  @Matches(MOBILE_PATTERN, { message: MOBILE_MESSAGE })
+  phone?: string;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 100,
+    description: 'How many people the invitation covers — the family, not the person.',
+  })
+  @IsOptional() @IsInt() @Min(1) @Max(100)
+  partySize?: number;
+
+  @ApiPropertyOptional({ maxLength: 60, example: "Bride's uncle" })
+  @IsOptional() @IsString() @MaxLength(60)
+  relation?: string;
+
+  @ApiPropertyOptional({ maxLength: 1000, description: 'Private to the host.' })
+  @IsOptional() @IsString() @MaxLength(1000)
+  notes?: string;
+}
+
+export class UpdateGuestDto {
+  @ApiPropertyOptional({ minLength: 1, maxLength: 120 })
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(120)
+  name?: string;
+
+  @ApiPropertyOptional({ example: '9876543210' })
+  @IsOptional()
+  @Transform(normaliseMobile)
+  @Matches(MOBILE_PATTERN, { message: MOBILE_MESSAGE })
+  phone?: string;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100 })
+  @IsOptional() @IsInt() @Min(1) @Max(100)
+  partySize?: number;
+
+  @ApiPropertyOptional({ maxLength: 60 })
+  @IsOptional() @IsString() @MaxLength(60)
+  relation?: string;
+
+  @ApiPropertyOptional({ maxLength: 1000 })
+  @IsOptional() @IsString() @MaxLength(1000)
+  notes?: string;
+}
+
+export class SetWeddingInvitationCardDto {
+  @ApiProperty({ description: 'Uploaded invitation-card image URL.' })
+  @IsUploadedUrl()
+  cardUrl: string;
+}
+
+export class InviteDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID('4')
+  guestId: string;
+}
+
+/**
+ * Which events a wedding invitation covers.
+ *
+ * Chosen by the host, because not every guest is asked to every function: a
+ * reception-only guest must not be shown the address of a private family one.
+ * Left out, the invitation covers the events the guest is already invited to.
+ */
+export class InviteToWeddingDto {
+  @ApiPropertyOptional({ type: [String], format: 'uuid', maxItems: 50 })
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsUUID('4', { each: true })
+  eventIds?: string[];
+}
+
+/** What a guest may set through their signed link: their attendance, nothing else. */
+export class GuestRsvpDto {
+  @ApiProperty({ enum: [RsvpStatus.ATTENDING, RsvpStatus.DECLINED, RsvpStatus.MAYBE] })
+  @IsIn([RsvpStatus.ATTENDING, RsvpStatus.DECLINED, RsvpStatus.MAYBE], {
+    message: 'Reply with attending, declined or maybe',
+  })
+  status: RsvpStatus;
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    maximum: 100,
+    description: 'How many are actually coming. What the caterer is ordered from.',
+  })
+  @IsOptional() @IsInt() @Min(0) @Max(100)
+  attendingCount?: number;
+
+  @ApiPropertyOptional({ maxLength: 500, description: 'Only if they offer one. Never demanded.' })
+  @IsOptional() @IsString() @MaxLength(500)
+  declineReason?: string;
+}
+
+export class UpdateRsvpDto {
+  @ApiProperty({ enum: RsvpStatus })
+  @IsEnum(RsvpStatus)
+  status: RsvpStatus;
+
+  @ApiPropertyOptional({ maxLength: 40 })
+  @IsOptional() @IsString() @MaxLength(40)
+  seat?: string;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 100 })
+  @IsOptional() @IsInt() @Min(0) @Max(100)
+  attendingCount?: number;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional() @IsString() @MaxLength(500)
+  declineReason?: string;
+}
+
+/** Filters over the wedding's own days. */
+export class EventQueryDto {
+  @ApiPropertyOptional({ enum: EventStatus })
+  @IsOptional() @IsEnum(EventStatus)
+  status?: EventStatus;
+
+  @ApiPropertyOptional({ enum: EventCategory })
+  @IsOptional() @IsEnum(EventCategory)
+  category?: EventCategory;
+
+  @ApiPropertyOptional({ description: 'Matches the name, venue or city.' })
+  @IsOptional() @IsString() @MaxLength(120)
+  q?: string;
+
+  /**
+   * Whose wedding, when a planner is working on a client's.
+   *
+   * Declared here because it has to be. The route reads it with its own
+   * `@Query('hostUserId')` and hands it to `resolveHost`, which is where the
+   * engagement is actually checked — but the global ValidationPipe runs
+   * `forbidNonWhitelisted` against this DTO first, and a property the DTO does
+   * not know is not ignored, it is a 400 for the whole request. So a planner
+   * who picked a client off the dropdown got "property hostUserId should not
+   * exist" and an Events page that stayed empty, however correctly they had
+   * been engaged (EZ1-I232).
+   *
+   * Declaring it grants nothing: `resolveHost` still refuses a host this
+   * planner is not engaged on.
+   */
+  @ApiPropertyOptional({ description: "A planner may name a client's wedding they are engaged on." })
+  @IsOptional() @IsUUID()
+  hostUserId?: string;
+}
+
+/**
+ * Answering an open invitation.
+ *
+ * The name is the only required field, because it is the only one the host
+ * cannot do without — a guest list of anonymous yeses tells a caterer a
+ * number and tells the couple nothing. Everything else is offered and not
+ * demanded: somebody replying from a WhatsApp link at midnight will abandon
+ * a form that asks for their email.
+ */
+export class SharedRsvpDto {
+  @ApiProperty({ example: 'Ramesh Sharma', minLength: 2, maxLength: 120 })
+  @IsString()
+  @MinLength(2, { message: 'Please give a name so the hosts know who replied' })
+  @MaxLength(120)
+  name: string;
+
+  @ApiPropertyOptional({ maxLength: 160, description: 'Email or phone, if they want to give one' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  contact?: string;
+
+  @ApiPropertyOptional({
+    enum: [RsvpStatus.ATTENDING, RsvpStatus.MAYBE, RsvpStatus.DECLINED],
+    description: 'The guest\'s reply. Maybe records that they have not decided yet.',
+  })
+  @IsOptional()
+  @IsIn([RsvpStatus.ATTENDING, RsvpStatus.MAYBE, RsvpStatus.DECLINED])
+  status?: RsvpStatus.ATTENDING | RsvpStatus.MAYBE | RsvpStatus.DECLINED;
+
+  /** Kept for links produced by earlier web clients. */
+  @ApiPropertyOptional({ description: 'Legacy: true for coming, false for unable to attend' })
+  @ValidateIf((dto: SharedRsvpDto) => dto.status === undefined)
+  @IsBoolean()
+  attending?: boolean;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 100,
+    description: 'How many are coming in total, including the person replying.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  partySize?: number;
+}

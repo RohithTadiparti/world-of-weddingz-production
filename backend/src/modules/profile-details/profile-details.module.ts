@@ -1,0 +1,45 @@
+import { Module, forwardRef } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ProfileDetails } from './entities/profile-details.entity';
+import { ProfileSibling } from './entities/profile-sibling.entity';
+import { ProfileAsset } from './entities/profile-asset.entity';
+import { IdentityOtpSession } from './entities/identity-otp-session.entity';
+import { Profile } from '../users/entities/profile.entity';
+import { User } from '../auth/entities/user.entity';
+import { Interest } from '../matchmaking/entities/interest.entity';
+import { ProfileDetailsService } from './profile-details.service';
+import { ProfileDetailsController } from './profile-details.controller';
+import { CasteCatalogController } from './caste-catalog.controller';
+import { AadhaarService } from './aadhaar.service';
+import { AadhaarController } from './aadhaar.controller';
+import {
+  LicensedAadhaarProvider,
+  MockAadhaarProvider,
+  aadhaarProviderFactory,
+} from './aadhaar.provider';
+import { AiModule } from '../ai/ai.module';
+
+@Module({
+  imports: [
+    forwardRef(() => AiModule),
+    TypeOrmModule.forFeature([
+      ProfileDetails,
+      ProfileSibling,
+      ProfileAsset,
+      IdentityOtpSession,
+      Profile,
+      User,
+      Interest,
+    ]),
+  ],
+  providers: [
+    ProfileDetailsService,
+    AadhaarService,
+    MockAadhaarProvider,
+    LicensedAadhaarProvider,
+    aadhaarProviderFactory,
+  ],
+  controllers: [ProfileDetailsController, AadhaarController, CasteCatalogController],
+  exports: [ProfileDetailsService],
+})
+export class ProfileDetailsModule {}

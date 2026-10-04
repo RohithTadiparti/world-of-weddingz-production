@@ -1,0 +1,47 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "base": {
+      "node": "22.14.0",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://test.worldofweddingz.com/api"
+      }
+    },
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "environment": "development"
+    },
+    "preview": {
+      "extends": "base",
+      "distribution": "internal",
+      "environment": "preview",
+      "ios": {
+        "resourceClass": "default"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "simulator": {
+      "extends": "base",
+      "environment": "preview",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "production": {
+      "extends": "base",
+      "autoIncrement": true,
+      "environment": "production"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {}
+    }
+  }
+}

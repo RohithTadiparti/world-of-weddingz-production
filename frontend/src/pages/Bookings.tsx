@@ -1,0 +1,1537 @@
+import { FormEvent, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
+import { api, apiMessage } from '../lib/api';
+import { useAuth } from '../store/auth';
+import { BOOKING_STATUS_LABEL, MILESTONE_LABEL, Permission, can, canAny } from '../lib/permissions';
+import { formatDate, formatDateTime } from '../lib/dates';
+import {
+  CANCELLED_BY_LABEL,
+  labelFrom,
+  partialListNote,
+  paymentStatusLabel,
+  quotationStatusLabel,
+} from '../lib/labels';
+import ProviderBookings from '../components/ProviderBookings';
+import PlacedForClients from '../components/PlacedForClients';
+import BookingChat from '../components/BookingChat';
+import PaymentMethodPicker from '../components/PaymentMethodPicker';
+import PhotoUploader from '../components/PhotoUploader';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RequestedServices from '../components/RequestedServices';
+import { Loading } from '../components/ui/Feedback';
+import { ReferenceThumbs, RequestEstimate } from '../components/RequestExtras';
+import { estimateSummary } from '../lib/booking-request';
+
+interface Booking {
+  id: string;
+  /**
+   * When the provider marked the work delivered, and whether this buyer has
+   * accepted it (EZ1-I228). Escrow turns on the acceptance, not on the balance
+   * arriving, so the two are read separately.
+   */
+  deliveredAt?: string | null;
+  deliveryAcceptedAt?: string | null;
+  /** Which instalments are in, so a paid balance stops asking to be paid. */
+  collectedMilestones?: string[];
+  /** What the provider said they handed over, and any evidence for it. */
+  deliveryNotes?: string | null;
+  deliveryEvidence?: string[];
+  userId: string;
+  bookedByUserId: string;
+  providerType: 'vendor' | 'planner';
+  providerId: string;
+  providerName?: string;
+  requirements?: string | null;
+  /** Planner requests only: the services the couple ticked, as catalogue keys. */
+  requestedServices?: string[];
+  expectedBudget?: string | null;
+  amount: string;
+  currency: string;
+  status: string;
+  eventDate: string | null;
+  /** Wedding/service context, already returned by listForBuyer (EZ1-I68). */
+  eventName?: string | null;
+  eventVenue?: string | null;
+  eventCity?: string | null;
+  expectedGuests?: number | null;
+  serviceName?: string | null;
+  offeringName?: string | null;
+  quantity?: number | null;
+  /** The chosen price times the quantity, as shown when the request was sent. */
+  estimatedAmount?: string | null;
+  /** The live vendor offer returned with the booking list, before it is accepted. */
+  quotation?: { amount: string; currency?: string; stage?: string } | null;
+  /** Designs attached to the request for the vendor to see. */
+  referenceImages?: string[];
+  paymentStatus?: string | null;
+  /** Cancellation detail, when the booking is cancelled (EZ1-I77). */
+  cancellationReason?: string | null;
+  cancelledByName?: string | null;
+  cancelledByRole?: string | null;
+  cancelledAt?: string | null;
+  /** The buyer's own review of this booking, when written (EZ1-I114). */
+  myReview?: { rating: number; comment: string } | null;
+  /** True when this row is the match-fixed partner's booking, not the caller's (EZ1-I160). */
+  sharedFromPartner?: boolean;
+  /** The client the booking is for — the partner's name on a shared row (EZ1-I160). */
+  clientName?: string | null;
+}
+
+interface Quotation {
+  id: string;
+  amount: string;
+  currency: string;
+  lines: { description: string; amount: number }[];
+  notes: string | null;
+  validUntil: string | null;
+  terms: string | null;
+  status: string;
+}
+
+interface BookingAddon {
+  id: string;
+  title: string;
+  description: string | null;
+  quantity: number;
+  proposedPrice: string | null;
+  vendorPrice: string | null;
+  currency: string;
+  note: string | null;
+  status: 'requested' | 'accepted' | 'rejected' | 'requoted';
+  responseNote: string | null;
+  createdAt: string;
+}
+
+type MilestoneKey = 'advance' | 'second' | 'final';
+
+interface Milestone {
+  milestone: MilestoneKey;
+  amount: string;
+  status: string | null;
+  paymentId: string | null;
+}
+
+interface MilestoneView {
+  bookingId: string;
+  total: string;
+  currency: string;
+  milestones: Milestone[];
+}
+
+/**
+ * Which instalment the booking's own state makes payable.
+ *
+ * Money and work alternate: the advance secures the job, the second releases
+ * the provider to finish it, the balance falls due once they say it is done.
+ * The server enforces this; mirroring it here means the button appears at the
+ * moment it will actually work rather than producing a refusal.
+ */
+const PAYABLE_AT: Record<MilestoneKey, string[]> = {
+  advance: ['payment_pending'],
+  second: ['in_progress'],
+  final: ['completed_pending_final_payment'],
+};
+
+const OPEN_STATUSES = [
+  'requested',
+  'quotation_sent',
+  'quotation_accepted',
+  'payment_pending',
+  'pending',
+  'confirmed',
+  'in_progress',
+];
+
+/**
+ * The status filter, curated into the buckets a buyer actually thinks in
+ * (EZ1-I167). Each tab maps to one or more raw statuses; 'active' stays a
+ * client-side group for dashboard deep-links (EZ1-I75), and an exact-status
+ * link still falls through to a direct match.
+ */
+const TAB_DEFS: { key: string; label: string; statuses: string[] }[] = [
+  { key: '', label: 'All', statuses: [] },
+  { key: 'requested', label: 'Requests', statuses: ['requested'] },
+  { key: 'quotation', label: 'Quotation', statuses: ['quotation_sent', 'quotation_accepted'] },
+  { key: 'payment', label: 'Payment', statuses: ['payment_pending', 'pending'] },
+  { key: 'confirmed', label: 'Confirmed', statuses: ['confirmed'] },
+  // Delivered and waiting on the buyer to confirm and pay the balance is still
+  // work in hand, and the step where the buyer has something to do.
+  {
+    key: 'in_progress',
+    label: 'In Progress',
+    statuses: ['in_progress', 'completed_pending_final_payment'],
+  },
+  { key: 'completed', label: 'Completed', statuses: ['completed'] },
+  { key: 'cancelled', label: 'Cancelled', statuses: ['cancelled', 'disputed'] },
+];
+
+/** A plain-English line under the technical status, per status (EZ1-I167). */
+const STATUS_HINT: Record<string, string> = {
+  requested: 'Request sent — waiting for the provider to send a quotation.',
+  quotation_sent: 'Quotation received — review it, then accept or decline.',
+  quotation_accepted: 'Quotation accepted — complete payment to confirm your booking.',
+  payment_pending: 'Payment pending — complete payment to confirm your booking.',
+  pending: 'Paid — waiting for the provider to confirm.',
+  confirmed: 'Confirmed — booking confirmed successfully.',
+  in_progress: 'In progress — your booking is currently being fulfilled.',
+  completed_pending_final_payment: 'Service delivered — pay the balance to close the booking.',
+  completed: 'Completed — service completed.',
+  disputed: 'Under investigation — an officer is reviewing this booking.',
+  cancelled: 'Cancelled — this booking was cancelled.',
+};
+
+/** The contextual empty state for a filter that has no bookings (EZ1-I167). */
+const EMPTY_HINT: Record<string, string> = {
+  '': 'No bookings yet — request one from the Vendors or Hire a Planner page.',
+  requested: 'No open requests — requests you send sit here until the provider quotes.',
+  quotation: 'No quotations yet — a provider’s price for your request will show up here.',
+  payment: 'Nothing awaiting payment — accepted quotations that need paying appear here.',
+  confirmed: 'No confirmed bookings yet.',
+  in_progress: 'Nothing in progress right now.',
+  completed: 'No completed bookings yet.',
+  cancelled: 'No cancelled bookings.',
+};
+
+/** The single prominent action per status; everything else stays secondary (EZ1-I167). */
+const PRIMARY_LABEL: Record<string, string> = {
+  quotation_sent: 'View quotation',
+  quotation_accepted: 'Complete payment',
+  payment_pending: 'Complete payment',
+  completed_pending_final_payment: 'Pay balance',
+};
+
+/**
+ * The buyer's side of a booking.
+ *
+ * A wedding job is priced by quotation, not from a listing, so the flow reads:
+ * request, receive a quote, accept it, then pay in three instalments. Confirm,
+ * start and complete belong to the provider and are absent here — the server
+ * refuses them from this side anyway.
+ */
+export default function Bookings() {
+  const qc = useQueryClient();
+  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const canBuy = can(permissions, Permission.BOOKING_READ_OWN);
+  const canPay = can(permissions, Permission.BOOKING_PAY);
+  const canRaiseCase = can(permissions, Permission.CASE_RAISE);
+  const canSell = can(permissions, Permission.BOOKING_READ_INCOMING);
+  // A planner answers an incoming request the same way a vendor does — with a
+  // quotation — but only the vendor permission was checked here, so a planner
+  // saw nothing but Decline (EZ1-I67). The server already lets either seller quote.
+  const canQuote = canAny(permissions, [
+    Permission.VENDOR_LISTING_MANAGE,
+    Permission.PLANNER_LISTING_MANAGE,
+  ]);
+
+  const [params] = useSearchParams();
+  const highlight = params.get('highlight');
+
+  // A dashboard tile can deep-link to a bucket (EZ1-I75). 'active' is a group
+  // (everything not cancelled or completed) rather than one status, so it is
+  // filtered on the client; the exact statuses pass straight to the API.
+  const [status, setStatus] = useState(params.get('status') ?? '');
+  const [error, setError] = useState('');
+  // Arriving from a fresh request opens that booking straight away, so the
+  // person is looking at the thing they just did rather than hunting for it.
+  const [expanded, setExpanded] = useState<string | null>(highlight);
+  const [disputing, setDisputing] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<string | null>(null);
+  /*
+   * Which booking is being cancelled, if any.
+   *
+   * This used to go through on the first click: a provider's held date
+   * released and escrow unwound before anybody could think better of it.
+   */
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  // Every booking is fetched once and filtered on the client (EZ1-I141): that is
+  // what lets the status tabs carry live counts and switch without a round-trip.
+  //
+  // The whole page the server allows, not its default twenty: the tabs were
+  // counted from the first twenty rows and disagreed with the dashboard, which
+  // counts every booking.
+  const { data, isLoading } = useQuery({
+    queryKey: ['bookings'],
+    queryFn: async () => (await api.get('/bookings', { params: { limit: 100 } })).data,
+    enabled: canBuy,
+  });
+
+  // The dashboard & tab tally from server database
+  const { data: serverCounts } = useQuery({
+    queryKey: ['my-booking-counts'],
+    queryFn: async () =>
+      (await api.get('/bookings/counts')).data as Record<string, number>,
+    enabled: canBuy,
+    retry: false,
+  });
+
+  async function run(fn: () => Promise<unknown>) {
+    setError('');
+    try {
+      await fn();
+      qc.invalidateQueries({ queryKey: ['bookings'] });
+      qc.invalidateQueries({ queryKey: ['my-booking-counts'] });
+      qc.invalidateQueries({ queryKey: ['quotations'] });
+      qc.invalidateQueries({ queryKey: ['milestones'] });
+      qc.invalidateQueries({ queryKey: ['booking-addons'] });
+    } catch (err) {
+      setError(apiMessage(err, 'That action was rejected.'));
+    }
+  }
+
+  // A provider does not buy; they answer. Same module, the other side of it —
+  // which is where the work belongs, rather than duplicated on the business
+  // page where it drifts out of step.
+  if (!canBuy) {
+    if (!canSell) {
+      return (
+        <div className="card">
+          <h1 className="page-title">Bookings</h1>
+          <p className="page-subtitle">
+            Your account does not book services.
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="page-title">Bookings</h1>
+          <p className="page-subtitle">
+            Everything coming in against your listings, in the order the work moves. Accepting a
+            job is what takes the window off your calendar.
+          </p>
+        </div>
+        {/* A planner also books vendors for their couples; those bookings are
+            the couples', so they are listed apart from the agency's own queue. */}
+        {can(permissions, Permission.BOOKING_REQUEST_FOR_CLIENT) && <PlacedForClients />}
+        {can(permissions, Permission.BOOKING_REQUEST_FOR_CLIENT) && (
+          <h2 className="section-title">Booked with your agency</h2>
+        )}
+        <ProviderBookings canQuote={canQuote} />
+      </div>
+    );
+  }
+
+  const allBookings: Booking[] = data?.data ?? [];
+  const matchesTab = (b: Booking, tabKey: string): boolean => {
+    const s = (b.status ?? '').toLowerCase().trim();
+    if (tabKey === '') return true;
+    // The same rule as the dashboard tile: a dispute is still in flight.
+    if (tabKey === 'active') return s !== 'cancelled' && s !== 'completed';
+    const def = TAB_DEFS.find((t) => t.key === tabKey);
+    if (def && def.statuses.length > 0) {
+      return def.statuses.map((x) => x.toLowerCase()).includes(s);
+    }
+    return s === tabKey.toLowerCase().trim();
+  };
+  const bookings: Booking[] = allBookings.filter((b) => matchesTab(b, status));
+
+  const countFor = (tabKey: string) => {
+    if (serverCounts) {
+      if (tabKey === '') return serverCounts.all ?? 0;
+      // One count per status from the server; a tab adds up its own statuses,
+      // so a status name that is also a tab name is never counted twice.
+      const def = TAB_DEFS.find((t) => t.key === tabKey);
+      if (def && def.statuses.length > 0) {
+        return def.statuses.reduce((sum, s) => sum + (serverCounts[s] ?? 0), 0);
+      }
+      if (tabKey in serverCounts) return serverCounts[tabKey] ?? 0;
+    }
+    return allBookings.filter((b) => matchesTab(b, tabKey)).length;
+  };
+  const partialNote = partialListNote(
+    allBookings.length,
+    data?.meta?.total ?? serverCounts?.all,
+  );
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="page-title">Bookings</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Ask for a booking from the <strong>Vendors</strong> or <strong>Hire a Planner</strong>{' '}
+          page. The provider quotes; once you accept, the price is fixed and payable in
+          instalments. Payments and escrow are on the <strong>Accounts</strong> page.
+        </p>
+      </div>
+
+      {/*
+        Curated status filter with live counts (EZ1-I141, EZ1-I167). Kept on one
+        line and horizontally scrollable so it never wraps into crowded rows on
+        mobile; the selected tab is highlighted.
+      */}
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {TAB_DEFS.map((t) => {
+          const n = countFor(t.key);
+          const activeTab = status === t.key;
+          return (
+            <button
+              key={t.key || 'all'}
+              onClick={() => setStatus(t.key)}
+              className={`shrink-0 whitespace-nowrap rounded-sm border px-3 py-1 text-sm transition-colors ${
+                activeTab
+                  ? 'border-brand bg-brand-light text-brand-dark'
+                  : 'border-gray-200 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              {t.label}
+              <span className={`ml-1.5 tabular-nums ${activeTab ? 'text-brand-dark' : 'text-gray-400'}`}>
+                {n}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {error && <p className="alert-critical">{error}</p>}
+      {isLoading && <Loading rows={3} />}
+      {partialNote && <p className="text-xs text-gray-500">{partialNote}.</p>}
+
+      <div className="space-y-3">
+        {!isLoading && bookings.length === 0 && (
+          <p className="card text-sm text-gray-500">
+            {EMPTY_HINT[status] ?? 'No bookings here.'}
+          </p>
+        )}
+        {bookings.map((b) => {
+          const priced = Number(b.amount) > 0;
+          const quoted = !priced && Number(b.quotation?.amount ?? 0) > 0;
+          // "Category · Location" — what was booked, and where the event is.
+          const category = b.serviceName ?? (b.providerType === 'planner' ? 'Planner' : 'Vendor');
+          const location = [b.eventVenue, b.eventCity].filter(Boolean).join(', ');
+          // Extra wedding facts, kept quiet under the headline (EZ1-I68).
+          const extras = [
+            b.offeringName,
+            b.eventName,
+            b.expectedGuests ? `${b.expectedGuests} guests` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          const isOpen = expanded === b.id;
+          const isActive =
+            b.status !== 'cancelled' && b.status !== 'completed' && b.status !== 'disputed';
+          // A review can only be written once the job is done, and only once
+          // (EZ1-I30, EZ1-I114); a dispute only once escrow is in play. Both
+          // kinds of provider are reviewable — a planner runs the whole wedding
+          // and was the one provider a couple could not rate (EZ1-I244).
+          const canReview = b.status === 'completed' && !b.myReview;
+          const canDispute =
+            canRaiseCase &&
+            ['confirmed', 'in_progress', 'completed_pending_final_payment', 'completed'].includes(
+              b.status,
+            );
+          // The balance no longer completes a booking by itself: the provider
+          // closes it once it is paid and the delivery accepted (EZ1-I266).
+          const balancePaid =
+            b.status === 'completed_pending_final_payment' &&
+            (b.collectedMilestones ?? []).includes('final');
+          const statusHint = balancePaid
+            ? b.deliveredAt && !b.deliveryAcceptedAt
+              ? 'Balance paid — accept the delivery so the provider can close the booking.'
+              : 'Balance paid — waiting for the provider to mark the booking completed.'
+            : STATUS_HINT[b.status];
+          const primaryLabel = isOpen
+            ? 'Hide details'
+            : (!balancePaid && PRIMARY_LABEL[b.status]) || 'View details';
+          return (
+          <div
+            key={b.id}
+            className={`card space-y-4 ${highlight === b.id ? 'ring-2 ring-brand' : ''}`}
+          >
+            {/* Who and what, with the amount and date held to the right (EZ1-I167). */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-base font-semibold text-gray-900">
+                  {b.providerName ?? `${b.providerType} ${b.providerId.slice(0, 8)}`}
+                  {/* A booking the match-fixed partner placed, shared into this
+                      account's wedding view (EZ1-I160). Service/offering already
+                      read on the category/extras lines below (EZ1-I167). */}
+                  {b.sharedFromPartner && (
+                    <span className="ml-2 rounded-sm bg-brand-light px-2 py-0.5 align-middle text-xs font-normal text-brand-dark">
+                      Booked by {b.clientName || 'your partner'}
+                    </span>
+                  )}
+                </p>
+                <p className="mt-0.5 text-sm text-gray-500">
+                  <span className="capitalize">{category}</span>
+                  {location && ` · ${location}`}
+                </p>
+                {extras && <p className="mt-0.5 text-xs text-gray-400">{extras}</p>}
+              </div>
+              <div className="shrink-0 text-right">
+                <p className={`text-base font-semibold ${quoted ? 'font-mono text-brand-strong' : 'text-gray-900'}`}>
+                  {priced
+                    ? `${b.currency} ${Number(b.amount).toLocaleString('en-IN')}`
+                    : quoted
+                      ? `${b.quotation?.currency ?? b.currency} ${Number(b.quotation?.amount).toLocaleString('en-IN')}`
+                      : 'Not yet priced'}
+                </p>
+                {quoted && <p className="mt-0.5 text-[0.6875rem] font-medium uppercase tracking-wide text-brand-strong">Vendor quotation</p>}
+                {b.eventDate && (
+                  <p className="mt-0.5 text-xs text-gray-500">{formatDate(b.eventDate)}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Current status in plain English, with the payment status beside it. */}
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-sm bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                  {balancePaid ? 'Balance paid' : (BOOKING_STATUS_LABEL[b.status] ?? b.status)}
+                </span>
+                {b.paymentStatus && (
+                  <span className="rounded-sm bg-brand-soft px-2 py-0.5 text-xs text-brand-strong">
+                    {paymentStatusLabel(b.paymentStatus, 'buyer')}
+                  </span>
+                )}
+              </div>
+              {statusHint && <p className="mt-1 text-xs text-gray-500">{statusHint}</p>}
+            </div>
+
+            {/* A glanceable progress bar while the booking is still moving (EZ1-I12, EZ1-I167). */}
+            {isActive && STAGE_INDEX[b.status] !== undefined && (
+              <div className="overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <BookingProgress status={b.status} />
+              </div>
+            )}
+
+            {/* One clear primary action; cancel/dispute/review stay quieter (EZ1-I167). */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn" onClick={() => setExpanded(isOpen ? null : b.id)}>
+                {primaryLabel}
+              </button>
+              {OPEN_STATUSES.includes(b.status) && (
+                <button className="btn-outline" onClick={() => setCancelling(b.id)}>
+                  Cancel
+                </button>
+              )}
+              {/*
+                What the provider says they delivered, shown before the buyer is
+                asked to accept it.
+
+                This was written to the booking, the provider was told "the
+                customer sees this when they confirm", and nothing rendered it
+                anywhere -- so the buyer released escrow against a bare button
+                (council review, 2026-09-10). The point of recording a delivery
+                is that somebody reads it.
+              */}
+              {b.deliveredAt && !b.deliveryAcceptedAt && (b.deliveryNotes || (b.deliveryEvidence ?? []).length > 0) && (
+                <div className="w-full rounded-sm border border-gray-200 bg-surface-sunken p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    What was delivered
+                  </p>
+                  {b.deliveryNotes && (
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">
+                      {b.deliveryNotes}
+                    </p>
+                  )}
+                  {(b.deliveryEvidence ?? []).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(b.deliveryEvidence ?? []).map((url) => (
+                        <a key={url} href={url} target="_blank" rel="noreferrer">
+                          <img
+                            src={url}
+                            alt="Delivery evidence"
+                            loading="lazy"
+                            className="h-20 w-28 rounded-sm border border-gray-200 object-cover"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/*
+                The buyer's word that the work was done (EZ1-I228).
+
+                Escrow used to become releasable when the balance arrived, which
+                records that they paid rather than that they were satisfied.
+                This is the other half, and it sits next to "Raise an issue"
+                because those are the two answers to the same question.
+              */}
+              {b.deliveredAt && !b.deliveryAcceptedAt && (
+                <button
+                  className="btn"
+                  onClick={() =>
+                    run(() => api.put(`/bookings/${b.id}/confirm-delivery`, {}))
+                  }
+                >
+                  Accept delivery
+                </button>
+              )}
+              {canDispute && (
+                <button
+                  className="btn-outline text-red-600"
+                  onClick={() => setDisputing(disputing === b.id ? null : b.id)}
+                >
+                  {disputing === b.id ? 'Never mind' : 'Raise an issue'}
+                </button>
+              )}
+              {/* Once reviewed, the button is gone and the review is shown below (EZ1-I114). */}
+              {canReview && (
+                <button
+                  className="btn-outline"
+                  onClick={() => setReviewing(reviewing === b.id ? null : b.id)}
+                >
+                  {reviewing === b.id ? 'Never mind' : 'Write a review'}
+                </button>
+              )}
+            </div>
+
+            {b.myReview ? (
+              <div className="mt-2 rounded-sm bg-surface-sunken p-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-emerald-700">Review submitted</span>
+                  <span className="flex items-center gap-0.5" aria-label={`${b.myReview.rating} out of 5`}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <span
+                        key={star}
+                        className={star <= b.myReview!.rating ? 'text-caution-fg' : 'text-gray-300'}
+                        aria-hidden
+                      >
+                        ★
+                      </span>
+                    ))}
+                  </span>
+                </div>
+                {b.myReview.comment && (
+                  <p className="mt-1 text-sm text-gray-700">{b.myReview.comment}</p>
+                )}
+              </div>
+            ) : (
+              reviewing === b.id && <ReviewForm booking={b} onCancel={() => setReviewing(null)} />
+            )}
+
+            {disputing === b.id && (
+              <DisputeForm
+                booking={b}
+                onCancel={() => setDisputing(null)}
+                onRaise={async (body) => {
+                  await run(() => api.post('/verification/cases', body));
+                  setDisputing(null);
+                }}
+              />
+            )}
+
+            {expanded === b.id && (
+              <BookingDetail booking={b} canPay={canPay} onRun={run} />
+            )}
+
+            {/*
+              Asked before the date is released.
+
+              A cancellation unwinds escrow and hands the provider's held window
+              back, and neither is something the platform can put right
+              afterwards — so the sentence names what is lost rather than
+              asking a generic "are you sure".
+            */}
+            {cancelling === b.id && (
+              <ConfirmDialog
+                title="Cancel this booking?"
+                body={
+                  Number(b.amount) > 0
+                    ? `${b.providerName ?? 'The provider'} will lose the date, and anything held in escrow is returned. This cannot be undone.`
+                    : `${b.providerName ?? 'The provider'} will be told you no longer need them. This cannot be undone.`
+                }
+                confirmLabel="Confirm cancellation"
+                cancelLabel="Keep booking"
+                onDismiss={() => {
+                  setCancelling(null);
+                  setCancelReason('');
+                }}
+                onConfirm={async () => {
+                  // The reason travels with the cancellation so the other side
+                  // is told why, not just that it happened (EZ1-I77).
+                  await run(() =>
+                    api.put(`/bookings/${b.id}/cancel`, {
+                      ...(cancelReason.trim() ? { reason: cancelReason.trim() } : {}),
+                    }),
+                  );
+                  setCancelling(null);
+                  setCancelReason('');
+                }}
+              >
+                <label className="label">Reason (shared with the other side)</label>
+                <textarea
+                  className="input"
+                  rows={2}
+                  maxLength={500}
+                  placeholder="Let them know why you are cancelling"
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                />
+              </ConfirmDialog>
+            )}
+          </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Quotations, grouped by what became of them.
+ *
+ * A re-quoted booking shows four rows differing only by a status word in the
+ * corner, and the one that matters — the offer that was actually agreed — is
+ * not necessarily the newest. Superseded and expired go together because they
+ * mean the same thing to a reader: an offer that is no longer on the table and
+ * nobody refused.
+ */
+const QUOTE_GROUPS: { key: string; label: string; statuses: string[] }[] = [
+  { key: 'live', label: 'On the table', statuses: ['sent'] },
+  { key: 'accepted', label: 'Accepted', statuses: ['accepted'] },
+  { key: 'rejected', label: 'Rejected', statuses: ['rejected'] },
+  { key: 'past', label: 'No longer current', statuses: ['superseded', 'expired'] },
+];
+
+/** Why a milestone that is next in line still is not payable. */
+const WAITING_ON: Record<MilestoneKey, string> = {
+  advance: 'Waiting on the provider to accept',
+  second: 'Due once they start the work',
+  final: 'Due once they mark it delivered',
+};
+
+/**
+ * The parts of the job a couple may rate a planner on, each optional.
+ *
+ * A planner is not one service delivered on one day: they are judged on how the
+ * whole thing was organised, on being reachable, and on turning up when they
+ * said they would. The overall rating is still the only required answer and the
+ * only one the average is computed from (EZ1-I244).
+ */
+const PLANNER_CATEGORIES: { key: string; label: string }[] = [
+  { key: 'planning', label: 'Planning & coordination' },
+  { key: 'communication', label: 'Communication' },
+  { key: 'serviceQuality', label: 'Service quality' },
+  { key: 'professionalism', label: 'Professionalism' },
+  { key: 'timeliness', label: 'Timeliness' },
+];
+
+/** Rate and review a completed booking, once (EZ1-I30, EZ1-I244). */
+function ReviewForm({ booking, onCancel }: { booking: Booking; onCancel: () => void }) {
+  const qc = useQueryClient();
+  const [rating, setRating] = useState(5);
+  const [categories, setCategories] = useState<Record<string, number>>({});
+  const [comment, setComment] = useState('');
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      /*
+       * The same shape to either kind of provider, on its own route. A
+       * planner's reviews are a table of their own (EZ1-I244), so the path is
+       * chosen from what was actually booked rather than assumed.
+       */
+      const path = booking.providerType === 'planner' ? 'wedding-planners' : 'vendors';
+      await api.post(`/${path}/${booking.providerId}/reviews`, {
+        rating,
+        ...(comment.trim() ? { comment: comment.trim() } : {}),
+        // The parts of the job, each optional. Only a planner is rated on them:
+        // they are the things a planner is judged on, and asking a caterer
+        // about "planning & coordination" would be a form nobody can answer.
+        ...(booking.providerType === 'planner'
+          ? Object.fromEntries(
+              // A cleared category is a zero here and an absence to the server,
+              // which rejects anything below one star.
+              PLANNER_CATEGORIES.map(({ key }) => [key, categories[key]]).filter(
+                ([, value]) => typeof value === 'number' && value > 0,
+              ),
+            )
+          : {}),
+      });
+      setDone(true);
+      qc.invalidateQueries({ queryKey: ['bookings'] });
+    } catch (err) {
+      setError(apiMessage(err, 'That review could not be submitted.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="mt-3 rounded-sm border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+        Review submitted. Thank you.
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-3 space-y-3 rounded-sm border border-gray-200 p-3">
+      <div>
+        <p className="text-sm font-medium text-gray-900">
+          Rate {booking.providerName ?? 'this service'}
+        </p>
+        <div className="mt-1 flex gap-1">
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setRating(n)}
+              aria-label={`${n} star${n === 1 ? '' : 's'}`}
+              className={`text-2xl leading-none ${n <= rating ? 'text-amber-500' : 'text-gray-300'}`}
+            >
+              ★
+            </button>
+          ))}
+        </div>
+      </div>
+      {/* Optional, and only for a planner. Blank stays blank: a couple who
+          wants to say "five stars, they were excellent" should not have to
+          grade five separate things to say it. */}
+      {booking.providerType === 'planner' && (
+        <fieldset className="space-y-1">
+          <legend className="text-sm text-gray-700">
+            The parts of the job <span className="text-gray-400">(optional)</span>
+          </legend>
+          {PLANNER_CATEGORIES.map(({ key, label }) => (
+            <div key={key} className="flex items-center justify-between gap-3">
+              <span className="text-sm text-gray-600">{label}</span>
+              <span className="flex gap-0.5">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    aria-label={`${label}: ${n} star${n === 1 ? '' : 's'}`}
+                    onClick={() =>
+                      setCategories((current) => ({
+                        ...current,
+                        // Pressing the star already set clears it, which is the
+                        // only way back to "not answered".
+                        ...(current[key] === n ? { [key]: 0 } : { [key]: n }),
+                      }))
+                    }
+                    className={`text-lg leading-none ${
+                      n <= (categories[key] ?? 0) ? 'text-amber-500' : 'text-gray-300'
+                    }`}
+                  >
+                    ★
+                  </button>
+                ))}
+              </span>
+            </div>
+          ))}
+        </fieldset>
+      )}
+
+      <label className="block text-sm">
+        <span className="text-gray-700">Your review</span>
+        <textarea
+          className="input mt-1"
+          rows={3}
+          maxLength={2000}
+          placeholder="Share your experience…"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+        />
+      </label>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="flex gap-2">
+        <button className="btn" disabled={busy}>
+          Submit review
+        </button>
+        <button type="button" className="btn-outline" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * The booking lifecycle, as one row a buyer can read at a glance (EZ1-I12).
+ * A cancelled or disputed booking has left the happy path and is shown as a
+ * badge instead of a stage.
+ */
+const LIFECYCLE: { key: string; label: string }[] = [
+  { key: 'requested', label: 'Request' },
+  { key: 'quotation_sent', label: 'Quotation' },
+  { key: 'quotation_accepted', label: 'Accepted' },
+  { key: 'payment_pending', label: 'Payment' },
+  { key: 'confirmed', label: 'Confirmed' },
+  { key: 'in_progress', label: 'In progress' },
+  { key: 'completed', label: 'Completed' },
+];
+
+const STAGE_INDEX: Record<string, number> = {
+  requested: 0,
+  quotation_sent: 1,
+  quotation_accepted: 2,
+  payment_pending: 3,
+  confirmed: 4,
+  in_progress: 5,
+  completed_pending_final_payment: 6,
+  completed: 6,
+};
+
+function BookingProgress({ status }: { status: string }) {
+  if (status === 'cancelled' || status === 'disputed') {
+    return (
+      <span
+        className={`rounded-sm px-2 py-0.5 text-xs font-medium ${
+          status === 'cancelled' ? 'bg-gray-100 text-gray-600' : 'bg-red-50 text-red-700'
+        }`}
+      >
+        {BOOKING_STATUS_LABEL[status] ?? status}
+      </span>
+    );
+  }
+  const at = STAGE_INDEX[status] ?? -1;
+  if (at < 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-xs">
+      {LIFECYCLE.map((s, i) => (
+        <span key={s.key} className="flex items-center gap-1">
+          <span
+            className={`rounded-sm px-2 py-0.5 ${
+              i === at
+                ? 'bg-brand text-white'
+                : i < at
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-gray-100 text-gray-500'
+            }`}
+          >
+            {s.label}
+          </span>
+          {i < LIFECYCLE.length - 1 && <span className="text-gray-300">→</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function BookingDetail({
+  booking,
+  canPay,
+  onRun,
+}: {
+  booking: Booking;
+  canPay: boolean;
+  onRun: (fn: () => Promise<unknown>) => Promise<void>;
+}) {
+  const { data: quotations } = useQuery({
+    queryKey: ['quotations', booking.id],
+    queryFn: async () =>
+      (await api.get(`/bookings/${booking.id}/quotations`)).data as Quotation[],
+    retry: false,
+  });
+
+  const { data: milestones } = useQuery({
+    queryKey: ['milestones', booking.id],
+    queryFn: async () =>
+      (await api.get(`/bookings/${booking.id}/milestones`)).data as MilestoneView,
+    retry: false,
+  });
+
+  // The activity timeline (EZ1-I68): request, quotations, payments, delivery,
+  // cancellation — one read over what already happened.
+  const { data: timeline } = useQuery({
+    queryKey: ['booking-history', booking.id],
+    queryFn: async () =>
+      (await api.get(`/bookings/${booking.id}/history`)).data as {
+        at: string;
+        label: string;
+        detail: string | null;
+      }[],
+    retry: false,
+  });
+
+  /*
+   * Which method the next instalment uses.
+   *
+   * Card unless the person says otherwise, and per booking rather than
+   * remembered across the page: somebody may reasonably settle a small
+   * balance in cash and put the deposit on a card, and carrying the last
+   * choice over would quietly pick the wrong one.
+   */
+  const [method, setMethod] = useState('card');
+
+  const live = (quotations ?? []).find((q) => q.status === 'sent');
+  const paid = new Set(
+    (milestones?.milestones ?? [])
+      .filter((m) => m.status && m.status !== 'refunded' && m.status !== 'failed')
+      .map((m) => m.milestone),
+  );
+  const nextDue = (milestones?.milestones ?? []).find((m) => !paid.has(m.milestone));
+  const dueNow =
+    nextDue && PAYABLE_AT[nextDue.milestone].includes(booking.status) ? nextDue.milestone : null;
+
+  return (
+    <div className="space-y-4 border-t pt-3">
+      {/* Where this booking has got to, at a glance (EZ1-I12). */}
+      <div>
+        <h3 className="section-title text-sm">Progress</h3>
+        <div className="mt-1">
+          <BookingProgress status={booking.status} />
+        </div>
+      </div>
+
+      {/* What the couple asked the planner for, as they ticked it. */}
+      <RequestedServices services={booking.requestedServices} />
+
+      {/* Everything that has happened to it, in order (EZ1-I68). */}
+      {timeline && timeline.length > 0 && (
+        <div>
+          <h3 className="section-title text-sm">History</h3>
+          <ol className="mt-1 space-y-1 border-l-2 border-gray-200 pl-3">
+            {timeline.map((e, i) => (
+              <li key={i} className="text-xs text-gray-600">
+                <span className="text-gray-400">{formatDateTime(e.at)} · </span>
+                {/* The server writes these as sentences; capitalising every word
+                    turned "released to the provider" into a title. */}
+                <span className="font-medium text-gray-800">{e.label}</span>
+                {e.detail ? ` — ${e.detail}` : ''}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Why it was cancelled and who by (EZ1-I77). */}
+      {booking.status === 'cancelled' && (
+        <div className="rounded-sm border border-red-200 bg-red-50 p-3 text-sm">
+          <p className="font-medium text-red-900">Cancelled</p>
+          <p className="mt-1 text-red-900">
+            {booking.cancelledByName || booking.cancelledByRole
+              ? `Cancelled by ${[
+                  booking.cancelledByName,
+                  booking.cancelledByRole &&
+                    `(${labelFrom(CANCELLED_BY_LABEL, booking.cancelledByRole)})`,
+                ]
+                  .filter(Boolean)
+                  .join(' ')}`
+              : 'This booking was cancelled.'}
+            {booking.cancelledAt
+              ? ` on ${formatDateTime(booking.cancelledAt)}`
+              : ''}
+          </p>
+          <p className="mt-1 text-red-900">
+            Reason: {booking.cancellationReason || 'No reason was given.'}
+          </p>
+        </div>
+      )}
+
+      {/* What was sent with the request. The estimate is the published price
+          times the quantity; what is owed is the quotation, never this. */}
+      {(estimateSummary(booking.estimatedAmount, booking.quantity) ||
+        (booking.referenceImages?.length ?? 0) > 0) && (
+        <div className="space-y-2 text-sm">
+          <h3 className="section-title text-sm">Your request</h3>
+          <RequestEstimate
+            estimatedAmount={booking.estimatedAmount}
+            quantity={booking.quantity}
+            currency={booking.currency}
+            label={Number(booking.amount) > 0 ? 'Estimated when you asked' : 'Estimated total'}
+            note={
+              Number(booking.amount) > 0
+                ? 'What you pay is the accepted quotation, not this estimate.'
+                : 'An estimate from their published price. Their quotation sets what you pay.'
+            }
+          />
+          <ReferenceThumbs urls={booking.referenceImages} />
+        </div>
+      )}
+
+      <div>
+        <h3 className="section-title text-sm">Quotations</h3>
+        {(quotations ?? []).length === 0 && (
+          <p className="text-sm text-gray-500">
+            The provider has not priced this yet. They will send a quotation.
+          </p>
+        )}
+        {/*
+          Grouped by what became of them. A booking that has been re-quoted
+          three times shows four rows that differ only by a status word in the
+          corner, and the one that matters — the offer that was agreed — is not
+          necessarily the newest. The heading says which pile you are looking
+          at.
+        */}
+        {QUOTE_GROUPS.map(({ key, label, statuses }) => {
+          const inGroup = (quotations ?? []).filter((q) => statuses.includes(q.status));
+          if (inGroup.length === 0) return null;
+          return (
+            <div key={key} className="mt-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                {label}
+              </p>
+              {inGroup.map((q) => (
+          <div key={q.id} className="mt-2 rounded-sm bg-gray-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-medium">
+                {q.currency} {q.amount}
+              </p>
+              <span className="text-xs text-gray-500">{quotationStatusLabel(q.status)}</span>
+            </div>
+            {q.lines.length > 0 && (
+              <ul className="mt-1 text-sm text-gray-600">
+                {q.lines.map((l, i) => (
+                  <li key={i} className="flex justify-between">
+                    <span>{l.description}</span>
+                    <span className="tabular-nums">{l.amount}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {q.notes && <p className="mt-1 text-sm text-gray-600">{q.notes}</p>}
+            {q.terms && (
+              <div className="mt-2 rounded-sm border border-gray-200 bg-surface p-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Terms
+                </p>
+                <p className="whitespace-pre-wrap text-sm text-gray-700">{q.terms}</p>
+              </div>
+            )}
+            {q.validUntil && (
+              <p className="mt-1 text-xs text-gray-500">
+                Valid until {formatDate(q.validUntil)}
+              </p>
+            )}
+            {live?.id === q.id && canPay && (
+              <div className="mt-2 flex gap-2">
+                <button
+                  className="btn"
+                  onClick={() => onRun(() => api.put(`/bookings/quotations/${q.id}/accept`, {}))}
+                >
+                  Accept this quotation
+                </button>
+                <button
+                  className="btn-outline"
+                  onClick={() => onRun(() => api.put(`/bookings/quotations/${q.id}/reject`, {}))}
+                >
+                  Ask them to re-quote
+                </button>
+              </div>
+            )}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Extra services asked for on top of a confirmed booking (EZ1-I215). */}
+      <BuyerAddOns booking={booking} canPay={canPay} onRun={onRun} />
+
+      {milestones && (
+        <div>
+          <h3 className="section-title text-sm">Instalments</h3>
+          <p className="text-xs text-gray-500">
+            Paid in order. Everything held is released to the provider when the work is delivered.
+          </p>
+          <div className="mt-2 divide-y">
+            {milestones.milestones.map((m) => (
+              <div key={m.milestone} className="flex items-center justify-between py-2">
+                <div>
+                  <p className="text-sm font-medium">{MILESTONE_LABEL[m.milestone]}</p>
+                  <p className="text-xs text-gray-500">
+                    {milestones.currency} {m.amount}
+                  </p>
+                </div>
+                {m.status ? (
+                  <span className="rounded-sm bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                    {paymentStatusLabel(m.status, 'buyer')}
+                  </span>
+                ) : canPay && dueNow === m.milestone ? (
+                  <div className="flex flex-col items-end gap-2">
+                    <PaymentMethodPicker value={method} onChange={setMethod} amount={m.amount} />
+                    <button
+                      className="btn"
+                      onClick={() =>
+                        onRun(() =>
+                          api.put(`/bookings/${booking.id}/pay`, {
+                            milestone: m.milestone,
+                            method,
+                          }),
+                        )
+                      }
+                    >
+                      Pay
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-400">
+                    {nextDue?.milestone === m.milestone
+                      ? WAITING_ON[m.milestone]
+                      : 'Not due yet'}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <BookingChat bookingId={booking.id} />
+    </div>
+  );
+}
+
+/** The plain-English badge for each add-on state (EZ1-I215). */
+const ADDON_STATUS_LABEL: Record<BookingAddon['status'], string> = {
+  requested: 'Add-On Request → Waiting for Vendor',
+  requoted: 'Vendor requoted → your decision',
+  accepted: 'Agreed',
+  rejected: 'Declined',
+};
+
+const ADDON_STATUS_STYLE: Record<BookingAddon['status'], string> = {
+  requested: 'bg-amber-50 text-amber-700',
+  requoted: 'bg-blue-50 text-blue-700',
+  accepted: 'bg-emerald-100 text-emerald-700',
+  rejected: 'bg-gray-100 text-gray-600',
+};
+
+/**
+ * Add-ons the buyer requests on a booking whose advance is already held
+ * (EZ1-I215).
+ *
+ * A mini-quotation one confirmed booking deeper: the buyer asks for an extra
+ * service, the vendor accepts / rejects / requotes, and a requote comes back
+ * here for the buyer to accept the vendor's price. Requesting is only offered
+ * once the booking is confirmed or in progress.
+ */
+function BuyerAddOns({
+  booking,
+  canPay,
+  onRun,
+}: {
+  booking: Booking;
+  canPay: boolean;
+  onRun: (fn: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [price, setPrice] = useState('');
+  const [description, setDescription] = useState('');
+  const [note, setNote] = useState('');
+
+  const { data: addons } = useQuery({
+    queryKey: ['booking-addons', booking.id],
+    queryFn: async () =>
+      (await api.get(`/bookings/${booking.id}/addons`)).data as BookingAddon[],
+    retry: false,
+  });
+
+  const canRequest = canPay && ['confirmed', 'in_progress'].includes(booking.status);
+
+  // Nothing to show on a booking that has neither add-ons nor the ability to
+  // take one — a request that has not been confirmed, or one long finished.
+  if ((addons ?? []).length === 0 && !canRequest) return null;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await onRun(() =>
+      api.post(`/bookings/${booking.id}/addons`, {
+        title: title.trim(),
+        quantity: Number(quantity) || 1,
+        proposedPrice: price ? Number(price) : undefined,
+        description: description.trim() || undefined,
+        note: note.trim() || undefined,
+      }),
+    );
+    setTitle('');
+    setQuantity('1');
+    setPrice('');
+    setDescription('');
+    setNote('');
+    setOpen(false);
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h3 className="section-title text-sm">Add-Ons</h3>
+        {canRequest && (
+          <button
+            type="button"
+            className="btn-outline btn-sm"
+            onClick={() => setOpen((o) => !o)}
+          >
+            {open ? 'Cancel' : 'Request Add-Ons'}
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <form onSubmit={submit} className="mt-2 space-y-2 rounded-sm bg-gray-50 p-3">
+          <label className="block text-sm">
+            <span className="text-gray-700">Extra service or package</span>
+            <input
+              className="input mt-1"
+              placeholder="e.g. Extra drone coverage"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+            />
+          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="text-sm">
+              <span className="text-gray-700">Quantity</span>
+              <input
+                className="input mt-1"
+                type="number"
+                min={1}
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="text-gray-700">Price (if you have one)</span>
+              <input
+                className="input mt-1"
+                type="number"
+                min={0}
+                placeholder="Leave blank for the vendor to quote"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+              />
+            </label>
+          </div>
+          <label className="block text-sm">
+            <span className="text-gray-700">Requirements</span>
+            <textarea
+              className="input mt-1"
+              rows={2}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-gray-700">Note for the vendor (optional)</span>
+            <input className="input mt-1" value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button className="btn" disabled={!title.trim()}>
+            Send request
+          </button>
+        </form>
+      )}
+
+      <div className="mt-2 space-y-2">
+        {(addons ?? []).map((a) => {
+          const agreed = a.vendorPrice ?? a.proposedPrice;
+          return (
+            <div key={a.id} className="rounded-sm bg-gray-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">
+                  {a.title}
+                  {a.quantity > 1 && <span className="text-gray-500"> × {a.quantity}</span>}
+                </p>
+                <span
+                  className={`rounded-sm px-2 py-0.5 text-xs font-medium ${ADDON_STATUS_STYLE[a.status]}`}
+                >
+                  {ADDON_STATUS_LABEL[a.status]}
+                </span>
+              </div>
+              {a.description && <p className="mt-1 text-sm text-gray-600">{a.description}</p>}
+              {a.note && <p className="mt-1 text-xs text-gray-500">Your note: {a.note}</p>}
+              <div className="mt-1 text-sm text-gray-700">
+                {a.proposedPrice != null && (
+                  <span>
+                    You proposed: {a.currency} {a.proposedPrice}
+                  </span>
+                )}
+                {a.status === 'requoted' && a.vendorPrice != null && (
+                  <span className="ml-2 font-medium text-blue-700">
+                    Vendor’s price: {a.currency} {a.vendorPrice}
+                  </span>
+                )}
+                {a.status === 'accepted' && agreed != null && (
+                  <span className="ml-2 font-medium text-emerald-700">
+                    Agreed: {a.currency} {agreed}
+                  </span>
+                )}
+              </div>
+              {a.responseNote && (
+                <p className="mt-1 text-xs text-gray-500">Vendor: {a.responseNote}</p>
+              )}
+              {a.status === 'requoted' && canPay && (
+                <div className="mt-2 flex gap-2">
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => onRun(() => api.put(`/bookings/addons/${a.id}/accept-requote`, {}))}
+                  >
+                    Accept new price
+                  </button>
+                  <button
+                    className="btn-outline btn-sm"
+                    onClick={() => onRun(() => api.put(`/bookings/addons/${a.id}/withdraw`, {}))}
+                  >
+                    Decline
+                  </button>
+                </div>
+              )}
+              {a.status === 'requested' && canPay && (
+                <div className="mt-2">
+                  <button
+                    className="btn-outline btn-sm"
+                    onClick={() => onRun(() => api.put(`/bookings/addons/${a.id}/withdraw`, {}))}
+                  >
+                    Withdraw request
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Raising a dispute.
+ *
+ * A prompt box asking "what went wrong?" produced two sentences of prose and
+ * nothing else, and an officer deciding whether to release fifty thousand
+ * rupees was doing it on that. This asks for the two things that actually
+ * decide the case: which instalment is in question, and what proof there is.
+ */
+function DisputeForm({
+  booking,
+  onRaise,
+  onCancel,
+}: {
+  booking: Booking;
+  onRaise: (body: Record<string, unknown>) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [milestone, setMilestone] = useState('');
+  const [evidence, setEvidence] = useState<string[]>([]);
+  const [url, setUrl] = useState('');
+
+  const ready = title.trim().length >= 5 && description.trim().length >= 10;
+
+  return (
+    <form
+      className="space-y-3 border-t pt-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onRaise({
+          subjectType: 'booking',
+          subjectId: booking.id,
+          title: title.trim(),
+          description: description.trim(),
+          ...(milestone ? { milestone } : {}),
+          ...(evidence.length ? { evidence } : {}),
+        });
+      }}
+    >
+      <p className="text-sm text-gray-600">
+        An officer investigates. Everything held in escrow on this booking stays frozen until they
+        decide, neither side can move it in the meantime.
+      </p>
+
+      <label className="block text-sm">
+        <span className="text-gray-700">In one line, what happened?</span>
+        <input
+          className="input mt-1"
+          placeholder="Photographer did not attend the reception"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+      </label>
+
+      <label className="block text-sm">
+        <span className="text-gray-700">Tell them the whole story</span>
+        <textarea
+          className="input mt-1"
+          rows={4}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </label>
+
+      <label className="block text-sm">
+        <span className="text-gray-700">Which payment is this about?</span>
+        <select
+          className="input mt-1"
+          value={milestone}
+          onChange={(e) => setMilestone(e.target.value)}
+        >
+          <option value="">Not about a specific payment</option>
+          {(Object.keys(MILESTONE_LABEL) as MilestoneKey[]).map((key) => (
+            <option key={key} value={key}>
+              {MILESTONE_LABEL[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div>
+        <p className="label">Evidence</p>
+        <p className="text-xs text-gray-500">
+          Photographs, invoices, message screenshots. Anything that shows what you are describing.
+        </p>
+        {evidence.length > 0 && (
+          <ul className="mt-1 space-y-1 text-sm text-gray-700">
+            {evidence.map((e) => (
+              <li key={e} className="flex items-center justify-between gap-2">
+                <span className="truncate">{e}</span>
+                <button
+                  type="button"
+                  className="text-xs text-gray-500 underline"
+                  onClick={() => setEvidence((list) => list.filter((u) => u !== e))}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-1 flex flex-wrap gap-2">
+          <input
+            className="input flex-1"
+            placeholder="https://…"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-outline"
+            disabled={!/^https?:\/\/\S+$/.test(url.trim())}
+            onClick={() => {
+              setEvidence((list) => [...list, url.trim()]);
+              setUrl('');
+            }}
+          >
+            Add
+          </button>
+          {/*
+            The copy asked for invoices and screenshots and then offered a box
+            for a URL, which meant uploading the thing somewhere else first.
+            Almost nobody does that, so disputes arrived with prose and no
+            proof — and an officer decided them on the prose.
+          */}
+          <PhotoUploader
+            kind="attachment"
+            label="Upload a file"
+            onUploaded={(u) => setEvidence((list) => [...list, u])}
+          />
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button className="btn" disabled={!ready}>
+          Raise the issue
+        </button>
+        <button type="button" className="btn-outline" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}

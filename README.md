@@ -1,0 +1,152 @@
+# WOW, World of Weddingz
+
+> Production delivery and governance start at [PRODUCTION_PROGRAM.md](PRODUCTION_PROGRAM.md). This private repository has clean history and accepts changes through traced issues and pull requests.
+
+WOW is a full stack platform that carries a couple through the whole wedding journey. People discover and match with a partner, connect and chat once both sides agree, plan the wedding with an automatic timeline, book vendors and wedding planners with money held safely in escrow, run the individual ceremonies with guest lists and seating, arrange the honeymoon, and finally keep their photos and videos in shareable albums.
+
+The backend is a single well organised NestJS application written in TypeScript. It stores everything in PostgreSQL and uses Redis for caching, sessions, rate limiting and real time chat delivery. The frontend is a React application built with Vite and styled with Tailwind. The whole system is packaged to run with Docker, to scale on Kubernetes, and to be provisioned on AWS with Terraform.
+
+## Who uses it
+
+WOW is a marketplace with four kinds of account, chosen on the sign-up screen. Each one sees a different application.
+
+| Account type | What they do |
+| --- | --- |
+| **Individual** (bride, groom or family member) | Build a profile, browse matches, send and accept interests, chat with accepted matches, book vendors and planners, plan the wedding. A family member can additionally look after a relative's profile |
+| **Marriage agent** | Take a walk-in family's details, build their profile, circulate it to other agencies and to families, propose matches, and book on their behalf. Reviewed by an administrator before any of that opens |
+| **Vendor** | Publish a service listing, respond to incoming bookings, get paid out of escrow |
+| **Wedding planner** | Publish a planning listing, respond to bookings, and co-manage the weddings they are engaged on |
+
+Administrators approve agencies, vendors and planners, resolve disputes, read analytics and the audit trail, and suspend accounts. Administrators cannot be created through the public API — see [Seeding the first administrator](#seeding-the-first-administrator).
+
+Three rules shape the whole permission model, all enforced on the server for every request:
+
+- **Only individuals and agents can place bookings.** Vendors and planners sell; they do not buy.
+- **Only individuals take part in matchmaking.** An agent participates only under the identity of a client profile they manage.
+- **Nobody creates an account for somebody else.** An agent builds the *profile*; the person themselves sets the password when they accept the invitation.
+
+Anyone can sign up on their own at any time. A self-registered person is never tied to an agency, signs in with their own password, and may approach any user or any agent freely.
+
+### How an agency actually works
+
+In the Indian matrimony market the family walks into the agency and hands over their details in person. The agent writes them up and then **circulates** the biodata looking for a match. The platform is built around that, not around the family filling in a web form.
+
+**Intake is phone-first.** A profile and an account are separate records: an agent builds a complete, matchable profile — photos, preferences, contact details — for someone who has never heard of the site. A mobile number is required, an email address is not, because plenty of clients never want a login at all. Consent is captured at the same moment: how permission was given, by whom (very often a parent rather than the subject), and on what date.
+
+**Circulation is the agent's job**, and it happens five ways: to another agency, to a family that already has an account, as a shareable biodata link for WhatsApp, into a vetted-agent network pool, or printed. Every one of them is a revocable record, so an agency can always answer "who has seen my client's details?" — and take it back. When two agencies each hold one side of a possible match, they negotiate in a thread on that pairing, long before the families meet.
+
+None of that can happen without **circulation consent**, which is recorded separately from intake consent and expires, so the family is asked again rather than assumed.
+
+**Claiming is optional.** If the client does want to manage their own profile, the agent sends an invitation; the invitee follows the link, **chooses their own password**, and takes ownership — from that moment the profile is theirs and the agent's write access ends, though the client stays on the agency's books.
+
+```
+family walks in  →  UNCLAIMED  →  (optional) invite  →  INVITED  →  they accept  →  CLAIMED
+  (matchable and circulatable straight away)                          (they own it)
+```
+
+Details: the design is written at three altitudes — **[docs/HLD.md](docs/HLD.md)** for what the system is and why, **[docs/SLD.md](docs/SLD.md)** for how the subsystems fit together, and **[docs/LLD.md](docs/LLD.md)** for the tables, routes and algorithms. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the index over all three. Narrower contracts live in [docs/CIRCULATION.md](docs/CIRCULATION.md) for consent and sharing, [docs/PROFILES-AND-INVITATIONS.md](docs/PROFILES-AND-INVITATIONS.md) for the profile/account split, and [docs/RBAC-AND-ROLES.md](docs/RBAC-AND-ROLES.md) for the permission contract.
+
+## What is inside this repository
+
+The `backend` folder holds the API, the database migrations, the shared platform code such as configuration, authorization and health checks, and the tests. The `frontend` folder holds the React single page application. The `docker` folder holds the images and the compose files for running everything locally. The `scripts` folder holds the live verification suites. The `k8s` folder holds the Kubernetes manifests for a production deployment. The `terraform` folder holds the cloud infrastructure. The `docs` folder holds the combined architecture reference, the design blueprint, the setup and testing guide, the authorization contract, the profile/invitation model, the consent and circulation model, and an honest self-review of the remaining gaps.
+
+## The main features
+
+A person registers, picks an account type, and the system issues a short-lived access token plus a refresh token that rides in an httpOnly cookie. Individuals build a profile with their details and preferences. The matchmaking engine scores how compatible two people are and suggests the best options, and every weight in that scoring lives in configuration so the product team can retune it without touching the code. What one person sees of another is deliberately limited: an age band rather than a date of birth, and photos only once both sides have accepted. Once two people match they can chat in real time, delivered reliably across replicas through Redis. Buyers can also open an enquiry thread with any vendor, planner or agent without a prior match.
+
+Agents and family members build and manage profiles on behalf of others, capture the family's consent, and circulate the biodata — to other agencies, to families with an account, as a shareable link, or into the vetted-agent pool. Every share is revocable and every action records both the profile it was for and the account that performed it. Where two agencies each hold one side, they negotiate the pairing in a thread of their own.
+
+On the marketplace side, vendors and wedding planners publish listings, and an administrator approves each one before it appears in search or accepts a booking. Bookings move from requested to paid to confirmed to completed, the payment is held in escrow until the event is done, and each side can only drive the transitions that belong to it. On completion the platform's commission is withheld and the rest released to the provider; a cancellation refunds the buyer in full. Reviews can only be written after a booking with that provider has completed.
+
+The planner creates a wedding timeline automatically from the wedding date, and a wedding planner engaged through a confirmed booking can co-manage it. Couples manage several ceremonies with guest lists and seating, and guests — who are not platform users — reply through their own signed RSVP link. Couples can browse honeymoon destinations, build an itinerary, create photo albums and share them through a public link. A helper called WOW Genie offers budget guidance, and an administrator has a panel for approvals, analytics, disputes and the audit trail.
+
+Account security is first-class: email verification, password reset, per-device sessions with rotation and stolen-token detection, optional two-factor (mandatory for administrators), and account lockout after repeated failed sign-ins.
+
+## Running it locally with Docker
+
+```bash
+cp docker/.env.example docker/.env    # then edit the secrets
+docker compose -f docker/docker-compose.yml up -d --build
+```
+
+`docker/.env` controls the host ports, the database credentials, the JWT secrets, the mail transport and the bootstrap administrator. Mail defaults to `MAIL_PROVIDER=log`, which writes invitation and reset links to the backend log instead of sending them, so nothing external is needed to try the flows. Change `FRONTEND_PORT` or `BACKEND_PORT` there if something else on your machine already uses 8080 or 3000, and keep `CORS_ORIGINS` in step with `FRONTEND_PORT`.
+
+Once the stack reports healthy:
+
+- the application is at `http://localhost:8080` (or your `FRONTEND_PORT`)
+- the API is at `http://localhost:3000/api`
+- the API documentation is at `http://localhost:3000/api/docs`
+- health is at `http://localhost:3000/api/health`
+
+Migrations run automatically when the backend container starts.
+
+There is also `deploy-local.sh`, which wraps the same steps and waits for health, and `run-local-no-docker.sh` for running the backend directly with Node. The setup guide in the docs folder explains both paths.
+
+### Seeding the first administrator
+
+`admin` is deliberately absent from the self-registration allow-list, so no request to the public API can ever mint one. Create the first one with the one-shot seeder:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile seed run --rm seed-admin
+```
+
+With nothing configured this creates **`admin@wow.com` / `admin123`**, so a fresh checkout has a way in. That password is published here, which means it is only ever as private as the database is — set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `docker/.env` for anything reachable by more than the person who cloned the repository. Both must be set together, and a password you choose has to be at least twelve characters.
+
+The seeder is idempotent: running it again promotes and reactivates the existing account instead of failing.
+
+On Kubernetes the equivalent is `k8s/seed-admin-job.yaml`, run once per environment. That Job sets `SEED_ADMIN_REQUIRE_EXPLICIT=true`, which turns the fallback off and makes the Job fail if the Secret does not carry both values — an `envFrom` that silently resolves to nothing would otherwise put the public default into a cluster.
+
+## Configuration
+
+Every value that an operator or a tester might want to change lives in environment variables rather than in the code. This includes the database and cache connection details, the security settings such as token lifetimes and rate limits, the matchmaking weights, and the choice of payment, storage and AI providers. `backend/.env.example` documents every setting, and the application validates them at startup so a mistake is caught immediately rather than later.
+
+## Testing
+
+```bash
+# unit tests, lint and typecheck
+cd backend && npm test && npm run lint && npm run typecheck
+
+# functional tests against a real database and cache
+docker compose -f docker/docker-compose.test.yml up -d
+npm run migration:run && npm run test:e2e
+```
+
+Beyond those, four suites exercise the rules against a **running** stack. They run inside the compose network and exit non-zero on any failure, so any of them can gate a deploy:
+
+```bash
+docker run --rm --network docker_default -v "$PWD/scripts:/scripts" alpine:3.20 \
+  sh -c "apk add --no-cache curl jq openssl redis >/dev/null && sh /scripts/verify-rbac.sh"
+```
+
+```bash
+docker run --rm --network docker_default -v "$PWD/scripts:/scripts" alpine:3.20 \
+  sh -c "apk add --no-cache curl jq openssl redis >/dev/null && sh /scripts/verify-invites.sh"
+```
+
+```bash
+docker run --rm --network docker_default -v "$PWD/scripts:/scripts" alpine:3.20 \
+  sh -c "apk add --no-cache curl jq openssl redis >/dev/null && sh /scripts/verify-circulation.sh"
+```
+
+```bash
+docker run --rm --network docker_default -v "$PWD/scripts:/scripts" alpine:3.20 \
+  sh -c "apk add --no-cache curl jq openssl redis >/dev/null && sh /scripts/verify-phase1.sh"
+```
+
+Seven suites, 898 live assertions between them. Swap the name at the end of the command above to run a different one.
+
+- `verify-rbac.sh` — 147 checks: privilege escalation at registration, per-persona permissions, agency vetting, profile-level scoping, booking IDOR, escrow transitions, the Match Fixed gate on services, review gating, event ownership, request validation and token handling.
+- `verify-invites.sh` — 84 checks: agency approval, profiles built for people with no account, invitation and claim, the profile-completion gate, multi-device sessions, brute-force lockout, signed payment webhooks, the audit trail, two-factor and pagination bounds.
+- `verify-circulation.sh` — 95 checks: phone-first intake, duplicate detection, consent in both scopes, the biodata-completeness gate, all five circulation paths, read-only enforcement on shares, withdrawal pulling everything back, and cross-agent proposal threads.
+- `verify-phase1.sh` — 160 checks: officer accounts and the forced password reset, the verification queue and the separations that hold it honest, identity documents and the duplicate they refuse, agency fees through escrow, Match Fixed and customer provisioning, vendor compliance, quotations, escrow milestones, a case freezing the money, chat redaction, the profile lifecycle and the admin dashboard.
+- `verify-phase2.sh` — 108 checks: the sectioned client biodata and its completion report, Aadhaar OTP and the one-document-one-profile rule, notifications, the provider's accounts ledger, the chat dashboard and presence, event management with per-event vendors, honeymoon package search, the match filters, and disputes carrying a milestone and evidence.
+- `verify-phase3.sh` — 61 checks: SMS delivery, phone verification, an invitation that goes out by SMS alone, profile claim requests, MFA recovery codes, data export and erasure, the network-pool quota, circulation reach, and profile-photo uploads.
+- `verify-phase4.sh` — 243 checks: the service catalog as configuration rather than code, attribute validation across all fifteen types, pricing constrained by the definition, the generated booking form, capacity and what a request is worth, the fact that accepting a job is what spends a window, the RSVP dashboard and its two head counts, chasing the people who have not answered, photographs on a self-managed profile, and the verification chain from allocation through findings to a decision.
+
+Alongside them: 147 backend unit tests, 27 e2e tests against real Postgres and Redis, and 7 frontend tests — one of which reads the backend permission enum off disk and fails if the client's hand-written mirror has drifted from it.
+
+A k6 load test lives in `backend/test/k6`.
+
+## Known gaps
+
+[docs/SELF-REVIEW.md](docs/SELF-REVIEW.md) records every round of work and every defect found along the way. Nothing is deferred any more. The three integrations that once were — live Aadhaar verification, escrow payout through Razorpay Route, and TURN relays for the tail of calls that cannot traverse NAT — are written and tested; what they need is credentials and a contract, not code, and each activates on configuration. `mock` remains the default for Aadhaar and payments, because a development environment that needs a UIDAI contract to start is one nobody can run — and both mocks now mirror the real rule rather than always succeeding, so the awkward cases are exercised rather than hidden.

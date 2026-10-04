@@ -1,0 +1,2 @@
+WorkItem,PR,Branch,BaseCommit,HeadCommit,SourceCommits,Tests,Deployment,Rollback,ResidualRisks,Status,Updated
+GOV-002,,codex/gov-002-production-program,,,,Initial repository validation,Documentation and governance baseline,Revert initial commit before dependent work,None,In Progress,2026-10-04

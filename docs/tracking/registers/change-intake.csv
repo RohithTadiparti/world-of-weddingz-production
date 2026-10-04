@@ -1,0 +1,3 @@
+ID,SourceRepository,SourceCommit,SourcePath,Classification,Decision,ProductionItem,ProductionPR,ReviewedBy,ReviewedDate,Notes
+CHG-001,RohithTadiparti/WOW-MD,UNCOMMITTED,mobile/src/app/planner-clients.tsx,Functional candidate,Review required,SYNC-001,,,2026-10-04,Preserved in source working tree and not copied into baseline
+CHG-002,RohithTadiparti/WOW-MD,UNCOMMITTED,.gitignore,Repository hygiene,Review required,SYNC-001,,,2026-10-04,Three ignored paths require review before adoption

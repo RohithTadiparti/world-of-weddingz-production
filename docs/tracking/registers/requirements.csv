@@ -1,0 +1,19 @@
+ID,Requirement,Source,Priority,Verification,WorkItems,Status
+REQ-DEPLOY-001,Closed beta may use Railway Trial or Free but public launch must use Railway Hobby,Migration design,P0,Deployment configuration and launch checklist,RLY-001 REL-001,Approved
+REQ-DEPLOY-002,Attach the production domain only at the final Railway launch gate,User direction,P0,DNS evidence and release gate,REL-001,Approved
+REQ-STORAGE-001,All real user media uses private S3 from the first account,Migration design,P0,S3 integration and privacy tests,S3-001,Approved
+REQ-CONFIG-001,One committed non-secret configuration owns defaults and mock selections,Migration design,P0,Loader tests and config-boundary CI,CFG-001,Approved
+REQ-SECRET-001,Secrets remain outside Git and are stored in platform secret stores,Security policy,P0,Secret scan and environment review,"CFG-001,GOV-001",Approved
+REQ-ALERT-001,Admins receive persistent portal and email warning/critical alerts,User direction,P0,Alert delivery unit/E2E and mail evidence,"OPS-002,OPS-003,UI-001",Approved
+REQ-ALERT-002,Alerts use exact thresholds and deduplicate repeated observations,Migration design,P1,Threshold and reminder tests,"OPS-002,OPS-003",Approved
+REQ-MIG-001,One protected administrator action starts migration to AWS Option B,User direction,P0,Admin Playwright and audit evidence,"AUTH-001,MIG-001,MIG-002",Approved
+REQ-MIG-002,Migration runs outside Railway and survives source service loss,Migration design,P0,Workflow interruption rehearsal,MIG-003,Approved
+REQ-MIG-003,Business writes pause no longer than 15 minutes for final cutover,Migration design,P0,Cutover timer and rollback rehearsal,MIG-004 QA-003,Approved
+REQ-MIG-004,Automatic rollback is guaranteed before AWS writes are enabled,Migration design,P0,Injected failure rehearsals,QA-003,Approved
+REQ-MIG-005,Railway remains read-only for 72 hours and deletion is separately approved,Migration design,P0,Runbook and release evidence,"MIG-004,REL-002",Approved
+REQ-TRACE-001,Every production task links requirement issue branch PR tests and evidence,User direction,P0,Governance register validation,"GOV-001,GOV-002",Approved
+REQ-SYNC-001,Functional source-repository changes are individually reviewed and integrated,User direction,P1,Change-intake and production PR,SYNC-002,Approved
+REQ-QA-001,CI unit database E2E Playwright mobile security and IaC checks are mandatory,User direction,P0,Required GitHub checks,GOV-001,Approved
+REQ-QA-002,Database and UI values must match exactly after documented normalization,QA mandate,P0,Reconciliation evidence,MIG-004 QA-002,Approved
+REQ-LOG-001,Logs remain searchable locally and in Loki for 30 days,Logging decision,P0,Retention and query tests,OBS-003,Approved
+REQ-REV-001,AWS migration readiness reports INR 1.2M target and INR 1.5M preferred monthly net revenue,Migration design,P1,Admin readiness UI test,UI-001,Approved

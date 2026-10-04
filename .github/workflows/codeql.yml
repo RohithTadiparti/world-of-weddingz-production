@@ -1,0 +1,52 @@
+name: CodeQL
+
+# Static security analysis of the TypeScript in backend/, frontend/ and
+# mobile/, and of the workflows themselves. Findings appear under
+# Security → Code scanning, and on the pull request that introduces them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a newly published query catches code that has not changed.
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # TypeScript needs no build step for CodeQL.
+          build-mode: none
+          # The default suite plus the extended security queries.
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - '**/node_modules/**'
+              - '**/dist/**'
+              - '**/coverage/**'
+              - '**/*.spec.ts'
+              - '**/*.test.ts'
+              - '**/*.test.tsx'
+              - 'backend/test/**'
+              - 'frontend/e2e/**'
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

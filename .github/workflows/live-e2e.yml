@@ -1,0 +1,60 @@
+name: Live browser E2E
+
+on:
+  schedule:
+    - cron: '30 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      E2E_BASE_URL: ${{ secrets.LIVE_E2E_BASE_URL }}
+      DEMO_PASSWORD: ${{ secrets.LIVE_E2E_DEMO_PASSWORD }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate live E2E configuration
+        shell: bash
+        run: |
+          test -n "$E2E_BASE_URL" || { echo 'LIVE_E2E_BASE_URL is not configured'; exit 1; }
+          test -n "$DEMO_PASSWORD" || { echo 'LIVE_E2E_DEMO_PASSWORD is not configured'; exit 1; }
+          case "$E2E_BASE_URL" in
+            https://*) ;;
+            *) echo 'LIVE_E2E_BASE_URL must use HTTPS'; exit 1 ;;
+          esac
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Check test deployment health
+        run: curl --fail --silent --show-error "$E2E_BASE_URL/api/health/live"
+
+      - name: Run live Playwright suite
+        run: npm run e2e
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-e2e-results
+          path: frontend/e2e-results
+          if-no-files-found: ignore

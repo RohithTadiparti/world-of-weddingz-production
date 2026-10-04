@@ -1,0 +1,1099 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { IsNull, Repository } from 'typeorm';
+import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcryptjs';
+import { randomUUID, randomInt } from 'crypto';
+import { authenticator } from 'otplib';
+import { User } from './entities/user.entity';
+import { EmailToken } from './entities/email-token.entity';
+import { Profile } from '../users/entities/profile.entity';
+import { MfaRecoveryCode } from './entities/mfa-recovery-code.entity';
+import { AgentProfile } from '../agents/entities/agent-profile.entity';
+import { PhoneVerification } from './entities/phone-verification.entity';
+import { RedisService } from '../../platform/redis/redis.service';
+import {
+  ChangePasswordDto,
+  LoginDto,
+  RegisterDto,
+  RegisterViaAgentLinkDto,
+  ResetPasswordDto,
+} from './dto/auth.dto';
+import { AppConfigService } from '../../config/app-config.service';
+import {
+  ACCOUNT_TYPE_ROLE,
+  AccountType,
+  EmailTokenType,
+  INDIVIDUAL_ROLES,
+  OnboardingStage,
+  ProfileClaimStatus,
+  SELF_REGISTERABLE_ROLES,
+  UserRole,
+} from '../../common/enums';
+import { permissionsFor } from '../../common/authz/permissions';
+import { SessionContext, SessionsService } from './sessions.service';
+import { MailService } from '../../platform/mail/mail.service';
+import { SmsService } from '../../platform/sms/sms.service';
+import { PhoneVerificationService } from './phone-verification.service';
+import { AuditAction, AuditService } from '../../platform/audit/audit.service';
+import { expiresIn, generateToken, hashToken } from '../../common/util/tokens';
+import { MOBILE_PATTERN } from '../../common/util/identity-fields';
+
+export interface JwtPayload {
+  sub: string;
+  email: string;
+  role: UserRole;
+  managedByAgentId: string | null;
+  /**
+   * Unique per token. Without it, two logins for the same account inside the
+   * same second produce byte-identical JWTs (same claims, same `iat`), which
+   * collides on the session table's unique token hash — and means a refresh
+   * token is not actually unpredictable.
+   */
+  jti?: string;
+  /** Issued-at in whole seconds, set by the signer. */
+  iat?: number;
+  /**
+   * The account's token generation at the moment this was minted. A password
+   * change bumps it, and every token carrying the old value stops working.
+   */
+  tv?: number;
+
+  /**
+   * Issued-at in milliseconds.
+   *
+   * The standard `iat` is whole seconds, which is too coarse to decide whether
+   * a token was minted before or after a password change that happened in the
+   * same second — and getting that comparison wrong means either a live token
+   * surviving a "sign me out everywhere", or a freshly issued one being killed
+   * on arrival.
+   */
+  iatMs?: number;
+}
+
+export interface AuthResult {
+  user: {
+    id: string;
+    /** Null for an account taken on by mobile alone (EZ1-I233). */
+    email: string | null;
+    role: UserRole;
+    managedByAgentId: string | null;
+    isVerified: boolean;
+    mfaEnabled: boolean;
+    permissions: readonly string[];
+    /**
+     * True for an account the platform created after a Match Fixed. Until the
+     * temporary password is replaced, every route except the password change
+     * is refused, so the client should route straight to that screen.
+     */
+    mustResetPassword: boolean;
+    onboardingStage: OnboardingStage;
+  };
+  accessToken: string;
+  /** Also set as an httpOnly cookie by the controller. */
+  refreshToken: string;
+}
+
+/** Thrown as a 401 body the client can branch on to prompt for a TOTP code. */
+export const MFA_REQUIRED = 'MFA_REQUIRED';
+
+/**
+ * Per-number limits on signing in by mobile (EZ1-I258). The routes are also
+ * limited per IP; these hold however many addresses the requests come from.
+ */
+const OTP_SENDS_PER_HOUR = 5;
+const OTP_FAILURES_PER_HOUR = 10;
+
+@Injectable()
+export class AuthService {
+  constructor(
+    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Profile) private readonly profiles: Repository<Profile>,
+    @InjectRepository(MfaRecoveryCode) private readonly recoveryCodes: Repository<MfaRecoveryCode>,
+    @InjectRepository(EmailToken) private readonly emailTokens: Repository<EmailToken>,
+    @InjectRepository(AgentProfile) private readonly agencies: Repository<AgentProfile>,
+    private readonly jwt: JwtService,
+    private readonly cfg: AppConfigService,
+    private readonly sessions: SessionsService,
+    private readonly mail: MailService,
+    private readonly sms: SmsService,
+    // Signing in by mobile number rests on the same one-time codes that prove
+    // a number is real (EZ1-I258).
+    private readonly phones: PhoneVerificationService,
+    private readonly audit: AuditService,
+    // Per-number counters for the mobile sign-in limits.
+    private readonly redis: RedisService,
+  ) {}
+
+  // ---------------------------------------------------------------- register
+
+  /**
+   * Resolves the sign-up form into a concrete role. ADMIN is unreachable here by
+   * construction: INDIVIDUAL narrows to bride/groom/family, and every other
+   * account type maps through ACCOUNT_TYPE_ROLE, which has no admin entry.
+   */
+  private resolveRole(dto: RegisterDto, agentBound = false): UserRole {
+    // Every portal registers with a Gmail address (EZ1-I104). dto.email is
+    // already trimmed and lower-cased by normaliseEmail on the DTO.
+    if (!/@gmail\.com$/.test(dto.email)) {
+      throw new BadRequestException('Registration requires a @gmail.com email address.');
+    }
+    if (dto.accountType === AccountType.INDIVIDUAL) {
+      // The Individual User flow is a business switch, not a code path: with it
+      // off the platform is an agent-only brokerage and the only way onto it is
+      // through an agency. Accounts created while it was on keep working.
+      //
+      // An agency sign-up link is exactly that "through an agency" path — the
+      // one the closed-signup message points people to — so it is allowed even
+      // when open self-registration is not (EZ1-I166).
+      if (!agentBound && !this.cfg.features.individualUserEnabled) {
+        throw new ForbiddenException(
+          'Individual sign-up is closed at the moment. An agent can register you and send an invitation.',
+        );
+      }
+      const role = dto.role;
+      if (!role || !INDIVIDUAL_ROLES.includes(role)) {
+        throw new BadRequestException(
+          `An individual account requires role to be one of: ${INDIVIDUAL_ROLES.join(', ')}`,
+        );
+      }
+      return role;
+    }
+    const role = ACCOUNT_TYPE_ROLE[dto.accountType];
+    // Belt and braces: never issue a role outside the self-service allow-list.
+    if (!role || !SELF_REGISTERABLE_ROLES.includes(role)) {
+      throw new ForbiddenException('That account type cannot be self-registered');
+    }
+    return role;
+  }
+
+  /**
+   * Self-service registration. This is the "solo user" path and stays fully
+   * open: anyone can create their own account and sign in immediately, with or
+   * without an agent ever being involved.
+   */
+  async register(
+    dto: RegisterDto,
+    ctx: SessionContext = {},
+    boundAgentId?: string,
+  ): Promise<AuthResult> {
+    const role = this.resolveRole(dto, Boolean(boundAgentId));
+
+    const exists = await this.users.findOne({ where: { email: dto.email } });
+    if (exists) throw new ConflictException('Email already registered');
+
+    /*
+     * A mobile number, and one account per number (EZ1-I258).
+     *
+     * Every portal but Admin signs in with it now, so a new account without one
+     * has a sign-in route it can never use, and two accounts sharing one has a
+     * number that names neither. Enforced here rather than with a unique
+     * constraint: numbers really are shared across some accounts taken on
+     * before this rule — a household on one handset — and a constraint would
+     * refuse to build on that data and lock those accounts out of their own
+     * password sign-in. Existing accounts are untouched; this is about what may
+     * be created from now on.
+     */
+    if (!dto.phone) {
+      throw new BadRequestException('A mobile number is required');
+    }
+    const numberTaken = await this.users.findOne({ where: { phone: dto.phone } });
+    if (numberTaken) {
+      throw new ConflictException('That mobile number already has an account');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, this.cfg.auth.bcryptRounds);
+    const user = await this.users.save(
+      this.users.create({
+        email: dto.email,
+        phone: dto.phone,
+        passwordHash,
+        role,
+        // Bound to the agency's book when the account was created through an
+        // agency sign-up link — the same linkage an accepted invitation makes.
+        managedByAgentId: boundAgentId ?? null,
+        isActive: true,
+        isVerified: false,
+      }),
+    );
+
+    if (dto.displayName) {
+      await this.profiles.save(
+        this.profiles.create({
+          userId: user.id,
+          displayName: dto.displayName,
+          // A solo sign-up owns its own profile outright, with no steward.
+          //
+          // An account created through an agency link is owned by the subject
+          // in the same way — they set their own password here — but it also
+          // lands in that agency's book. The book is read off the profile
+          // (managedByUserId), which is what the agent's My Clients list and
+          // dashboard counts filter on, so the link has to record the steward
+          // there too or the new client never appears. That is the same end
+          // state an accepted invitation reaches: the subject owns the profile
+          // (claimed), and the agency still stewards it. Claimed — not self —
+          // is also what stops the agent editing biodata its owner is editing,
+          // and what makes "remove from book" release the profile instead of
+          // deleting the owner's account profile.
+          claimStatus: boundAgentId ? ProfileClaimStatus.CLAIMED : ProfileClaimStatus.SELF,
+          managedByUserId: boundAgentId ?? null,
+          contactEmail: user.email,
+          contactPhone: dto.phone ?? null,
+        }),
+      );
+    }
+
+    await this.sendVerificationEmail(user, dto.displayName ?? dto.email);
+    return this.issueTokens(user, ctx);
+  }
+
+  // ------------------------------------------------- agency sign-up links
+
+  /**
+   * The agency behind a sign-up link, resolved from the plaintext token.
+   *
+   * Only a live link on an approved agency resolves; a rotated, withdrawn or
+   * unapproved-agency token is not a valid link.
+   */
+  private async agencyByShareToken(token: string): Promise<AgentProfile> {
+    const agency = await this.agencies.findOne({ where: { shareTokenHash: hashToken(token) } });
+    if (!agency || !agency.isApproved) {
+      throw new NotFoundException('That sign-up link is not valid or is no longer active.');
+    }
+    return agency;
+  }
+
+  /**
+   * Public: what the sign-up-link landing page shows before asking for
+   * details — which agency the new account will belong to.
+   */
+  async previewAgentLink(token: string): Promise<{ agencyName: string; city: string | null }> {
+    const agency = await this.agencyByShareToken(token);
+    return { agencyName: agency.agencyName, city: agency.city ?? null };
+  }
+
+  /**
+   * Public: a new client creates their own account through an agency's link
+   * (EZ1-I166). The account lands in that agency's book, but the client sets
+   * their own password here, so the agent never holds their credentials.
+   */
+  async registerViaAgentLink(
+    dto: RegisterViaAgentLinkDto,
+    ctx: SessionContext = {},
+  ): Promise<AuthResult> {
+    const agency = await this.agencyByShareToken(dto.token);
+
+    // A client is always an individual (bride/groom/family). Nobody mints an
+    // agent, vendor or planner through somebody else's client link.
+    if (dto.accountType !== AccountType.INDIVIDUAL) {
+      throw new BadRequestException('This link creates an individual account.');
+    }
+    // Mobile and email are both required, exactly as the invitation flow
+    // requires them: the email is the sign-in credential and the mobile is how
+    // the agency reaches the client.
+    if (!dto.phone) {
+      throw new BadRequestException('A mobile number is required to sign up.');
+    }
+
+    return this.register(dto, ctx, agency.ownerUserId);
+  }
+
+  // ------------------------------------------------------------------- login
+
+  async login(dto: LoginDto, ctx: SessionContext = {}): Promise<AuthResult> {
+    const select = [
+      'id', 'email', 'role', 'passwordHash', 'isActive', 'managedByAgentId',
+      'isVerified', 'mfaEnabled', 'mfaSecret', 'failedLoginAttempts', 'lockedUntil',
+      'mustResetPassword', 'onboardingStage', 'tokenVersion',
+    ] as const;
+
+    /*
+     * The identifier is an address or a mobile number (EZ1-I233).
+     *
+     * `phone` carries no unique constraint and never has, so a number really
+     * can name more than one account -- a household that shared one number
+     * across two profiles, say. Authenticating "whichever row came back
+     * first" would be the wrong person, so an ambiguous number is refused and
+     * told to use the address instead. One match signs in normally.
+     */
+    const user = MOBILE_PATTERN.test(dto.email)
+      ? await (async () => {
+          const matches = await this.users.find({
+            where: { phone: dto.email, isActive: true },
+            select: [...select],
+            take: 2,
+          });
+          if (matches.length > 1) {
+            throw new UnauthorizedException(
+              'That mobile number is registered to more than one account. Sign in with your email address.',
+            );
+          }
+          return matches[0] ?? null;
+        })()
+      : await this.users.findOne({ where: { email: dto.email }, select: [...select] });
+
+    // Compare against a dummy hash when the user is absent so the response time
+    // does not reveal whether an email is registered.
+    const hash =
+      user?.passwordHash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidin';
+    const passwordOk = await bcrypt.compare(dto.password, hash);
+
+    if (!user || !passwordOk) {
+      if (user) await this.registerFailedLogin(user, ctx);
+      await this.audit.record({
+        action: AuditAction.AUTH_LOGIN_FAILED,
+        resourceType: 'user',
+        resourceId: user?.id ?? null,
+        metadata: { email: dto.email },
+        ip: ctx.ip ?? null,
+      });
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60_000);
+      throw new ForbiddenException(
+        `Too many failed attempts. Try again in ${minutes} minute(s), or reset your password.`,
+      );
+    }
+    if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
+
+    // Two-factor, mandatory for admins once configured.
+    const mfaRequired =
+      user.mfaEnabled ||
+      (user.role === UserRole.ADMIN && this.cfg.auth.mfaRequiredForAdmin && user.mfaEnabled);
+    if (mfaRequired) {
+      if (!dto.mfaCode) {
+        throw new UnauthorizedException({
+          message: 'An authentication code is required',
+          code: MFA_REQUIRED,
+        });
+      }
+      // A recovery code stands in for the authenticator. Checked first because
+      // the two are distinguishable by shape, and a mistyped TOTP should not
+      // burn a recovery code.
+      const looksLikeRecovery = dto.mfaCode.replace(/[\s-]/g, '').length > 6;
+      if (looksLikeRecovery) {
+        if (await this.consumeRecoveryCode(user.id, dto.mfaCode)) {
+          await this.audit.record({
+            action: AuditAction.AUTH_MFA_RECOVERY_USED,
+            actor: { userId: user.id, role: user.role },
+            resourceType: 'user',
+            resourceId: user.id,
+          });
+          return this.finishLogin(user, ctx);
+        }
+        throw new UnauthorizedException('That recovery code is not valid');
+      }
+      if (!this.verifyTotp(user.mfaSecret, dto.mfaCode)) {
+        await this.registerFailedLogin(user, ctx);
+        throw new UnauthorizedException('That authentication code is not valid');
+      }
+    }
+
+    return this.finishLogin(user, ctx);
+  }
+
+  // ---------------------------------------------- signing in by mobile (OTP)
+
+  /**
+   * Sends a sign-in code to a mobile number (EZ1-I258).
+   *
+   * The answer is the same whether or not the number is on an account. A
+   * different one would turn this route into a way of asking "does this person
+   * have an account here", which on a matrimony platform is a question about
+   * somebody's private life — and the number is not a secret, so anybody could
+   * ask it about anybody.
+   *
+   * Administrators are deliberately outside this. Their sign-in is a password
+   * and a second factor, and adding a route that needs only a handset would be
+   * a way around the one that is hardest to get past.
+   */
+  async requestMobileOtp(mobile: string): Promise<{ sent: true; expiresAt: Date }> {
+    const generic = {
+      sent: true as const,
+      expiresAt: new Date(Date.now() + this.cfg.sms.verificationTtlMinutes * 60_000),
+    };
+
+    /*
+     * Counted per number, whatever address asks. The route's own limit is per
+     * IP, and somebody with many addresses could otherwise ring one handset all
+     * night -- and cancel its owner's live code with every request.
+     */
+    if ((await this.bump(`otp:send:${mobile}`, 3600)) > OTP_SENDS_PER_HOUR) return generic;
+
+    const user = await this.singleAccountByMobile(mobile);
+    if (!user || user.role === UserRole.ADMIN || !user.isActive) return generic;
+
+    // Nothing about the send reaches the answer: not whether it was delivered,
+    // and never the code.
+    await this.phones.requestLogin(user.id, mobile);
+    return generic;
+  }
+
+  /**
+   * Signs in with a mobile number and the code sent to it.
+   *
+   * The code is the credential and is checked the same way a password is —
+   * expiry, three guesses, one use — and it reaches the same account, with the
+   * same role and the same permissions, as the password route. An account with
+   * two-factor on still needs its second factor: turning a phone into a single
+   * credential for an account that asked for two would be a downgrade its owner
+   * did not choose.
+   *
+   * Every refusal before the code is proven is the same 401 in the same words:
+   * no code, a wrong one, an expired one, too many guesses, no such account. Any
+   * difference between them tells a stranger whether the number is registered,
+   * which on a matrimony platform is a question about somebody's private life.
+   * Only once the code is right may the answer say more.
+   */
+  async loginWithMobileOtp(
+    mobile: string,
+    code: string,
+    mfaCode: string | undefined,
+    ctx: SessionContext = {},
+  ): Promise<AuthResult> {
+    const failures = `otp:fail:${mobile}`;
+    const refuse = async (user: User | null) => {
+      await this.bump(failures, 3600);
+      // A wrong code counts against the account the way a wrong password does.
+      if (user) await this.registerFailedLogin(user, ctx);
+      return new UnauthorizedException('That code is not right');
+    };
+
+    // Past the limit, no code for this number is even looked at for the hour.
+    if ((await this.hits(failures)) >= OTP_FAILURES_PER_HOUR) {
+      throw new UnauthorizedException('That code is not right');
+    }
+
+    const user = await this.singleAccountByMobile(mobile);
+    if (!user || user.role === UserRole.ADMIN) throw await refuse(null);
+
+    let pending: PhoneVerification;
+    try {
+      pending = await this.phones.checkLogin(user.id, code);
+    } catch (err) {
+      if (!(err instanceof HttpException)) throw err;
+      throw await refuse(user);
+    }
+
+    if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      const minutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60_000);
+      throw new ForbiddenException(
+        `Too many failed attempts. Try again in ${minutes} minute(s), or reset your password.`,
+      );
+    }
+
+    if (user.mfaEnabled) {
+      if (!mfaCode) {
+        // The code is still unspent, so the client sends it again with the
+        // authenticator code and the sign-in finishes.
+        throw new UnauthorizedException({
+          message: 'An authentication code is required',
+          code: MFA_REQUIRED,
+        });
+      }
+      // A recovery code stands in for the authenticator, as on the password route.
+      const looksLikeRecovery = mfaCode.replace(/[\s-]/g, '').length > 6;
+      const passed = looksLikeRecovery
+        ? await this.consumeRecoveryCode(user.id, mfaCode)
+        : this.verifyTotp(user.mfaSecret, mfaCode);
+      if (!passed) {
+        await this.registerFailedLogin(user, ctx);
+        throw new UnauthorizedException('That authentication code is not valid');
+      }
+    }
+
+    await this.phones.spend(pending);
+    await this.redis.raw.del(failures);
+
+    /*
+     * Signing in with the number proves it. An account taken on by an agent and
+     * never confirmed is confirmed by the first sign-in that used it, which is
+     * the same evidence the verification route asks for.
+     */
+    if (!user.phoneVerifiedAt) {
+      await this.users.update(user.id, { phoneVerifiedAt: new Date() });
+    }
+
+    return this.finishLogin(user, ctx);
+  }
+
+  /**
+   * The one active account on a mobile number, or nothing.
+   *
+   * `phone` carries no unique constraint and never has, so a number really can
+   * name more than one account — a household that shared one handset across two
+   * profiles. Signing "whichever row came back first" in would be the wrong
+   * person, so an ambiguous number signs nobody in; those accounts still have
+   * their addresses and passwords (EZ1-I233).
+   */
+  private async singleAccountByMobile(mobile: string): Promise<User | null> {
+    const matches = await this.users.find({
+      where: { phone: mobile, isActive: true },
+      // The same columns the password route reads. `mfaSecret` is not selected
+      // by default, and without it the second factor could never be verified
+      // here: every attempt failed and counted against the account.
+      select: [
+        'id', 'email', 'role', 'isActive', 'managedByAgentId', 'isVerified',
+        'mfaEnabled', 'mfaSecret', 'failedLoginAttempts', 'lockedUntil',
+        'mustResetPassword', 'onboardingStage', 'tokenVersion', 'phone', 'phoneVerifiedAt',
+      ],
+      take: 2,
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  /** Adds one to a rolling counter, starting its window on the first hit. */
+  private async bump(key: string, windowSeconds: number): Promise<number> {
+    const count = await this.redis.raw.incr(key);
+    if (count === 1) await this.redis.raw.expire(key, windowSeconds);
+    return count;
+  }
+
+  private async hits(key: string): Promise<number> {
+    return Number((await this.redis.raw.get(key)) ?? 0);
+  }
+
+  /** The last few steps of a successful sign-in, shared by both second factors. */
+  private async finishLogin(user: User, ctx: SessionContext) {
+    await this.clearLoginFailures(user.id);
+    await this.audit.record({
+      action: AuditAction.AUTH_LOGIN_SUCCEEDED,
+      actor: { userId: user.id, role: user.role },
+      resourceType: 'user',
+      resourceId: user.id,
+      ip: ctx.ip ?? null,
+    });
+    return this.issueTokens(user, ctx);
+  }
+
+  private async registerFailedLogin(user: User, ctx: SessionContext): Promise<void> {
+    const attempts = (user.failedLoginAttempts ?? 0) + 1;
+    const max = this.cfg.auth.maxFailedLogins;
+
+    if (attempts >= max) {
+      const lockedUntil = expiresIn(this.cfg.auth.lockoutMinutes * 60);
+      await this.users.update(user.id, { failedLoginAttempts: attempts, lockedUntil });
+      await this.audit.record({
+        action: AuditAction.AUTH_ACCOUNT_LOCKED,
+        resourceType: 'user',
+        resourceId: user.id,
+        metadata: { attempts, lockedUntil: lockedUntil.toISOString() },
+        ip: ctx.ip ?? null,
+      });
+      return;
+    }
+    await this.users.update(user.id, { failedLoginAttempts: attempts });
+  }
+
+  private async clearLoginFailures(userId: string): Promise<void> {
+    await this.users.update(userId, { failedLoginAttempts: 0, lockedUntil: null });
+  }
+
+  // ----------------------------------------------------------------- refresh
+
+  /**
+   * Refresh runs as a public route and authenticates the *refresh token
+   * itself*, which is presented in an httpOnly cookie (or the body for
+   * non-browser clients). Every call rotates the token; see SessionsService for
+   * the reuse-detection rule.
+   */
+  async refresh(refreshToken: string, ctx: SessionContext = {}): Promise<AuthResult> {
+    let payload: JwtPayload;
+    try {
+      payload = await this.jwt.verifyAsync<JwtPayload>(refreshToken, {
+        secret: this.cfg.auth.jwtRefreshSecret,
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    const user = await this.users.findOne({
+      where: { id: payload.sub },
+      select: [
+        'id', 'email', 'role', 'isActive', 'managedByAgentId', 'isVerified', 'mfaEnabled',
+        'mustResetPassword', 'onboardingStage', 'tokenVersion',
+      ],
+    });
+    if (!user) throw new UnauthorizedException('Access denied');
+    if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
+
+    const next = await this.mintRefreshToken(user);
+    await this.sessions.rotate(user.id, refreshToken, next.token, next.expiresAt, ctx);
+
+    return {
+      user: this.publicUser(user),
+      accessToken: await this.mintAccessToken(user),
+      refreshToken: next.token,
+    };
+  }
+
+  async logout(refreshToken?: string, userId?: string): Promise<{ success: true }> {
+    if (refreshToken) await this.sessions.revokeByToken(refreshToken, 'logout');
+    else if (userId) await this.sessions.revokeAllForUser(userId, 'logout');
+    return { success: true };
+  }
+
+  async logoutEverywhere(userId: string): Promise<{ success: true }> {
+    await this.sessions.revokeAllForUser(userId, 'logout all devices');
+    return { success: true };
+  }
+
+  // ------------------------------------------------------- email verification
+
+  async sendVerificationEmail(user: Pick<User, 'id' | 'email'>, name: string): Promise<void> {
+    const { token, tokenHash } = generateToken();
+    await this.emailTokens.save(
+      this.emailTokens.create({
+        userId: user.id,
+        type: EmailTokenType.VERIFY_EMAIL,
+        tokenHash,
+        expiresAt: expiresIn(this.cfg.auth.emailVerifyTtlHours * 3600),
+      }),
+    );
+    if (!user.email) return;
+    await this.mail.sendEmailVerification({ to: user.email, name, token });
+  }
+
+  async resendVerification(userId: string): Promise<{ success: true }> {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Account not found');
+    if (user.isVerified) return { success: true };
+    // Nothing to verify for an account with no address (EZ1-I233).
+    if (!user.email) return { success: true };
+    await this.sendVerificationEmail(user, user.email);
+    return { success: true };
+  }
+
+  async verifyEmail(token: string): Promise<{ success: true }> {
+    const record = await this.emailTokens.findOne({
+      where: { tokenHash: hashToken(token), type: EmailTokenType.VERIFY_EMAIL, usedAt: IsNull() },
+    });
+    if (!record || record.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('That verification link is invalid or has expired');
+    }
+
+    record.usedAt = new Date();
+    await this.emailTokens.save(record);
+    await this.users.update(record.userId, { isVerified: true, emailVerifiedAt: new Date() });
+    await this.audit.record({
+      action: AuditAction.AUTH_EMAIL_VERIFIED,
+      resourceType: 'user',
+      resourceId: record.userId,
+    });
+    return { success: true };
+  }
+
+  // -------------------------------------------------------- password recovery
+
+  /**
+   * Always reports success. Telling an anonymous caller whether an address is
+   * registered is exactly the enumeration oracle the login path avoids.
+   */
+  async requestPasswordReset(identifier: string): Promise<{ success: true }> {
+    /*
+     * Resolved the same way sign-in resolves it: an address, or the mobile the
+     * account was taken on with. A number matching more than one active
+     * account is treated as no match rather than picking one -- this route
+     * deliberately tells an anonymous caller nothing either way (EZ1-I233).
+     */
+    const user = MOBILE_PATTERN.test(identifier)
+      ? await (async () => {
+          const matches = await this.users.find({
+            where: { phone: identifier, isActive: true },
+            take: 2,
+          });
+          return matches.length === 1 ? matches[0] : null;
+        })()
+      : await this.users.findOne({ where: { email: identifier } });
+
+    if (user && user.isActive) {
+      const { token, tokenHash } = generateToken();
+      await this.emailTokens.save(
+        this.emailTokens.create({
+          userId: user.id,
+          type: EmailTokenType.RESET_PASSWORD,
+          tokenHash,
+          expiresAt: expiresIn(this.cfg.auth.passwordResetTtlMinutes * 60),
+        }),
+      );
+      /*
+       * Whichever channel this account actually has. The address is preferred
+       * where there is one; an account taken on by mobile gets the link by
+       * SMS, which is the only way it could ever recover a password.
+       */
+      if (user.email) {
+        await this.mail.sendPasswordReset({ to: user.email, name: user.email, token });
+      } else if (user.phone) {
+        await this.sms.sendPasswordReset({ to: user.phone, token });
+      }
+    }
+    return { success: true };
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<{ success: true }> {
+    const record = await this.emailTokens.findOne({
+      where: {
+        tokenHash: hashToken(dto.token),
+        type: EmailTokenType.RESET_PASSWORD,
+        usedAt: IsNull(),
+      },
+    });
+    if (!record || record.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('That reset link is invalid or has expired');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, this.cfg.auth.bcryptRounds);
+    record.usedAt = new Date();
+    await this.emailTokens.save(record);
+    await this.users.update(record.userId, {
+      passwordHash,
+      passwordChangedAt: new Date(),
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      // Retires every access token already in circulation for this account.
+      tokenVersion: () => '"tokenVersion" + 1',
+    });
+    // A reset is the standard response to a suspected compromise, so drop every
+    // existing session rather than leaving the attacker signed in.
+    await this.sessions.revokeAllForUser(record.userId, 'password reset');
+    await this.audit.record({
+      action: AuditAction.AUTH_PASSWORD_RESET,
+      resourceType: 'user',
+      resourceId: record.userId,
+    });
+    return { success: true };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ success: true }> {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: ['id', 'passwordHash'],
+    });
+    if (!user) throw new NotFoundException('Account not found');
+
+    const ok = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    // A rejected current password is a form error, not an expired access token.
+    // Returning 401 here would trigger the clients' automatic session refresh.
+    if (!ok) throw new BadRequestException('Current password is incorrect.');
+
+    // Compare against the stored hash instead of the submitted current-password
+    // string. This keeps the rule true even when a client bypasses its own form
+    // validation, and avoids ever retaining or logging a plaintext password.
+    if (await bcrypt.compare(dto.newPassword, user.passwordHash)) {
+      throw new BadRequestException('New password must be different from your current password.');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, this.cfg.auth.bcryptRounds);
+    // Clearing `mustResetPassword` here is what lifts the lock a provisioned
+    // account starts under. Revoking the sessions immediately afterwards is
+    // deliberate: the temporary credential was emailed in the clear, so the
+    // session it opened is retired with it and the person signs in afresh.
+    await this.users.update(userId, {
+      passwordHash,
+      passwordChangedAt: new Date(),
+      mustResetPassword: false,
+      // Retires every access token already in circulation for this account, so
+      // "signed out everywhere" is true of the short-lived tokens as well as
+      // the refresh sessions revoked just below.
+      tokenVersion: () => '"tokenVersion" + 1',
+    });
+    await this.sessions.revokeAllForUser(userId, 'password changed');
+    return { success: true };
+  }
+
+  // --------------------------------------------------------------------- MFA
+
+  private verifyTotp(secret: string | null | undefined, code: string): boolean {
+    if (!secret) return false;
+    // One step of drift each way, so a slightly slow phone clock still works.
+    authenticator.options = { window: 1 };
+    try {
+      return authenticator.verify({ token: code, secret });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Generates a secret and the otpauth:// URI for the authenticator app. */
+  async beginMfaSetup(userId: string): Promise<{ secret: string; otpauthUrl: string }> {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Account not found');
+    if (user.mfaEnabled) throw new ConflictException('Two-factor is already enabled');
+
+    const secret = authenticator.generateSecret();
+    // Stored but not yet enabled: MFA only turns on once a code is confirmed,
+    // so a half-finished setup cannot lock anyone out.
+    await this.users.update(userId, { mfaSecret: secret });
+    return {
+      secret,
+      // What the authenticator app shows beside the code. An account with no
+      // address falls back to the number it was taken on with (EZ1-I233).
+      otpauthUrl: authenticator.keyuri(
+        user.email ?? user.phone ?? user.id,
+        this.cfg.auth.mfaIssuer,
+        secret,
+      ),
+    };
+  }
+
+  async confirmMfa(
+    userId: string,
+    code: string,
+  ): Promise<{ success: true; recoveryCodes: string[] }> {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: ['id', 'role', 'mfaSecret', 'mfaEnabled'],
+    });
+    if (!user?.mfaSecret) throw new BadRequestException('Start two-factor setup first');
+    if (!this.verifyTotp(user.mfaSecret, code)) {
+      throw new BadRequestException('That code is not valid, check your authenticator app');
+    }
+
+    await this.users.update(userId, { mfaEnabled: true });
+    const recoveryCodes = await this.issueRecoveryCodes(userId);
+
+    await this.audit.record({
+      action: AuditAction.AUTH_MFA_ENABLED,
+      actor: { userId, role: user.role },
+      resourceType: 'user',
+      resourceId: userId,
+    });
+
+    // Shown exactly once, at the only moment the plaintext exists. Storing them
+    // retrievably would make them a second password sitting in the database.
+    return { success: true, recoveryCodes };
+  }
+
+  /**
+   * Ten single-use codes, replacing any that came before.
+   *
+   * Regenerating invalidates the old set on purpose: somebody asking for new
+   * codes has usually just decided the old ones are compromised or lost, and
+   * leaving both sets live would defeat the point of asking.
+   */
+  async issueRecoveryCodes(userId: string): Promise<string[]> {
+    await this.recoveryCodes.delete({ userId });
+
+    const codes = Array.from({ length: 10 }, () => this.formatRecoveryCode());
+    await this.recoveryCodes.save(
+      await Promise.all(
+        codes.map(async (code) =>
+          this.recoveryCodes.create({
+            userId,
+            codeHash: await bcrypt.hash(code, this.cfg.auth.bcryptRounds),
+          }),
+        ),
+      ),
+    );
+    return codes;
+  }
+
+  /** Regenerate, for somebody who has used most of theirs or lost the list. */
+  async regenerateRecoveryCodes(
+    userId: string,
+    password: string,
+  ): Promise<{ recoveryCodes: string[] }> {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: ['id', 'role', 'passwordHash', 'mfaEnabled'],
+    });
+    if (!user) throw new NotFoundException('Account not found');
+    if (!user.mfaEnabled) throw new BadRequestException('Two-factor is not enabled');
+
+    // Password only — asking for a TOTP code here would defeat the purpose for
+    // the person who has lost their authenticator and still has the password.
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Password is not correct');
+
+    const recoveryCodes = await this.issueRecoveryCodes(userId);
+    await this.audit.record({
+      action: AuditAction.AUTH_MFA_RECOVERY_REGENERATED,
+      actor: { userId, role: user.role },
+      resourceType: 'user',
+      resourceId: userId,
+    });
+    return { recoveryCodes };
+  }
+
+  /** How many are left, so somebody can be told before they run out. */
+  async recoveryCodeCount(userId: string): Promise<{ remaining: number }> {
+    return { remaining: await this.recoveryCodes.count({ where: { userId, usedAt: IsNull() } }) };
+  }
+
+  /**
+   * Spends one recovery code, if it matches.
+   *
+   * Every unused code has to be compared, because only the hashes are stored —
+   * there is nothing to look the code up by. Ten bcrypt comparisons is the
+   * price of not keeping them readable, and this path is rare by definition.
+   */
+  private async consumeRecoveryCode(userId: string, candidate: string): Promise<boolean> {
+    const normalised = candidate.replace(/[\s-]/g, '').toUpperCase();
+    if (normalised.length < 8) return false;
+
+    const outstanding = await this.recoveryCodes.find({ where: { userId, usedAt: IsNull() } });
+    for (const code of outstanding) {
+      if (await bcrypt.compare(normalised, code.codeHash)) {
+        code.usedAt = new Date();
+        await this.recoveryCodes.save(code);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Groups of four, which is what makes a printed code transcribable. */
+  private formatRecoveryCode(): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0 or I/1
+    let out = '';
+    for (let i = 0; i < 12; i += 1) out += alphabet[randomInt(0, alphabet.length)];
+    return out;
+  }
+
+  async disableMfa(userId: string, password: string, code: string): Promise<{ success: true }> {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: ['id', 'role', 'passwordHash', 'mfaSecret', 'mfaEnabled'],
+    });
+    if (!user) throw new NotFoundException('Account not found');
+    if (!user.mfaEnabled) return { success: true };
+
+    // Disabling 2FA weakens the account, so require both factors to do it.
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Password is not correct');
+    if (!this.verifyTotp(user.mfaSecret, code)) {
+      throw new BadRequestException('That code is not valid');
+    }
+    if (user.role === UserRole.ADMIN && this.cfg.auth.mfaRequiredForAdmin) {
+      throw new ForbiddenException('Two-factor cannot be switched off on an administrator account');
+    }
+
+    await this.users.update(userId, { mfaEnabled: false, mfaSecret: null });
+    await this.audit.record({
+      action: AuditAction.AUTH_MFA_DISABLED,
+      actor: { userId, role: user.role },
+      resourceType: 'user',
+      resourceId: userId,
+    });
+    return { success: true };
+  }
+
+  // ------------------------------------------------------------------ tokens
+
+  /**
+   * The signed-in account, as the client is allowed to see it.
+   *
+   * Distinct from `GET /users/me`, which returns the marriage *profile* — two
+   * different records that a vendor makes obvious, since they have an account
+   * and no profile at all.
+   */
+  async me(userId: string) {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Account not found');
+    return {
+      ...this.publicUser(user),
+      phone: user.phone,
+      phoneVerifiedAt: user.phoneVerifiedAt,
+      createdAt: user.createdAt,
+    };
+  }
+
+  private publicUser(
+    user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId' | 'isVerified' | 'mfaEnabled'> &
+      Partial<Pick<User, 'mustResetPassword' | 'onboardingStage'>>,
+  ) {
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      managedByAgentId: user.managedByAgentId ?? null,
+      isVerified: Boolean(user.isVerified),
+      mfaEnabled: Boolean(user.mfaEnabled),
+      mustResetPassword: Boolean(user.mustResetPassword),
+      onboardingStage: user.onboardingStage ?? OnboardingStage.PROFILE_INCOMPLETE,
+      // The client mirrors these to hide navigation it cannot use. The server
+      // re-checks on every request; this is a UX affordance, not a control.
+      permissions: permissionsFor(user.role),
+    };
+  }
+
+  private async mintAccessToken(
+    user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId'> &
+      Partial<Pick<User, 'tokenVersion'>>,
+  ): Promise<string> {
+    return this.jwt.signAsync(
+      {
+        sub: user.id,
+        tv: user.tokenVersion ?? 0,
+        iatMs: Date.now(),
+        email: user.email,
+        role: user.role,
+        managedByAgentId: user.managedByAgentId ?? null,
+        jti: randomUUID(),
+      },
+      { secret: this.cfg.auth.jwtSecret, expiresIn: this.cfg.auth.jwtExpiresIn },
+    );
+  }
+
+  private async mintRefreshToken(
+    user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId'>,
+  ): Promise<{ token: string; expiresAt: Date }> {
+    const token = await this.jwt.signAsync(
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        managedByAgentId: user.managedByAgentId ?? null,
+        jti: randomUUID(),
+      },
+      { secret: this.cfg.auth.jwtRefreshSecret, expiresIn: this.cfg.auth.jwtRefreshExpiresIn },
+    );
+    const decoded = this.jwt.decode(token) as { exp?: number } | null;
+    const expiresAt = decoded?.exp
+      ? new Date(decoded.exp * 1000)
+      : expiresIn(30 * 86_400);
+    return { token, expiresAt };
+  }
+
+  /** Issues a fresh access token and opens a NEW session for this device. */
+  async issueTokens(
+    user: Pick<User, 'id' | 'email' | 'role' | 'managedByAgentId' | 'isVerified' | 'mfaEnabled'> &
+      Partial<Pick<User, 'mustResetPassword' | 'onboardingStage' | 'tokenVersion'>>,
+    ctx: SessionContext = {},
+  ): Promise<AuthResult> {
+    const refresh = await this.mintRefreshToken(user);
+    await this.sessions.create(user.id, refresh.token, refresh.expiresAt, ctx);
+
+    /*
+     * "Recently active", recorded where a session actually begins.
+     *
+     * Every sign-in and every silent refresh passes through here, and the
+     * refresh happens whenever a short-lived access token expires under real
+     * use — so this tracks being present without a write on every request.
+     *
+     * Deliberately not awaited into the response path's critical section by
+     * way of a transaction: a failure to record when somebody was last seen is
+     * not a reason to fail their sign-in.
+     */
+    await this.profiles
+      .update({ userId: user.id }, { lastActiveAt: new Date() })
+      .catch(() => undefined);
+
+    return {
+      user: this.publicUser(user),
+      accessToken: await this.mintAccessToken(user),
+      refreshToken: refresh.token,
+    };
+  }
+}

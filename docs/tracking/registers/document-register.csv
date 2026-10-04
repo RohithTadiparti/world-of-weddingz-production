@@ -1,0 +1,13 @@
+ID,Document,Path,Owner,Status,ReviewCadence,LastReviewed,RelatedItems
+DOC-001,Production program,PRODUCTION_PROGRAM.md,Product and engineering,Active,Each release,2026-10-04,All
+DOC-002,Knowledge matrix index,docs/knowledge-matrix/README.md,Engineering,Active,Monthly,2026-10-04,GOV-002
+DOC-003,SDLC operating model,docs/knowledge-matrix/sdlc.md,Engineering,Active,Quarterly,2026-10-04,GOV-002
+DOC-004,Account and access matrix,docs/knowledge-matrix/access-matrix.md,Security and operations,Draft,Monthly,2026-10-04,GOV-001
+DOC-005,Test strategy,docs/knowledge-matrix/test-strategy.md,Quality,Active,Each release,2026-10-04,QA-001 QA-002 QA-003
+DOC-006,Railway and AWS migration design,docs/superpowers/specs/2026-10-04-railway-first-aws-migration-design.md,Architecture,Draft,On decision change,2026-10-04,REL-001 REL-002
+DOC-007,Implementation plan,docs/superpowers/plans/2026-10-04-railway-first-aws-migration.md,Engineering,Active,Weekly,2026-10-04,All
+DOC-008,Task and PR handoff protocol,docs/governance/LLM_TASK_PROTOCOL.md,Engineering,Active,Quarterly,2026-10-04,GOV-002
+DOC-009,Source integration process,docs/governance/source-integration.md,Release engineering,Active,Monthly,2026-10-04,SYNC-001 SYNC-002
+DOC-010,Contributing rules,docs/governance/CONTRIBUTING.md,Engineering,Active,Quarterly,2026-10-04,GOV-001
+DOC-011,Baseline QA evidence,docs/evidence/qa/WOW_End_to_End_QA_Report_2026-10-04.xlsx,Quality,Baseline,Immutable,2026-10-04,QA-004 REL-003
+DOC-012,Production tracking workbook,docs/tracking/production-readiness-tracker.xlsx,Program management,Generated,Each change,2026-10-04,GOV-002

@@ -1,0 +1,53 @@
+{
+  "name": "wow-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "ocr-assets": "node scripts/copy-ocr-assets.mjs",
+    "predev": "npm run ocr-assets",
+    "dev": "vite",
+    "prebuild": "npm run ocr-assets",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@fontsource/cormorant-garamond": "^5.3.0",
+    "@fontsource/karla": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-query": "^5.20.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "axios": "^1.6.7",
+    "mammoth": "^1.13.0",
+    "motion": "^13.1.1",
+    "pdfjs-dist": "^5.6.205",
+    "qrcode": "^1.5.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.0",
+    "socket.io-client": "^4.7.4",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5",
+    "zustand": "^4.5.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^26.2.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18.2.55",
+    "@types/react-dom": "^18.2.19",
+    "@vitejs/plugin-react": "^4.2.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "autoprefixer": "^10.4.17",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0",
+    "vitest": "^4.1.11"
+  }
+}

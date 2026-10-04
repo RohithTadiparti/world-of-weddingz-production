@@ -1,0 +1,171 @@
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { PlannerService } from './planner.service';
+import { WeddingDashboardService } from './wedding-dashboard.service';
+import { PlannerClientsService } from './planner-clients.service';
+import {
+  AddTaskDto,
+  CreatePlanDto,
+  EngagePlannerDto,
+  SetWeddingBudgetDto,
+  UpdateTaskStatusDto,
+} from './dto/planner.dto';
+import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { Permission } from '../../common/authz/permissions';
+import { UserRole } from '../../common/enums';
+
+@ApiTags('planner')
+@ApiBearerAuth()
+@Controller('planner')
+export class PlannerController {
+  constructor(
+    private readonly planner: PlannerService,
+    private readonly weddingDashboard: WeddingDashboardService,
+    private readonly clients: PlannerClientsService,
+  ) {}
+
+  /*
+   * The planner's own book of work.
+   *
+   * PLAN_MANAGE_ENGAGED rather than PLANNER_LISTING_MANAGE: this is about the
+   * weddings somebody was hired to run, not about their shop window, and the
+   * two are held by different people the moment an agency employs a planner.
+   */
+  @RequirePermissions(Permission.PLAN_MANAGE_ENGAGED)
+  @ApiOperation({ summary: 'The couples this planner is engaged on, and any unanswered requests' })
+  @Get('clients')
+  listClients(@CurrentUser() actor: AuthUser, @Query('userId') userId?: string) {
+    const selectedActor = actor.role === UserRole.ADMIN && userId
+      ? { ...actor, userId, role: UserRole.PLANNER }
+      : actor;
+    return this.clients.listClients(selectedActor);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_ENGAGED)
+  @ApiOperation({
+    summary: "The planner's book at a glance",
+    description:
+      'Weddings, their active/upcoming split, bookings across the book, escrow the planner ' +
+      'holds, and tasks including what is genuinely overdue — every figure derived from the ' +
+      'plans this planner is engaged on, so the dashboard agrees with My Clients (EZ1-I184).',
+  })
+  @Get('overview')
+  overview(@CurrentUser() actor: AuthUser, @Query('userId') userId?: string) {
+    const selectedUserId = actor.role === UserRole.ADMIN && userId ? userId : actor.userId;
+    return this.weddingDashboard.plannerOverview(selectedUserId);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_ENGAGED)
+  @ApiOperation({ summary: 'One client: their wedding, progress, events, tasks, vendors, budget' })
+  @Get('clients/:userId')
+  clientDetail(@CurrentUser() actor: AuthUser, @Param('userId', ParseUUIDPipe) userId: string) {
+    return this.clients.clientDetail(actor, userId);
+  }
+
+  @RequirePermissions(Permission.BOOKING_REQUEST_FOR_CLIENT)
+  @ApiOperation({
+    summary: 'Bookings this planner placed with vendors on behalf of their clients',
+    description:
+      'Newest first, with the vendor, the service, the client it is for and where it stands. ' +
+      'The bookings belong to the couples; this is the planner-side list of what they asked for.',
+  })
+  @Get('bookings-placed')
+  placedForClients(@CurrentUser() actor: AuthUser) {
+    return this.clients.placedForClients(actor);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_ENGAGED)
+  @ApiOperation({
+    summary: "A booking request's wedding brief",
+    description:
+      "The couple's functions with dates and timings, guest count, venues, and the vendors " +
+      'already arranged per day — so the planner reviews the full requirement before quoting ' +
+      '(EZ1-I162). Read-only; assembled from the events and bookings that already exist.',
+  })
+  @Get('requests/:bookingId/brief')
+  requestBrief(
+    @CurrentUser() actor: AuthUser,
+    @Param('bookingId', ParseUUIDPipe) bookingId: string,
+  ) {
+    return this.clients.requestBrief(actor, bookingId);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_OWN)
+  @Post('plan')
+  create(@CurrentUser() actor: AuthUser, @Body() dto: CreatePlanDto) {
+    return this.planner.createPlan(actor, dto);
+  }
+
+  /**
+   * Reachable by hosts (PLAN_MANAGE_OWN) and by engaged planners
+   * (PLAN_MANAGE_ENGAGED); the service decides what each caller actually sees.
+   */
+  @ApiOperation({
+    summary: 'The whole wedding on one screen',
+    description:
+      'Countdown, budget against what has actually been committed, the guest list, the journey ' +
+      'through the plan, and what is happening next. Assembled server-side: the joins — ' +
+      'budgeted against committed, invited against replied — are the interesting part, and a ' +
+      'client that computes them is a second implementation that will drift.',
+  })
+  @RequirePermissions(Permission.PLAN_MANAGE_OWN)
+  @Get('dashboard')
+  dashboard(@CurrentUser() actor: AuthUser, @Query('userId') userId?: string) {
+    const selectedUserId = actor.role === UserRole.ADMIN && userId ? userId : actor.userId;
+    return this.weddingDashboard.summary(selectedUserId);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_OWN)
+  @ApiOperation({ summary: 'Set (or clear, with null) the overall wedding budget' })
+  @Put('budget')
+  setBudget(@CurrentUser() actor: AuthUser, @Body() dto: SetWeddingBudgetDto) {
+    return this.planner.setBudget(actor, dto.budget);
+  }
+
+  @Get('plans')
+  @ApiOperation({ summary: 'Plans you host, represent, or are engaged on' })
+  myPlans(@CurrentUser() actor: AuthUser) {
+    return this.planner.myPlans(actor);
+  }
+
+  @Get('plan/:id/timeline')
+  timeline(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.planner.getTimeline(actor, id);
+  }
+
+  @Post('plan/:id/tasks')
+  addTask(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddTaskDto,
+  ) {
+    return this.planner.addTask(actor, id, dto);
+  }
+
+  @Put('tasks/:id/status')
+  updateStatus(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTaskStatusDto,
+  ) {
+    return this.planner.updateTaskStatus(actor, id, dto.status);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_OWN)
+  @ApiOperation({ summary: 'Engage a wedding planner on this plan' })
+  @Put('plan/:id/planner')
+  engage(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EngagePlannerDto,
+  ) {
+    return this.planner.engagePlanner(actor, id, dto.plannerUserId);
+  }
+
+  @RequirePermissions(Permission.PLAN_MANAGE_OWN)
+  @Delete('plan/:id/planner')
+  release(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.planner.releasePlanner(actor, id);
+  }
+}

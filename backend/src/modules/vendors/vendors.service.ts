@@ -1,0 +1,663 @@
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ServiceCategory } from '../catalog/entities/service-category.entity';
+import { categoryCountProblem, requestedCategories } from './vendor-categories';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { Vendor } from './entities/vendor.entity';
+import { BusinessLifecycleService } from './business-lifecycle.service';
+import { VendorReview } from './entities/vendor-review.entity';
+import { VendorService } from '../catalog/entities/vendor-service.entity';
+import { ServiceOffering } from '../catalog/entities/service-offering.entity';
+import { serviceNamesByIds } from '../catalog/service-names';
+import { Booking } from '../bookings/entities/booking.entity';
+import { User } from '../auth/entities/user.entity';
+import { Profile } from '../users/entities/profile.entity';
+import { SupportCase } from '../verification/entities/support-case.entity';
+import { displayNamesByUserIds } from '../users/display-names';
+import { screenText } from '../../common/util/text-moderation';
+import {
+  CreateReviewDto,
+  CreateVendorDto,
+  UpdateVendorDto,
+  VendorSearchDto,
+  VendorSort,
+} from './dto/vendor.dto';
+import { RedisService } from '../../platform/redis/redis.service';
+import { BusinessStatus, CaseStatus, ReviewStatus, UserRole } from '../../common/enums';
+import { AuthUser } from '../../common/decorators/current-user.decorator';
+import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
+import { likeEscape } from '../../common/util/like';
+import { SocialLink, resolveSocialLinks } from '../../common/dto/social-links.dto';
+
+/**
+ * One listing, as somebody who is not the vendor may see it.
+ *
+ * Subtractive rather than additive, and deliberately so: `GET /vendors/:id` and
+ * `/vendors/search` are both unauthenticated, and both returned the whole row.
+ * That put a vendor's PAN number, GST number, compliance document links and
+ * payout account id in front of anybody who could reach the
+ * listing — and the ids come straight out of the public search, so reaching it
+ * needed nothing but the URL. The rejection reason went out with them, so a
+ * refusal written for the vendor ("the proprietor's licence does not match the
+ * premises") was readable by their competitors.
+ *
+ * Adding fields to a list of what to *hide* is how that happens: the next
+ * column somebody adds is public until they remember. This names what a buyer
+ * needs to choose a vendor, and nothing reaches the outside world unless it is
+ * written here.
+ */
+export interface PublicVendor {
+  id: string;
+  name: string;
+  category: string | null;
+  /** Every category the business lists under, first one first (EZ1-I263). */
+  categories: string[];
+  otherCategory: string | null;
+  description: string;
+  city: string;
+  portfolio: string[];
+  ratingAvg: number;
+  ratingCount: number;
+  /**
+   * The registered business address a buyer sees before booking (EZ1-I197).
+   * The mobile number and PAN stay withheld — a buyer reaches the vendor
+   * through a booking request, not a raw phone number — but the address the
+   * business trades from is part of the picture a couple chooses on.
+   */
+  registeredAddress: string | null;
+  /** When the business started trading, so a couple can gauge experience (EZ1-I76). */
+  tradingSince: string | null;
+  /** Whether the platform has stood behind them, not how it decided to. */
+  status: BusinessStatus;
+  isApproved: boolean;
+  verifiedAt: Date | null;
+  createdAt: Date;
+  /**
+   * The cheapest published offering across the vendor's active services, so a
+   * card can say "From ₹X" and the grid can be sorted by price (EZ1-I164). Null
+   * where the vendor only quotes on request — computed by search, absent
+   * (null) on the single-listing view where the full catalogue is shown.
+   */
+  startingPrice: number | null;
+  /** In the order the vendor chose; the three single links mirror it for older clients. */
+  socialLinks: SocialLink[];
+  website: string | null;
+  instagramUrl: string | null;
+  youtubeUrl: string | null;
+}
+
+export function publicVendor(v: Vendor, startingPrice: number | null = null): PublicVendor {
+  return {
+    id: v.id,
+    name: v.name,
+    category: v.category,
+    categories: v.categories ?? [],
+    otherCategory: v.otherCategory,
+    description: v.description,
+    city: v.city,
+    portfolio: v.portfolio,
+    ratingAvg: v.ratingAvg,
+    ratingCount: v.ratingCount,
+    registeredAddress: v.registeredAddress,
+    tradingSince: v.tradingSince,
+    status: v.status,
+    isApproved: v.isApproved,
+    verifiedAt: v.verifiedAt,
+    createdAt: v.createdAt,
+    startingPrice,
+    socialLinks: v.socialLinks ?? [],
+    website: v.website ?? null,
+    instagramUrl: v.instagramUrl ?? null,
+    youtubeUrl: v.youtubeUrl ?? null,
+  };
+}
+
+@Injectable()
+export class VendorsService {
+  constructor(
+    @InjectRepository(Vendor) private readonly vendors: Repository<Vendor>,
+    // Read-only, to check a listing's categories against the catalogue (EZ1-I263).
+    @InjectRepository(ServiceCategory)
+    private readonly catalogCategories: Repository<ServiceCategory>,
+    @InjectRepository(VendorReview) private readonly reviews: Repository<VendorReview>,
+    // Read-only, to name the service, package and booking on the vendor's own
+    // reviews view (EZ1-I103).
+    @InjectRepository(VendorService) private readonly serviceRows: Repository<VendorService>,
+    @InjectRepository(ServiceOffering) private readonly offeringRows: Repository<ServiceOffering>,
+    @InjectRepository(Booking) private readonly bookingRows: Repository<Booking>,
+    // Only to put a name and an address on a review for the administrator
+    // moderating it: deciding in the dark is not deciding.
+    @InjectRepository(User) private readonly users: Repository<User>,
+    // Read-only, for the reviewer's name on the administrator's review list.
+    @InjectRepository(Profile) private readonly profiles: Repository<Profile>,
+    @InjectRepository(SupportCase) private readonly supportCases: Repository<SupportCase>,
+    private readonly redis: RedisService,
+    private readonly dataSource: DataSource,
+    private readonly lifecycle: BusinessLifecycleService,
+  ) {}
+
+  /**
+   * A new listing. It starts as a draft and stays one until it is submitted.
+   *
+   * This used to raise a field-verification request here, the moment the
+   * listing row was written — which put a half-filled draft into the officer's
+   * queue and produced the reported deadlock. The officer would visit, write up
+   * the findings, recommend approval, and the administrator would be refused
+   * with "A draft listing cannot be approved" — because nothing had ever moved
+   * the business out of DRAFT. Two systems each behaving correctly on their own
+   * and disagreeing about what stage the vendor was at.
+   *
+   * The request belongs to submission, where `BusinessLifecycleService`
+   * already raises it *and* moves the business to PENDING_VERIFICATION in the
+   * same step, which is the only place those two facts can be kept in step.
+   *
+   * The guard itself stays. It was telling the truth.
+   */
+  async create(ownerUserId: string, dto: CreateVendorDto): Promise<Vendor> {
+    const categories = await this.resolveCategories(dto);
+    if (!categories) throw new BadRequestException('Choose at least one category');
+    // The links are written through resolveSocialLinks, with their mirrors.
+    const { socialLinks: _links, ...rest } = dto;
+    const fields: Partial<Omit<CreateVendorDto, 'socialLinks'>> = { ...rest };
+    delete fields.category;
+    delete fields.otherCategory;
+    delete fields.categories;
+
+    // New listings always start unapproved regardless of what the client sent.
+    const vendor = await this.saveListing(
+      this.vendors.create({
+        ...fields,
+        ...(resolveSocialLinks(dto) ?? {}),
+        categories,
+        category: categories[0],
+        otherCategory: null,
+        ownerUserId,
+        isApproved: false,
+        ratingAvg: 0,
+        ratingCount: 0,
+      }),
+    );
+
+    await this.invalidateSearchCache();
+    return vendor;
+  }
+
+  /**
+   * A GST number identifies one business, so the database holds it unique. A
+   * clash means someone is registering a second listing under a registration
+   * that is already claimed, which is a conflict to report, not a crash.
+   */
+  private async saveListing(vendor: Vendor): Promise<Vendor> {
+    try {
+      return await this.vendors.save(vendor);
+    } catch (err) {
+      const message = (err as { message?: string }).message ?? '';
+      if (message.includes('UQ_vendors_gst_number')) {
+        throw new ConflictException('That GST number is already registered to a listing on WOW.');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * The categories a create or update asks for, checked (EZ1-I263).
+   *
+   * Undefined when the request does not mention categories. Otherwise one to
+   * five slugs that are all active catalogue categories, or a 400 that says
+   * what was wrong.
+   */
+  private async resolveCategories(dto: {
+    categories?: string[];
+    category?: string;
+  }): Promise<string[] | undefined> {
+    const list = requestedCategories(dto);
+    if (list === undefined) return undefined;
+    const problem = categoryCountProblem(list);
+    if (problem) throw new BadRequestException(problem);
+    const known = await this.catalogCategories.find({
+      where: { slug: In(list), active: true },
+      select: ['slug'],
+    });
+    const knownSlugs = new Set(known.map((c) => c.slug));
+    const unknown = list.filter((slug) => !knownSlugs.has(slug));
+    if (unknown.length) throw new BadRequestException('Not a category: ' + unknown.join(', '));
+    return list;
+  }
+
+  /** Only the owning vendor account may edit a listing. */
+  async update(ownerUserId: string, vendorId: string, dto: UpdateVendorDto): Promise<Vendor> {
+    const vendor = await this.vendors.findOne({ where: { id: vendorId } });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+    if (vendor.ownerUserId !== ownerUserId) {
+      throw new ForbiddenException('This listing does not belong to you');
+    }
+
+    // Enforced here, not by hiding a button. A vendor who edits their GST
+    // number after an officer has been sent to check it has verified nothing,
+    // and a listing that changes after approval is a listing nobody checked.
+    // One guard decides all three cases (EZ1-I207): a full identity edit while
+    // the state allows it (narrowed to the flagged fields under a targeted
+    // correction, EZ1-I205); the presentational-only edit a verified/live
+    // listing still permits; or a hard lock while it is pending or refused.
+    // The list replaces the single category older app builds send, and the
+    // lock below compares the list, so a verified listing cannot have its
+    // categories changed through either field (EZ1-I263).
+    const changes: Record<string, unknown> = { ...dto };
+    delete changes.category;
+    delete changes.otherCategory;
+    delete changes.categories;
+    const categories = await this.resolveCategories(dto);
+    if (categories) changes.categories = categories;
+    // The list and the single columns mirroring it move together, whichever
+    // of them the client sent (see resolveSocialLinks).
+    delete changes.socialLinks;
+    const social = resolveSocialLinks(dto, vendor);
+    if (social) Object.assign(changes, social);
+
+    this.lifecycle.assertIdentityEditable(vendor, changes);
+
+    Object.assign(vendor, changes);
+    if (categories) {
+      vendor.category = categories[0];
+      vendor.otherCategory = null;
+    }
+    const saved = await this.saveListing(vendor);
+    await this.invalidateSearchCache();
+    return saved;
+  }
+
+  listOwn(ownerUserId: string): Promise<Vendor[]> {
+    return this.vendors.find({ where: { ownerUserId }, order: { createdAt: 'DESC' } });
+  }
+
+  /** Dashboard issue buckets are derived from the same cases Support exposes. */
+  async dashboardIssues(ownerUserId: string) {
+    const rows = await this.supportCases.find({
+      where: { raisedByUserId: ownerUserId },
+      select: ['id', 'status'],
+    });
+    const solved = new Set([CaseStatus.RESOLVED, CaseStatus.REJECTED, CaseStatus.CLOSED]);
+    // Anything not yet solved is pending, open cases included, so every case
+    // lands in exactly one of the two buckets.
+    const pending = rows.filter((row) => !solved.has(row.status));
+    return {
+      raised: rows.length,
+      pending: pending.length,
+      solved: rows.filter((row) => solved.has(row.status)).length,
+      escalated: rows.filter((row) => row.status === CaseStatus.ESCALATED).length,
+    };
+  }
+
+  async search(q: VendorSearchDto): Promise<PaginatedResult<PublicVendor>> {
+    const cacheKey =
+      `vendors:search:${q.category ?? 'all'}:${q.city ?? 'all'}:${q.search ?? 'all'}:` +
+      `${q.minRating ?? 0}:${q.sort ?? 'recommended'}:${q.page}:${q.limit}`;
+    return this.redis.wrap(cacheKey, 60, async () => {
+      const qb = this.vendors
+        .createQueryBuilder('v')
+        .where('v.isApproved = :approved', { approved: true });
+      if (q.category) qb.andWhere(':category = ANY(v.categories)', { category: q.category });
+      /*
+       * Typed, not chosen.
+       *
+       * This was an equality, so it matched only somebody who typed the city
+       * exactly — "m" found nothing at all, and the report read that as the
+       * search being case-sensitive. It was already case-insensitive; it was
+       * simply not a search. A person typing into a box expects the list to
+       * narrow as they go, so this matches anywhere in the name.
+       *
+       * The wildcards in the *input* are escaped: a bare "%" would otherwise
+       * match every city on the platform, which is a confusing answer to a
+       * search rather than a dangerous one, but still not the answer asked for.
+       */
+      if (q.city) {
+        qb.andWhere('v.city ILIKE :city', { city: `%${likeEscape(q.city)}%` });
+      }
+      // A name search, escaped the same way, so the grid narrows as you type
+      // (EZ1-I164).
+      if (q.search) {
+        qb.andWhere('v.name ILIKE :search', { search: `%${likeEscape(q.search)}%` });
+      }
+      if (q.minRating !== undefined) {
+        qb.andWhere('v."ratingAvg" >= :minRating', { minRating: q.minRating });
+      }
+
+      // Count against the filters alone, before the price select and ordering
+      // that only matter to the page itself.
+      const total = await qb.clone().getCount();
+
+      /*
+       * The cheapest published offering a vendor has, as a correlated subquery
+       * so a vendor with no catalogue still appears (with a null price) rather
+       * than being joined out of the grid. Powers the "From ₹X" line and the
+       * two price sorts (EZ1-I164).
+       */
+      const priceExpr =
+        '(SELECT MIN(o.price) FROM service_offerings o ' +
+        'JOIN vendor_services vs ON vs.id = o."vendorServiceId" ' +
+        'WHERE vs."vendorId" = v.id AND vs.active = true AND o.active = true AND o.price IS NOT NULL)';
+      qb.addSelect(priceExpr, 'sp_price');
+
+      switch (q.sort) {
+        case VendorSort.RATING:
+          qb.orderBy('v.ratingAvg', 'DESC');
+          break;
+        case VendorSort.REVIEWS:
+          qb.orderBy('v.ratingCount', 'DESC');
+          break;
+        // A vendor who only quotes on request has no price to sort on; those
+        // sink to the end of either direction rather than jumping to the top.
+        case VendorSort.PRICE_ASC:
+          qb.orderBy('"sp_price"', 'ASC', 'NULLS LAST');
+          break;
+        case VendorSort.PRICE_DESC:
+          qb.orderBy('"sp_price"', 'DESC', 'NULLS LAST');
+          break;
+        case VendorSort.RECENT:
+          qb.orderBy('v.createdAt', 'DESC');
+          break;
+        default:
+          // Recommended: best rated first, the busier of two equal ratings ahead.
+          qb.orderBy('v.ratingAvg', 'DESC').addOrderBy('v.ratingCount', 'DESC');
+      }
+
+      qb.offset((q.page - 1) * q.limit).limit(q.limit);
+      const { entities, raw } = await qb.getRawAndEntities();
+      const data = entities.map((v, i) => {
+        const p = (raw[i] as { sp_price?: string | null } | undefined)?.sp_price;
+        return publicVendor(v, p === null || p === undefined ? null : Number(p));
+      });
+      return paginate(data, total, q.page, q.limit);
+    });
+  }
+
+  /** The listing as the public sees it. Never the whole row — see PublicVendor. */
+  async findOne(id: string): Promise<PublicVendor> {
+    return publicVendor(await this.loadOrFail(id));
+  }
+
+  /**
+   * The whole row, for the one account entitled to it.
+   *
+   * The vendor's own portal needs what the public view withholds: the
+   * compliance details they entered, and — the point of it — the exact reason
+   * an officer sent the listing back. A reason the vendor cannot read is a
+   * refusal with no instruction in it.
+   */
+  async findForOwner(actor: AuthUser, id: string): Promise<Vendor> {
+    const vendor = await this.loadOrFail(id);
+    if (actor.role !== UserRole.ADMIN && vendor.ownerUserId !== actor.userId) {
+      throw new ForbiddenException('That business is not yours');
+    }
+    return vendor;
+  }
+
+  private async loadOrFail(id: string): Promise<Vendor> {
+    const vendor = await this.vendors.findOne({ where: { id } });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+    return vendor;
+  }
+
+  /**
+   * Adds/updates a review and recomputes the aggregate rating atomically.
+   * The caller must already have been verified as having completed a booking
+   * with this vendor (see VendorsController) — that check lives in the booking
+   * module, which owns the booking history.
+   */
+  /**
+   * Writes a review against a specific completed booking.
+   *
+   * Screened before it is published, not instead of being published. An
+   * automatic check that refuses is a check that will one day refuse a real
+   * complaint about a real vendor — the review with the most reason to exist
+   * and the most incentive to disappear — so anything the screen dislikes is
+   * held for an administrator with its words kept verbatim.
+   */
+  /**
+   * The reviews on a listing, with the reviewer removed.
+   *
+   * This is what a vendor and a buyer both see, and the omission is the point:
+   * a vendor who knows which customer left three stars is a vendor who can
+   * take it up with them, and the prospect of that conversation is what stops
+   * the next honest review being written. So no userId, no name, no booking
+   * reference — a booking reference identifies a customer perfectly well.
+   *
+   * Only published rows. A held review is not a secret, it is simply not
+   * published yet, and showing it to the vendor before an administrator has
+   * read it would defeat the holding.
+   */
+  async listReviews(vendorId: string): Promise<
+    { id: string; rating: number; comment: string; createdAt: Date }[]
+  > {
+    const rows = await this.reviews.find({
+      where: { vendorId, status: ReviewStatus.PUBLISHED },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      rating: r.rating,
+      comment: r.comment,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  /**
+   * The vendor's own reviews, enriched for the dedicated My Reviews page
+   * (EZ1-I103): each review carries the service, package and booking it is
+   * about, plus the rating, comment and date. The reviewer is still left out —
+   * no name and no contact — so the vendor cannot trace a rating to a customer.
+   */
+  async listReviewsForOwner(
+    ownerUserId: string,
+    vendorId: string,
+  ): Promise<
+    {
+      id: string;
+      rating: number;
+      comment: string;
+      createdAt: Date;
+      bookingId: string | null;
+      serviceName: string | null;
+      offeringName: string | null;
+    }[]
+  > {
+    const vendor = await this.vendors.findOne({ where: { id: vendorId } });
+    if (!vendor) throw new NotFoundException('Listing not found');
+    if (vendor.ownerUserId !== ownerUserId) {
+      throw new ForbiddenException('This listing does not belong to you');
+    }
+
+    const reviews = await this.reviews.find({
+      where: { vendorId, status: ReviewStatus.PUBLISHED },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+    if (reviews.length === 0) return [];
+
+    // Resolve the service and package names through the booking each review is
+    // about. Reviews written before bookingId existed simply have no facts.
+    const bookingIds = [...new Set(reviews.map((r) => r.bookingId).filter(Boolean))] as string[];
+    const bookings = bookingIds.length
+      ? await this.bookingRows.find({ where: { id: In(bookingIds) } })
+      : [];
+    const bookingById = new Map(bookings.map((b) => [b.id, b]));
+
+    const serviceIds = [...new Set(bookings.map((b) => b.vendorServiceId).filter(Boolean))] as string[];
+    const offeringIds = [...new Set(bookings.map((b) => b.offeringId).filter(Boolean))] as string[];
+    const offerings = offeringIds.length
+      ? await this.offeringRows.find({ where: { id: In(offeringIds) } })
+      : [];
+    const serviceName = await serviceNamesByIds(this.serviceRows, serviceIds);
+    const offeringName = new Map(offerings.map((o) => [o.id, o.name]));
+
+    return reviews.map((r) => {
+      const booking = r.bookingId ? bookingById.get(r.bookingId) : undefined;
+      return {
+        id: r.id,
+        rating: r.rating,
+        comment: r.comment,
+        createdAt: r.createdAt,
+        bookingId: r.bookingId,
+        serviceName: booking?.vendorServiceId
+          ? (serviceName.get(booking.vendorServiceId) ?? null)
+          : null,
+        offeringName: booking?.offeringId ? (offeringName.get(booking.offeringId) ?? null) : null,
+      };
+    });
+  }
+
+  /** Which of this user's bookings already carry a review, for the eligibility check. */
+  async reviewedBookingIds(userId: string, vendorId: string): Promise<string[]> {
+    const rows = await this.reviews.find({
+      where: { userId, vendorId },
+      select: ['bookingId'],
+    });
+    return rows.map((r) => r.bookingId).filter(Boolean) as string[];
+  }
+
+  /**
+   * Every review, whoever wrote it, for the administrator.
+   *
+   * The opposite of the vendor's view on purpose: moderating a review without
+   * knowing who wrote it, what it was about and which booking it came from is
+   * moderating in the dark, and the decision is theirs to defend.
+   */
+  async listReviewsForAdmin(filter: { status?: ReviewStatus; vendorId?: string }) {
+    const where: Record<string, unknown> = {};
+    if (filter.status) where.status = filter.status;
+    if (filter.vendorId) where.vendorId = filter.vendorId;
+
+    const rows = await this.reviews.find({
+      where,
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
+    if (rows.length === 0) return [];
+
+    const [users, vendors] = await Promise.all([
+      this.users.find({
+        where: { id: In([...new Set(rows.map((r) => r.userId))]) },
+        select: ['id', 'email'],
+      }),
+      this.vendors.find({
+        where: { id: In([...new Set(rows.map((r) => r.vendorId))]) },
+        select: ['id', 'name'],
+      }),
+    ]);
+    const byUser = new Map(users.map((u) => [u.id, u.email]));
+    const byVendor = new Map(vendors.map((v) => [v.id, v.name]));
+    // A name reads faster than an address; the email stays for contacting them.
+    const reviewerNames = await displayNamesByUserIds(
+      { users: this.users, profiles: this.profiles },
+      rows.map((r) => r.userId),
+    );
+
+    return rows.map((r) => ({
+      ...r,
+      reviewerEmail: byUser.get(r.userId) ?? null,
+      reviewerName: reviewerNames.get(r.userId) ?? null,
+      vendorName: byVendor.get(r.vendorId) ?? null,
+    }));
+  }
+
+  /**
+   * The administrator's decision on a review.
+   *
+   * A reason is required for anything but publishing, because the reason is
+   * the only thing that makes the decision reviewable later — by the next
+   * administrator, or by the vendor asking why their rating moved.
+   */
+  async moderateReview(
+    actorUserId: string,
+    reviewId: string,
+    status: ReviewStatus,
+    reason: string | null,
+  ): Promise<VendorReview> {
+    const review = await this.reviews.findOne({ where: { id: reviewId } });
+    if (!review) throw new NotFoundException('Review not found');
+
+    if (status !== ReviewStatus.PUBLISHED && !reason?.trim()) {
+      throw new BadRequestException('Say why. A decision with no reason cannot be reviewed later.');
+    }
+
+    review.status = status;
+    review.moderationReason = reason?.trim() || null;
+    review.moderatedByUserId = actorUserId;
+    review.moderatedAt = new Date();
+    const saved = await this.reviews.save(review);
+
+    // The rating follows the decision. Removing a review that leaves the
+    // average untouched has not removed anything.
+    await this.dataSource.transaction((m) => this.recountRatings(m, review.vendorId));
+    await this.invalidateSearchCache();
+    return saved;
+  }
+
+  /**
+   * The published reviews, and only those.
+   *
+   * A removed review has to move the average or removing it means nothing —
+   * the number is the whole reason anybody reads this page. Held and flagged
+   * reviews do not count either: neither has been decided yet.
+   */
+  private async recountRatings(manager: EntityManager, vendorId: string): Promise<void> {
+    const vendorRepo = manager.getRepository(Vendor);
+    const reviewRepo = manager.getRepository(VendorReview);
+
+    const { avg, count } = await reviewRepo
+      .createQueryBuilder('r')
+      .select('AVG(r.rating)', 'avg')
+      .addSelect('COUNT(r.id)', 'count')
+      .where('r.vendorId = :vendorId', { vendorId })
+      .andWhere('r.status = :status', { status: ReviewStatus.PUBLISHED })
+      .getRawOne();
+
+    await vendorRepo.update(vendorId, {
+      ratingAvg: Math.round(Number(avg ?? 0) * 100) / 100,
+      ratingCount: Number(count ?? 0),
+    });
+  }
+
+  async addReview(
+    vendorId: string,
+    userId: string,
+    bookingId: string | null,
+    dto: CreateReviewDto,
+  ): Promise<Vendor> {
+    return this.dataSource.transaction(async (manager) => {
+      const vendorRepo = manager.getRepository(Vendor);
+      const reviewRepo = manager.getRepository(VendorReview);
+
+      const vendor = await vendorRepo.findOne({ where: { id: vendorId } });
+      if (!vendor) throw new NotFoundException('Vendor not found');
+      if (vendor.ownerUserId === userId) {
+        throw new ForbiddenException('You cannot review your own listing');
+      }
+
+      const verdict = screenText(dto.comment);
+      await reviewRepo.save(
+        reviewRepo.create({
+          vendorId,
+          userId,
+          bookingId,
+          rating: dto.rating,
+          comment: dto.comment ?? '',
+          status: verdict.hold ? ReviewStatus.UNDER_REVIEW : ReviewStatus.PUBLISHED,
+          moderationReason: verdict.reason,
+        }),
+      );
+
+      await this.recountRatings(manager, vendorId);
+      // Re-read so the returned rating reflects the recount above.
+      const saved = (await vendorRepo.findOne({ where: { id: vendorId } })) ?? vendor;
+      await this.invalidateSearchCache();
+      return saved;
+    });
+  }
+
+  private async invalidateSearchCache(): Promise<void> {
+    const keys = await this.redis.raw.keys('vendors:search:*');
+    if (keys.length) await this.redis.del(...keys);
+  }
+}

@@ -1,0 +1,540 @@
+/*
+ * WOW design foundation.
+ *
+ * Three tiers: primitive channel values, semantic tokens, component classes.
+ * Every colour in the app resolves through here, which is what makes a theme
+ * switch a variable swap rather than a rewrite of thirty-eight pages.
+ *
+ * Colours are stored as space-separated RGB channels, not hex, so Tailwind's
+ * `<alpha-value>` slot works: `bg-gray-900/60` composes correctly against a
+ * variable. Storing hex here would make every translucent surface in the app
+ * impossible.
+ */
+
+@import '@fontsource-variable/geist-mono';
+/* The matrimony home template's pair: Karla carries the text, Cormorant
+ * Garamond the titles. Only the weights the template sets are loaded. */
+@import '@fontsource/karla/300.css';
+@import '@fontsource/karla/400.css';
+@import '@fontsource/karla/500.css';
+@import '@fontsource/karla/600.css';
+@import '@fontsource/cormorant-garamond/300.css';
+@import '@fontsource/cormorant-garamond/400.css';
+@import '@fontsource/cormorant-garamond/500.css';
+@import '@fontsource/cormorant-garamond/400-italic.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ------------------------------------------------------------ tier 1 --
+   * Primitives. Named for what they are, never for where they are used.
+   *
+   * The palette is the matrimony home template's: an ivory ground, white
+   * panels, a maroon that does the work and gold that only ornaments. The
+   * neutral ramp leans warm toward both, so the greys read as chosen.
+   */
+  :root {
+    /* Warm plum-brown, from the template's text colours: #241017 at the top,
+     * #4F3B40 for running text, and hairlines that are that ink at 14%. */
+    --ink-50: 247 242 234;
+    --ink-100: 241 234 224;
+    --ink-200: 226 217 208;
+    --ink-300: 205 193 188;
+    --ink-400: 160 145 145;
+    --ink-500: 124 107 110;
+    --ink-600: 98 80 85;
+    --ink-700: 79 59 64;
+    --ink-800: 56 37 43;
+    --ink-900: 36 16 23;
+    --ink-950: 24 10 15;
+
+    /* The accent ramp keeps its old name, rose, so no utility changes. The
+     * template's maroon, #6E1026, at 600; #8A1230 at 500. */
+    --rose-50: 248 236 233;
+    --rose-100: 240 220 214;
+    --rose-200: 227 188 188;
+    --rose-300: 204 139 148;
+    --rose-400: 170 72 92;
+    --rose-500: 138 18 48;
+    --rose-600: 110 16 38;
+    --rose-700: 88 12 30;
+    --rose-800: 68 9 23;
+    --rose-900: 50 7 17;
+
+    /* Struck gold: the numerals, rules and heart outlines. Ornament only,
+     * never text on the ground, where it is too light to read. */
+    --gold: 169 131 47;
+    --gold-lit: 217 180 95;
+    --gold-deep: 122 90 28;
+
+    /* Semantic hues, deliberately separate from the accent. A status colour
+     * that doubles as the brand colour cannot signal anything. */
+    --positive-fg: 21 94 76;
+    --positive-bg: 226 243 237;
+    --caution-fg: 124 74 12;
+    --caution-bg: 250 240 222;
+    --critical-fg: 176 42 28;
+    --critical-bg: 253 232 228;
+    /* Neutral information: a note, a count, a state that is neither good nor
+     * bad. A muted slate blue, kept clear of the maroon accent. */
+    --info-fg: 36 72 122;
+    --info-bg: 230 238 248;
+
+    /* ---------------------------------------------------------- tier 2 --
+     * Semantic tokens. Components only ever read these.
+     */
+    /* Ivory and white: the ground is warm so white panels read as panels. */
+    --canvas: 250 246 239;
+    --surface: 255 255 255;
+    --surface-raised: 255 255 255;
+    --surface-sunken: 246 239 228;
+    --border: var(--ink-200);
+    --border-strong: var(--ink-300);
+    /* The template's hairlines are its ink at a fixed strength, not a grey:
+     * 14% for rules and panels, 28% round a field. Translucent, so a rule on
+     * the ivory ground and one on a white panel each come out as it drew them. */
+    --line: rgb(36 16 23 / 0.14);
+    --line-strong: rgb(36 16 23 / 0.28);
+
+    --brand: var(--rose-600);
+    --brand-strong: var(--rose-700);
+    --brand-soft: var(--rose-50);
+    /* What sits ON the accent. The ivory ground here, near-black in dark mode,
+     * because the accent lifts in dark mode and light text on it fails. */
+    --brand-fg: 250 246 239;
+
+    --focus: var(--rose-400);
+
+    /* Shadows tinted to the ground rather than pure black. A black shadow on a
+     * pink-white canvas reads as a hole punched in the page. */
+    --shadow-color: 36 16 23;
+
+    /*
+     * The one colour that does not invert.
+     *
+     * Everything else in this file flips between themes, which is correct for
+     * anything sitting on the page and exactly wrong for anything sitting on a
+     * photograph. A scrim exists to make white text legible over an image; if
+     * it inverts, the dark overlay becomes a light one in dark mode and the
+     * caption disappears into it. Declared once, outside the ramp, so it
+     * cannot be reached by the swap below.
+     */
+    --scrim: 14 8 11;
+
+    /* Square, as the template draws everything: ruled, not rounded. The scale
+     * is kept so the one place that ever needs a corner can take it. */
+    --radius-sm: 0; /* inputs, chips */
+    --radius-md: 0; /* buttons */
+    --radius-lg: 0; /* cards, panels */
+
+    color-scheme: light;
+  }
+
+  /*
+   * Dark mode is the same template by candlelight: the ground turns to a deep
+   * plum, panels take the template's own ink (#241017), running text is its
+   * ivory, and the accent passes from maroon to struck gold — the one pairing
+   * of the palette that holds its contrast on a dark ground. Nothing below
+   * this block knows which mode it is in.
+   *
+   * The accent ramp runs maroon → gold in dark mode: its low steps are the
+   * soft backgrounds (maroon tints, where the light theme has blush), its high
+   * steps the foregrounds (gold, then pale gold). Hand-set, not inverted, so
+   * hierarchy survives.
+   */
+  .dark {
+    --ink-50: 36 18 25;
+    --ink-100: 46 24 32;
+    --ink-200: 64 38 47;
+    --ink-300: 88 60 68;
+    --ink-400: 126 100 105;
+    --ink-500: 162 140 141;
+    --ink-600: 192 175 172;
+    --ink-700: 218 206 198;
+    --ink-800: 237 229 219;
+    --ink-900: 250 246 239;
+    --ink-950: 255 252 247;
+
+    --rose-50: 54 15 27;
+    --rose-100: 72 19 35;
+    --rose-200: 98 25 45;
+    --rose-300: 138 18 48;
+    --rose-400: 190 146 74;
+    --rose-500: 217 180 95;
+    --rose-600: 232 204 138;
+    --rose-700: 240 219 170;
+    --rose-800: 246 233 202;
+    --rose-900: 251 244 226;
+
+    --gold: 201 164 86;
+    --gold-lit: 232 200 128;
+    --gold-deep: 150 116 48;
+
+    --positive-fg: 126 214 186;
+    --positive-bg: 17 48 40;
+    --caution-fg: 226 186 116;
+    --caution-bg: 54 41 18;
+    --critical-fg: 250 160 146;
+    --critical-bg: 64 26 22;
+    --info-fg: 160 196 240;
+    --info-bg: 22 34 54;
+
+    --canvas: 26 11 17;
+    --surface: 36 16 23;
+    --surface-raised: 44 21 29;
+    --surface-sunken: 30 13 20;
+    --border: 64 38 47;
+    --border-strong: 88 60 68;
+    --line: rgb(250 246 239 / 0.14);
+    --line-strong: rgb(250 246 239 / 0.28);
+
+    --brand: var(--rose-500);
+    --brand-strong: var(--rose-600);
+    --brand-soft: var(--rose-50);
+    /* Gold carries plum type, as ivory type sits on the light theme's maroon. */
+    --brand-fg: 26 11 17;
+
+    --focus: var(--rose-400);
+    --shadow-color: 0 0 0;
+
+    color-scheme: dark;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    /* #4F3B40, the template's running text. */
+    @apply bg-canvas text-gray-700 antialiased;
+    font-family:
+      'Karla',
+      'Helvetica Neue',
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      sans-serif;
+    /* Only the theme flip animates. Animating every colour would mean every
+     * hover state in the app arrives late. */
+    transition:
+      background-color 0.3s ease,
+      color 0.3s ease;
+  }
+
+  /* Numbers, codes and identifiers. Profile codes are read aloud over the
+   * phone and compared down a column; proportional digits make that harder
+   * than it needs to be. */
+  code,
+  kbd {
+    font-family: 'Geist Mono Variable', ui-monospace, 'SF Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* `font-mono` marks figures — money, counts, scores, short ids — across the
+   * app. The template has no typewriter face, so they are set in Karla with
+   * fixed-width digits: columns still line up, and the numbers read as part of
+   * the page rather than as code. */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Display type. Tight tracking is what separates a headline from a large
+   * paragraph; it belongs on the scale, not on individual pages. */
+  h1,
+  h2,
+  h3 {
+    @apply text-gray-900;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+
+  /* The template's serif is opted into — page titles and the public pages —
+   * never put on every heading: most h2s here are small labels, and
+   * Cormorant at those sizes turns spindly. */
+  .font-serif {
+    letter-spacing: 0;
+  }
+
+  /* Cormorant's figures are old-style, as the template sets its 01 02 03 —
+   * right for ornament, wrong for data, where 1 reads as I and 0 as O. A
+   * figure marked tabular is data, so it gets lining digits. */
+  .font-serif.tabular-nums,
+  .font-serif .tabular-nums {
+    font-variant-numeric: lining-nums tabular-nums;
+  }
+
+  /* One visible focus treatment for the whole app. Keyboard users get a ring
+   * everywhere; pointer users never see it. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--focus));
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background: rgb(var(--brand) / 0.22);
+  }
+
+  /* Scrollbars, so a dark page does not come with a light gutter. */
+  * {
+    scrollbar-color: rgb(var(--border-strong)) transparent;
+    scrollbar-width: thin;
+  }
+}
+
+@layer components {
+  /* ------------------------------------------------------------ tier 3 --
+   * Components. The whole application already speaks in these four class
+   * names, so upgrading them upgrades every page at once.
+   */
+
+  /*
+   * Radius rule, applied everywhere and written down so it stays applied:
+   * inputs and chips are `sm`, buttons are `md`, cards and panels are `lg`,
+   * and only badges are fully round. Mixed corner systems are the fastest way
+   * to make a considered page look assembled.
+   */
+
+  /* The template's buttons: 12px Karla at 500, capitals tracked 0.18em, a
+   * 46px target, square and flat. */
+  .btn {
+    @apply inline-flex min-h-[2.875rem] select-none items-center justify-center gap-2 whitespace-nowrap
+      rounded-[--radius-md] bg-brand px-6 py-2.5 text-xs font-medium uppercase tracking-[0.18em] text-brand-fg
+      shadow-btn transition-[transform,background-color,box-shadow] duration-150
+      hover:bg-brand-500 active:translate-y-px active:shadow-none
+      disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  .btn-outline {
+    @apply inline-flex min-h-[2.875rem] select-none items-center justify-center gap-2 whitespace-nowrap
+      rounded-[--radius-md] border border-brand bg-transparent px-6 py-2.5 text-xs
+      font-medium uppercase tracking-[0.18em] text-brand transition-[transform,background-color,border-color] duration-150
+      hover:bg-brand-soft active:translate-y-px
+      disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  .btn-ghost {
+    @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap
+      rounded-[--radius-md] px-3 py-2 text-sm font-medium text-gray-600
+      transition-colors duration-150 hover:bg-gray-100 hover:text-gray-900
+      disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  /*
+   * A smaller button, for actions that live inside a row.
+   *
+   * The system had one button size, tuned for a page-level call to action, and
+   * a list of eight notifications therefore carried eight of them at that
+   * weight. A row action is not less important than a page action but it is
+   * repeated, and repetition is what decides how loud a control should be.
+   */
+  .btn-sm {
+    @apply min-h-[2.25rem] px-3.5 py-1.5 text-[0.6875rem] tracking-[0.14em];
+  }
+
+  /* The template's fields: 48px tall, a hairline at the ink's 28%, 15px text
+   * on the panel colour, square. */
+  .input {
+    @apply min-h-12 w-full rounded-[--radius-sm] border border-gray-300 bg-surface px-3 py-2.5
+      text-[0.9375rem] text-gray-900 transition-[border-color,box-shadow] duration-150
+      placeholder:text-gray-400
+      focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/12
+      disabled:opacity-55;
+  }
+
+  select.input {
+    @apply cursor-pointer appearance-none bg-[length:1.1em] bg-[right_0.6rem_center] bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237C6B6E' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  }
+
+  .card {
+    @apply rounded-[--radius-lg] border border-gray-200 bg-surface p-5 shadow-card;
+  }
+
+  /* For the one or two places that genuinely need to sit above a card. */
+  .card-raised {
+    @apply rounded-[--radius-lg] border border-gray-200 bg-surface-raised p-5 shadow-lifted;
+  }
+
+  /* The template's field label: 11px capitals tracked 0.22em, above the field. */
+  .label {
+    @apply mb-2 block text-[0.6875rem] font-normal uppercase tracking-[0.22em] text-gray-900/80;
+  }
+
+  /*
+   * The other way fields are written here: a <label> wrapping its caption in a
+   * <span> and the control after it. Forty-odd forms use that shape, so the
+   * caption takes the template's label from the shape rather than from a class
+   * each of them would have to remember.
+   */
+  label:has(.input) > span:first-child {
+    @apply mb-1 block text-[0.6875rem] font-normal uppercase tracking-[0.22em] text-gray-900/80;
+  }
+
+  /* A page title and its one-line explanation, used at the top of every
+   * screen. Written once so the app has a single masthead rhythm. */
+  .page-title {
+    @apply plate w-fit font-serif text-[2rem] font-normal leading-[1.1] text-brand sm:text-[2.5rem];
+  }
+
+  /* Clears the heart field from behind a run of text: a patch of the ground
+   * colour with an 11px margin of it, as the template does. */
+  .plate {
+    background: rgb(var(--canvas));
+    box-shadow: 0 0 0 11px rgb(var(--canvas));
+  }
+
+  /* Inside a panel there is no heart field to clear, and an ivory plate on
+   * white would show as a box. */
+  .card .page-title,
+  .card .page-subtitle,
+  .card-raised .page-title,
+  .card-raised .page-subtitle {
+    background: none;
+    box-shadow: none;
+  }
+
+  /* The template's small uppercase line above or beside a heading. */
+  .eyebrow {
+    @apply text-[0.6875rem] uppercase tracking-[0.3em] text-gray-900/80;
+  }
+
+  .page-subtitle {
+    @apply plate mt-1 w-fit max-w-[65ch] text-[0.9375rem] leading-[1.75] text-gray-700;
+  }
+
+  /* Status tags. Square like everything else in the template; what tells a
+   * state from a control is that it has no border and no hover. */
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-[--radius-sm] px-2.5 py-1 text-xs font-medium tracking-[0.02em];
+  }
+  .pill-neutral {
+    @apply pill bg-gray-100 text-gray-600;
+  }
+  .pill-brand {
+    @apply pill bg-brand-soft text-brand-strong;
+  }
+  .pill-positive {
+    @apply pill bg-positive-bg text-positive-fg;
+  }
+  .pill-caution {
+    @apply pill bg-caution-bg text-caution-fg;
+  }
+  .pill-critical {
+    @apply pill bg-critical-bg text-critical-fg;
+  }
+
+  /*
+   * Inline messages.
+   *
+   * There were fifty-eight of these written by hand across the app, in four
+   * spellings of the same idea: `rounded bg-red-50 p-3 text-sm text-red-600`
+   * and three near-misses. They are one class each now, which is the only way
+   * an error looks the same on the page that reports it and the page that
+   * reports it differently.
+   *
+   * `role="alert"` belongs on the element, not in here, because whether a
+   * message interrupts a screen reader depends on whether it arrived in
+   * response to something the person just did.
+   */
+  .alert {
+    @apply flex items-start gap-2 rounded-[--radius-sm] px-3 py-2.5 text-sm;
+  }
+  .alert-critical {
+    @apply alert bg-critical-bg text-critical-fg;
+  }
+  .alert-caution {
+    @apply alert bg-caution-bg text-caution-fg;
+  }
+  .alert-positive {
+    @apply alert bg-positive-bg text-positive-fg;
+  }
+  .alert-neutral {
+    @apply alert bg-surface-sunken text-gray-600;
+  }
+
+  /*
+   * A heading inside a page, below the masthead.
+   *
+   * Distinct from `.page-title` on purpose: a screen has one top and any number
+   * of sections, and giving them the same treatment is how a page stops having
+   * a shape. This is the quieter one.
+   */
+  .section-title {
+    @apply font-serif text-[1.5rem] font-normal leading-[1.15] tracking-normal text-brand;
+  }
+
+  /* The line under a section heading. Same relationship as the page subtitle. */
+  .section-subtitle {
+    @apply mt-0.5 max-w-[70ch] text-sm leading-relaxed text-gray-700;
+  }
+
+  /*
+   * Loading placeholders shaped like the thing that is coming, rather than a
+   * spinner. A spinner says "wait"; a skeleton says "wait, and here is what
+   * for", which is the difference between a pause and a blank screen.
+   */
+  .skeleton {
+    @apply relative overflow-hidden rounded-[--radius-sm] bg-gray-200;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(90deg, transparent, rgb(var(--surface) / 0.55), transparent);
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  /* One card sliding in over the last, for step-by-step forms. The direction
+   * follows the step: forward comes in from the right, back from the left. */
+  .card-swap-next {
+    animation: card-swap-next 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .card-swap-prev {
+    animation: card-swap-prev 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes card-swap-next {
+    from {
+      opacity: 0;
+      transform: translateX(2.5rem);
+    }
+  }
+  @keyframes card-swap-prev {
+    from {
+      opacity: 0;
+      transform: translateX(-2.5rem);
+    }
+  }
+
+  /* A hairline that fades at both ends. Used to separate sections without the
+   * hard ruled-paper look of a full-bleed border. */
+  .rule {
+    @apply h-px w-full border-0;
+    background: linear-gradient(90deg, transparent, var(--line) 18%, var(--line) 82%, transparent);
+  }
+}
+
+/*
+ * Everything above degrades to static under a reduced-motion preference.
+ * Shimmer, the theme fade and every transition collapse; nothing in this app
+ * conveys meaning through movement alone, so there is nothing to replace.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

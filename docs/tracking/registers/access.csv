@@ -1,0 +1,10 @@
+ID,System,AccessNeeded,HumanOwner,MachineIdentity,SecretLocation,Status,VerifiedDate,Notes
+ACC-001,GitHub,Repository admin and Actions environments,RohithTadiparti,GitHub Actions token,Github platform,Available,2026-10-04,Private repository created
+ACC-002,Railway,Project owner deploy variables domains usage and rollback,To be confirmed,Later project token,GitHub railway-beta environment,Pending,,Do not create production domain until final gate
+ACC-003,AWS root,Ownership billing recovery and MFA,To be confirmed,None,AWS account,Pending,,No routine root use
+ACC-004,AWS administrator,Identity Center or role for bootstrap IAM S3 KMS budgets and OIDC,To be confirmed,GitHub bootstrap OIDC role,AWS and GitHub environments,Pending,,Prefer SSO and OIDC over access keys
+ACC-005,AWS S3 runtime,Media-prefix object access only,To be confirmed,Railway runtime principal,Railway variables,Pending,,No bucket admin permissions
+ACC-006,DNS provider,Zone read and DNS edit for production domain,To be confirmed,Scoped DNS token,GitHub production environment,Pending,,No global API key
+ACC-007,Operational email,Mailbox or SMTP provider and recipient list,To be confirmed,SMTP/API identity,GitHub or Railway secrets,Mock,,Log provider until approved
+ACC-008,Payment provider,Razorpay sandbox then production account,To be confirmed,Webhook/API credentials,Protected secret store,Deferred,,Separate onboarding gate
+ACC-009,SMS WhatsApp push identity,Provider sandbox then production accounts,To be confirmed,Provider credentials,Protected secret store,Deferred,,Separate onboarding gates

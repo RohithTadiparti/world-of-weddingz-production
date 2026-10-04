@@ -1,0 +1,256 @@
+import { IntakeBiodataDto } from './intake-biodata.dto';
+import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
+import { IsAdultDate } from '../../../common/decorators/adult-date.decorator';
+import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
+import { Transform, Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsDateString,
+  IsEmail,
+  IsDefined,
+  IsEnum,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import {
+  ConsentMethod,
+  ConsentRelation,
+  ProfileClaimStatus,
+  ProfileVisibility,
+} from '../../../common/enums';
+import { PaginationDto } from '../../../common/dto/pagination.dto';
+import { StrictBoolean } from '../../../common/decorators/strict-boolean.decorator';
+import { PreferencesDto } from '../../users/dto/profile.dto';
+import { normaliseEmail } from '../../auth/dto/auth.dto';
+import {
+  MOBILE_MESSAGE,
+  MOBILE_PATTERN,
+  normaliseMobile,
+} from '../../../common/util/identity-fields';
+
+/**
+ * How the family gave permission, captured at intake.
+ *
+ * Required, not optional. A walk-in family hands over their details verbally;
+ * without a record of who agreed to what and when, the platform is holding a
+ * real person's name, photograph and phone number on nothing but trust.
+ */
+export class IntakeConsentDto {
+  @ApiProperty({ enum: ConsentMethod, example: ConsentMethod.IN_PERSON })
+  @IsEnum(ConsentMethod)
+  method: ConsentMethod;
+
+  @ApiProperty({
+    enum: ConsentRelation,
+    description: 'Who gave it — frequently a parent rather than the subject.',
+  })
+  @IsEnum(ConsentRelation)
+  givenByRelation: ConsentRelation;
+
+  // Not asked for `self`: the profile is the person themselves, so requiring
+  // their name a second time made the most ordinary answer — "the person
+  // themselves" — the one that could not be saved (the reported defect). For
+  // every other relation it stays mandatory.
+  @ApiPropertyOptional({ example: 'Ramesh Sharma', minLength: 2, maxLength: 120 })
+  @ValidateIf((o: IntakeConsentDto) => o.givenByRelation !== ConsentRelation.SELF)
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  givenByName?: string;
+
+  @ApiPropertyOptional({ example: '+919876543210' })
+  @IsOptional()
+  @Transform(normaliseMobile)
+  @Matches(MOBILE_PATTERN, { message: MOBILE_MESSAGE })
+  givenByPhone?: string;
+
+  @ApiProperty({ format: 'date', example: '2026-08-12' })
+  @IsDateString({}, { message: 'givenAt must be a date, e.g. 2026-08-12' })
+  @IsNotFutureDate({ message: 'A consent date cannot be in the future' })
+  givenAt: string;
+
+  @ApiPropertyOptional({ maxLength: 1000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
+
+  /**
+   * Whether they also agreed to the profile being passed outside the agency.
+   * Separate on purpose: agreeing to the agency holding your details is not
+   * agreeing to them circulating them.
+   */
+  @ApiPropertyOptional({ type: Boolean, default: false })
+  @IsOptional()
+  @StrictBoolean()
+  allowsCirculation?: boolean | string;
+}
+
+/**
+ * A profile a steward builds for somebody else.
+ *
+ * A mobile number and email are both optional at intake. An agent can save the
+ * profile from the biodata and add either contact channel later; at least one
+ * channel is required only when the person is invited to claim their account.
+ */
+export class CreateManagedProfileDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => IntakeBiodataDto)
+  biodata?: IntakeBiodataDto;
+
+  @IsOptional()
+  @IsUploadedUrl()
+  @MaxLength(2048)
+  biodataDocumentUrl?: string;
+
+  /**
+   * How you are related to them, for a family member stewarding a relative.
+   *
+   * Optional, because an agency has no answer to it — their relationship to a
+   * client is commercial and lives on the agency record.
+   */
+  @ApiPropertyOptional({ example: 'Father', maxLength: 60 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  stewardRelation?: string;
+
+  @ApiProperty({ example: 'Priya Sharma', minLength: 2, maxLength: 120 })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  displayName: string;
+
+  @ApiPropertyOptional({
+    example: '+919876543210',
+    description: 'A mobile number for an eventual SMS invitation. Optional at intake.',
+  })
+  @IsOptional()
+  @Transform(normaliseMobile)
+  @Matches(MOBILE_PATTERN, { message: MOBILE_MESSAGE })
+  contactPhone?: string;
+
+  @ApiPropertyOptional({
+    example: 'priya@example.com',
+    description: 'An email address for an eventual invitation. Optional at intake.',
+  })
+  @IsOptional()
+  @IsEmail({}, { message: 'Enter a valid email address, or leave it blank' })
+  @MaxLength(254)
+  @Transform(normaliseEmail)
+  contactEmail?: string;
+
+  /**
+   * @IsDefined is load-bearing: @ValidateNested on its own passes when the
+   * property is absent entirely, so a request with no consent block reached the
+   * service and crashed rather than being refused.
+   */
+  @ApiProperty({ type: IntakeConsentDto })
+  @IsDefined({ message: 'Record how the family gave consent before saving the profile' })
+  @ValidateNested()
+  @Type(() => IntakeConsentDto)
+  consent: IntakeConsentDto;
+
+  @ApiPropertyOptional({ maxLength: 30 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  gender?: string;
+
+  @ApiPropertyOptional({ format: 'date' })
+  @IsOptional()
+  @IsDateString()
+  @IsNotFutureDate({ message: 'A date of birth cannot be in the future' })
+  @IsAdultDate(18, { message: 'The client must be at least 18 years old' })
+  dateOfBirth?: string;
+
+  @ApiPropertyOptional({ maxLength: 80 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
+
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  bio?: string;
+
+  @ApiPropertyOptional({ type: [String], maxItems: 20, description: 'Absolute media URLs' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUploadedUrl({ each: true })
+  @MaxLength(2048, { each: true })
+  photos?: string[];
+
+  @ApiPropertyOptional({ type: PreferencesDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PreferencesDto)
+  preferences?: PreferencesDto;
+
+  @ApiPropertyOptional({ enum: ProfileVisibility })
+  @IsOptional()
+  @IsEnum(ProfileVisibility)
+  visibility?: ProfileVisibility;
+
+  /** Send the invitation straight away instead of saving a draft. */
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean()
+  inviteNow?: boolean;
+}
+
+/**
+ * Contact details stay editable while the profile is unclaimed. Once the
+ * subject owns it, the service refuses edits entirely — see
+ * ManagedProfilesService.update.
+ *
+ * Consent is deliberately NOT editable here: changing what a family agreed to
+ * is not an edit, it is a new consent record (POST /circulation/profiles/:id/consent).
+ */
+export class UpdateManagedProfileDto extends OmitType(PartialType(CreateManagedProfileDto), [
+  'consent',
+] as const) {}
+
+export class ManagedProfileSearchDto extends PaginationDto {
+  @ApiPropertyOptional({ description: 'Free-text match on name, email or city' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
+
+  @ApiPropertyOptional({ enum: ProfileClaimStatus })
+  @IsOptional()
+  @IsEnum(ProfileClaimStatus)
+  claimStatus?: ProfileClaimStatus;
+}
+
+export class AddProfilePhotoDto {
+  @ApiProperty({ maxLength: 2048 })
+  @IsUploadedUrl()
+  @MaxLength(2048)
+  url: string;
+}
+
+/** The agent's note when asking somebody to take a profile built for them. */
+export class RequestProfileClaimDto {
+  @ApiPropertyOptional({
+    maxLength: 500,
+    description: 'Context that helps them recognise you — where you met, when.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  message?: string;
+}

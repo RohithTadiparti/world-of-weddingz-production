@@ -1,0 +1,13 @@
+ID,Gate,Environment,RequiredEvidence,Status,Owner,Evidence,ApprovedDate
+GATE-001,Source baseline and secret scan,Repository,Clean-history baseline and secret scan,Complete,Codex,Initial repository setup 2026-10-04,2026-10-04
+GATE-002,Required CI and security checks,Repository,Green lint typecheck unit E2E build CodeQL dependency secret and IaC checks,Open,Unassigned,,
+GATE-003,Public-beta security blockers,Railway candidate,SEC-001 SEC-002 OPS-001 SEC-003 DEP-001 closed,Open,Unassigned,,
+GATE-004,Observability and backup restore,Railway candidate,30-day logs alerts backup and successful restore,Open,Unassigned,,
+GATE-005,Private S3 media,Railway candidate,Privacy persistence reconciliation and recovery evidence,Open,Unassigned,,
+GATE-006,Railway capacity,Railway candidate,Load report with 30 percent headroom,Open,Unassigned,,
+GATE-007,All-role release tests,Railway candidate,Current Playwright account wedding API and DB comparison evidence,Open,Unassigned,,
+GATE-008,Production domain attachment,Railway public,GATE-002 through GATE-007 approved,Open,Product owner,,
+GATE-009,AWS successful migration rehearsal,AWS rehearsal,Exact reconciliation all journeys and observation pass,Open,Unassigned,,
+GATE-010,AWS rollback rehearsal,AWS rehearsal,Before-DNS and after-DNS rollback evidence,Open,Unassigned,,
+GATE-011,Real migration executor enablement,Production,AWS budget MFA backup Terraform and rehearsals green,Open,Product owner,,
+GATE-012,Railway decommission,Production,72-hour stable AWS operation and separate approval,Open,Product owner,,

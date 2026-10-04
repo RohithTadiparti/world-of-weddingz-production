@@ -1,0 +1,132 @@
+# Daily Android test build.
+#
+# Runs once a day, and builds only when main has changed the app since the last
+# successful run — no change, no build. "Run workflow" on the Actions tab builds
+# on demand; tick "force" to build even when nothing changed.
+#
+# What counts as a change: anything under mobile/, and frontend/src/lib/, which
+# the app reads a handful of modules out of (see mobile/metro.config.js).
+#
+# The APK is built here, on GitHub's runner, and published as the release
+# "android-latest" (wow.apk), replaced on every build, so its download link
+# never changes. Nothing is committed back to the repository and no secrets are
+# needed.
+#
+# iOS is left out for now; it goes through EAS (see docs/MOBILE-BUILDS.md) and
+# gets its own job once the Apple account is set up.
+
+name: Mobile builds
+
+on:
+  schedule:
+    # 21:00 UTC = 02:30 IST, after the day's merges.
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if nothing changed since the last build
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # the android-latest release
+  actions: read # finding the last successful run
+
+concurrency:
+  group: mobile-builds
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      summary: ${{ steps.decide.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          # The commit the last successful run built from.
+          last=$(gh run list --workflow mobile-builds.yml --branch main --status success \
+            --limit 1 --json headSha --jq '.[0].headSha // ""')
+          if [ "$FORCE" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "summary=Forced build" >> "$GITHUB_OUTPUT"
+          elif [ -z "$last" ] || ! git cat-file -e "$last^{commit}" 2>/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "summary=No earlier build to compare with" >> "$GITHUB_OUTPUT"
+          else
+            changed=$(git diff --name-only "$last" HEAD -- mobile frontend/src/lib | wc -l)
+            if [ "$changed" -gt 0 ]; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "summary=$changed app files changed since ${last:0:7}" >> "$GITHUB_OUTPUT"
+            else
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "summary=No app changes since ${last:0:7}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - run: echo "${{ steps.decide.outputs.summary }}" >> "$GITHUB_STEP_SUMMARY"
+
+  android:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      EXPO_PUBLIC_API_URL: https://test.worldofweddingz.com/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+      - run: npm ci
+      - run: npm run typecheck
+      # ios/ and android/ are generated, never committed (see docs/MOBILE-BUILDS.md).
+      - run: npx expo prebuild --platform android --no-install
+        env:
+          CI: 1
+      # arm64 only: nearly every phone in use, and a third of the build time.
+      # Signed with the React Native template's debug key, the same one every
+      # build uses, so a new APK installs over the last.
+      - run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
+        working-directory: mobile/android
+      - run: cp android/app/build/outputs/apk/release/app-release.apk ../wow.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wow-android-${{ github.sha }}
+          path: wow.apk
+          retention-days: 14
+      - name: Publish the android-latest release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Android test build of ${GITHUB_SHA:0:7}, $(date -u '+%Y-%m-%d %H:%M UTC'). Talks to the test API."
+          # Recreated rather than edited: editing a release does not move its
+          # tag, which would go on naming the first commit ever built. The
+          # download URL is the same either way.
+          gh release delete android-latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create android-latest wow.apk --prerelease \
+            --title "Android test build" --notes "$notes" --target "$GITHUB_SHA"
+          echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/android-latest/wow.apk" >> "$GITHUB_STEP_SUMMARY"

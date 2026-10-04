@@ -1,0 +1,1458 @@
+import { Navigate, Route, Routes, Link, useLocation, useNavigate } from 'react-router-dom';
+import { ReactNode, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from './store/auth';
+import { api, bootstrapSession } from './lib/api';
+import { Permission, PermissionValue, ROLE_LABEL, UserRole, canAny } from './lib/permissions';
+import { navDenied } from './lib/nav-access';
+import { describe, type Notification, UNREAD_POLL_MS } from './lib/notification-copy';
+import type { Icon } from '@phosphor-icons/react';
+import {
+  AddressBook,
+  AirplaneTilt,
+  Bell,
+  Briefcase,
+  Buildings,
+  CalendarBlank,
+  CalendarCheck,
+  ChatCircle,
+  ClipboardText,
+  Coins,
+  Confetti,
+  Gauge,
+  Graph,
+  HandHeart,
+  House,
+  IdentificationCard,
+  Images,
+  Lifebuoy,
+  MagicWand,
+  Receipt,
+  SealCheck,
+  ShareNetwork,
+  ShieldCheck,
+  Sparkle,
+  Star,
+  Storefront,
+  UsersThree,
+  Vault,
+  CaretDown,
+  Desktop,
+  List,
+  Moon,
+  SignOut,
+  Sun,
+  UserCircle,
+  Warning,
+} from '@phosphor-icons/react';
+import Sidebar, { SidebarEntry } from './components/Sidebar';
+import ErrorBoundary from './components/ErrorBoundary';
+import { DARK_MODE_ENABLED, useTheme } from './store/theme';
+import { motion, useReducedMotion } from 'motion/react';
+import Login from './pages/Login';
+import Home from './pages/Home';
+import Register from './pages/Register';
+import AcceptInvite from './pages/AcceptInvite';
+import AgentSignup from './pages/AgentSignup';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
+import GuestRsvp from './pages/GuestRsvp';
+import GetApp from './pages/GetApp';
+import SharedInvitation from './pages/SharedInvitation';
+import Dashboard from './pages/Dashboard';
+import Profile from './pages/Profile';
+import Matches from './pages/Matches';
+import Vendors from './pages/Vendors';
+import VendorDetail from './pages/VendorDetail';
+import Planner from './pages/Planner';
+import PlannerClients from './pages/PlannerClients';
+import PlannerClientDetail from './pages/PlannerClientDetail';
+import PlannerRequests from './pages/PlannerRequests';
+import PlannerEventWorkspace from './pages/PlannerEventWorkspace';
+import PlannerWeddings from './pages/PlannerWeddings';
+import PlannerTasks from './pages/PlannerTasks';
+import Chat from './pages/Chat';
+import Bookings from './pages/Bookings';
+import Genie from './pages/Genie';
+import Events from './pages/Events';
+import Travel from './pages/Travel';
+import Media from './pages/Media';
+import AdminLayout, { ADMIN_NAV as ADMIN_PORTAL_NAV } from './pages/admin/AdminLayout';
+import AdminDashboard from './pages/admin/AdminDashboard';
+import AdminBookingDetail from './pages/admin/AdminBookingDetail';
+import AdminPaymentDetail from './pages/admin/AdminPaymentDetail';
+import AdminAccountDetail from './pages/admin/AdminAccountDetail';
+import AdminProfileDetail from './pages/admin/AdminProfileDetail';
+import AdminBusinessDetail from './pages/admin/AdminBusinessDetail';
+import AdminSupport from './pages/admin/AdminSupport';
+import {
+  AdminAgents,
+  AdminAuditLogs,
+  AdminBookings,
+  AdminComingSoon,
+  AdminOfficers,
+  AdminPayments,
+  AdminPlanners,
+  AdminReports,
+  AdminServicesCatalog,
+  AdminUsers,
+  AdminVendors,
+} from './pages/admin/AdminPages';
+import SharedAlbum from './pages/SharedAlbum';
+import AgentClients from './pages/AgentClients';
+import ManagedProfiles from './pages/ManagedProfiles';
+import SharedWithMe from './pages/SharedWithMe';
+import NetworkPool from './pages/NetworkPool';
+import Interests from './pages/Interests';
+import SharedBiodata from './pages/SharedBiodata';
+import Agency from './pages/Agency';
+import AgentReviews from './pages/AgentReviews';
+import Security from './pages/Security';
+import Support from './pages/Support';
+import ProviderConsole from './pages/ProviderConsole';
+import WeddingPlanners from './pages/WeddingPlanners';
+import PlannerDetail from './pages/PlannerDetail';
+import PlannerPortfolio from './pages/PlannerPortfolio';
+import PlannerWeddingDetail from './pages/PlannerWeddingDetail';
+import Forbidden from './pages/Forbidden';
+import Verification from './pages/Verification';
+import OfficerCases from './pages/OfficerCases';
+import Visits from './pages/Visits';
+import CalendarPage from './pages/Calendar';
+import SetPassword from './pages/SetPassword';
+import Availability from './pages/Availability';
+import Accounts from './pages/Accounts';
+import AccountsTransaction from './pages/AccountsTransaction';
+import Escrow from './pages/Escrow';
+import AgentEscrow from './pages/AgentEscrow';
+import MyReviews from './pages/MyReviews';
+import PlannerReviews from './pages/PlannerReviews';
+import Notifications from './pages/Notifications';
+import Biodata from './pages/Biodata';
+import BusinessSwitcher from './components/BusinessSwitcher';
+import PlannerRejectionModal from './components/PlannerRejectionModal';
+import { Loading } from './components/ui/Feedback';
+
+/**
+ * Every nav entry declares the capabilities it needs. A user sees an entry only
+ * if they hold at least one of them, which is what keeps a vendor from being
+ * shown Matches or a bride from being shown the Admin console.
+ */
+interface NavEntry {
+  to: string;
+  label: string;
+  requires: PermissionValue[];
+  /**
+   * Roles that hold the permission but should not see the entry.
+   *
+   * Used sparingly, and only where the capability is real but the *entry* is
+   * redundant for that role — a vendor can chat, and does, but every one of
+   * their conversations is about a job, so the conversation lives on the job.
+   * A top-level Chat menu offers them a thread the booking rules cannot reach.
+   */
+  hideFor?: UserRole[];
+  /**
+   * A different word for the same destination, for roles that would misread
+   * the default one.
+   *
+   * The alternative was `hideFor`, and that is what this replaced on
+   * /client-profiles: a family steward holds the same capability an agency
+   * does, so hiding the entry to avoid calling their daughter a "client" also
+   * took away the only page that can create, invite or circulate a profile.
+   * Renaming it costs nothing and keeps the capability reachable.
+   */
+  labelFor?: Partial<Record<UserRole, string>>;
+  /**
+   * Where to send a role that is refused this entry.
+   *
+   * The dashboard, unless the thing they were looking for now lives somewhere
+   * specific -- an agent following an old Client Profiles link wants their
+   * clients, and bouncing them to the dashboard makes them hunt (EZ1-I241).
+   */
+  deniedRedirect?: string;
+  /**
+   * Which band of the sidebar this sits in.
+   *
+   * The navigation carried twenty-five destinations in one wrapping pill row,
+   * which at any real window width became two lines of pills and stopped being
+   * scannable at about the eighth item. Grouping is what makes a list that long
+   * navigable: nobody reads twenty-five labels, everybody reads five headings.
+   *
+   * Most accounts see three or four of these, because the entries are already
+   * filtered by capability before the groups are drawn.
+   */
+  group: NavGroup;
+  icon: Icon;
+}
+
+export type NavGroup = 'main' | 'matchmaking' | 'clients' | 'wedding' | 'business' | 'operations' | 'account';
+
+/** Order is the order they appear. Titles are omitted for `main` on purpose. */
+export const NAV_GROUPS: { key: NavGroup; title: string | null }[] = [
+  { key: 'main', title: null },
+  { key: 'matchmaking', title: 'Matchmaking' },
+  { key: 'clients', title: 'Clients' },
+  { key: 'wedding', title: 'The wedding' },
+  { key: 'business', title: 'Your business' },
+  { key: 'operations', title: 'Operations' },
+  { key: 'account', title: 'Account' },
+];
+
+const NAV: NavEntry[] = [
+  { to: '/', label: 'Dashboard', requires: [], group: 'main', icon: House },
+  { to: '/matches', label: 'Matches', requires: [Permission.MATCH_BROWSE], group: 'matchmaking', icon: Sparkle },
+  {
+    to: '/biodata',
+    label: 'Biodata',
+    requires: [Permission.MATCH_BROWSE, Permission.MANAGED_PROFILE_MANAGE],
+    group: 'matchmaking',
+    icon: IdentificationCard,
+  },
+  {
+    to: '/chat',
+    label: 'Chat',
+    requires: [Permission.CHAT_INQUIRE, Permission.CHAT_MATCH],
+    // Not for vendors: theirs is inside the booking, where it opens on the
+    // advance and locks when the job is done.
+    //
+    // Nor for a planner or a verification officer. Both hold CHAT_INQUIRE
+    // because both legitimately talk to people — a planner inside a booking,
+    // an officer inside a case — and a general-purpose message list is a
+    // second, unscoped channel into the same conversations. The officer's is
+    // the sharper version of the problem: their whole job is to be an
+    // independent visitor, and a private line to the applicant they are
+    // assessing is not something to leave lying about.
+    hideFor: ['vendor', 'planner', 'in_person'],
+    group: 'matchmaking',
+    icon: ChatCircle,
+  },
+  {
+    to: '/client-profiles',
+    label: 'Client Profiles',
+    labelFor: { family: 'Family Profiles' },
+    requires: [Permission.MANAGED_PROFILE_MANAGE],
+    /*
+     * A family member has relatives, not clients — so they get the same page
+     * under their own word for it.
+     *
+     * This used to be `hideFor: ['family']`, on the reasoning that "Client
+     * Profiles" is an agency's vocabulary and the profiles were "still
+     * reachable from Biodata". The second half was not true: Biodata offers a
+     * family only ProfileSelector, which lists profiles that already exist and
+     * creates none. This page is the sole caller of POST /agents/profiles,
+     * POST /agents/profiles/:id/invite and ShareProfileDialog, and hideFor is
+     * enforced as a redirect, so a family member could not create a relative's
+     * profile, send the claim invitation, or circulate the biodata at all —
+     * four permissions granted to the role with nowhere to exercise them
+     * (council round 2).
+     */
+    /*
+     * An agent has one client page now, and this is the lower half of it
+     * (EZ1-I241). The section was moved rather than rebuilt, so nothing an
+     * agent could do here was lost -- only the second entry in the rail, and
+     * the trip between two pages to see one client.
+     *
+     * A family member keeps it as a page of its own: they have no My Clients,
+     * and this is the only route to creating, inviting or circulating a
+     * relative's profile.
+     */
+    hideFor: ['agent'],
+    deniedRedirect: '/',
+    group: 'clients',
+    icon: UsersThree,
+  },
+  {
+    to: '/shared-with-me',
+    label: 'Shared With Me',
+    requires: [Permission.ACT_ON_BEHALF],
+    // Circulation is agency-to-agency. Nothing is ever shared with a family.
+    hideFor: ['family'],
+    group: 'clients',
+    icon: ShareNetwork,
+  },
+  {
+    to: '/agent-escrow',
+    label: 'Escrow',
+    requires: [Permission.AGENCY_MANAGE],
+    group: 'business',
+    icon: Vault,
+  },
+  { to: '/pool', label: 'Network Pool', requires: [Permission.NETWORK_POOL_BROWSE], group: 'clients', icon: Graph },
+  {
+    to: '/interests',
+    label: 'Interests',
+    // Everybody who can be asked about, plus the stewards who answer on
+    // somebody's behalf. It used to be steward-only and called Proposals,
+    // which left an individual with no screen showing who had asked about
+    // them.
+    requires: [Permission.MATCH_BROWSE, Permission.ACT_ON_BEHALF],
+    // A family member stewards a relative and is also a client; a vendor has
+    // no profile to be asked about at all.
+    hideFor: ['vendor', 'planner', 'in_person'],
+    group: 'matchmaking',
+    icon: HandHeart,
+  },
+  { to: '/clients', label: 'My Clients', requires: [Permission.CLIENT_READ], group: 'clients', icon: AddressBook },
+  /*
+   * A planner's clients, which are not an agent's clients.
+   *
+   * Kept as its own address rather than sharing /clients: an agent's client is
+   * somebody whose profile they manage, a planner's is a wedding they were
+   * hired to run, and the two pages answer different questions. One route
+   * serving both would need a fork at the top of every screen below it.
+   */
+  { to: '/my-clients', label: 'My Clients', requires: [Permission.PLAN_MANAGE_ENGAGED], group: 'clients', icon: AddressBook },
+  { to: '/weddings', label: 'My Weddings', requires: [Permission.PLAN_MANAGE_ENGAGED], group: 'wedding', icon: CalendarCheck },
+  { to: '/tasks', label: 'Tasks', requires: [Permission.PLAN_MANAGE_ENGAGED], group: 'wedding', icon: ClipboardText },
+  { to: '/agency', label: 'My Agency', requires: [Permission.AGENCY_MANAGE], group: 'clients', icon: Buildings },
+  // Reviews are about how the agency is doing, not what it is, so they get
+  // their own entry rather than living inside the agency's details form
+  // (EZ1-I229).
+  { to: '/agency/reviews', label: 'My Reviews', requires: [Permission.AGENCY_MANAGE], group: 'clients', icon: Star },
+  { to: '/vendors', label: 'Vendors', requires: [Permission.BOOKING_CREATE, Permission.PLANNER_LISTING_MANAGE], group: 'wedding', icon: Storefront },
+  // "Planners" and "Planner" next to each other were indistinguishable. One is
+  // the marketplace where a planner is hired; the other is the couple's own
+  // timeline. The labels now say which is which.
+  { to: '/wedding-planners', label: 'Hire a Planner', requires: [Permission.BOOKING_CREATE], group: 'wedding', icon: ClipboardText },
+  {
+    to: '/console',
+    label: 'My Business',
+    requires: [Permission.VENDOR_LISTING_MANAGE, Permission.PLANNER_LISTING_MANAGE],
+    group: 'business',
+    icon: Briefcase,
+  },
+  {
+    to: '/availability',
+    label: 'Availability',
+    // Both kinds of provider now. A planner takes bookings against dates
+    // exactly as a vendor does; availability was simply keyed to vendors.
+    requires: [Permission.VENDOR_LISTING_MANAGE, Permission.PLANNER_LISTING_MANAGE],
+    group: 'business',
+    icon: CalendarBlank,
+  },
+  { to: '/accounts', label: 'Accounts', requires: [Permission.BOOKING_READ_INCOMING], group: 'business', icon: Coins },
+  // A vendor's own reviews, on their own page rather than inside My Business
+  // (EZ1-I103).
+  { to: '/my-reviews', label: 'My Reviews', requires: [Permission.VENDOR_LISTING_MANAGE], group: 'business', icon: Star },
+  // The planner's own reviews. A separate entry rather than a shared one: the
+  // two hang off different listings and read from different tables (EZ1-I244).
+  { to: '/planner-reviews', label: 'Reviews & Ratings', requires: [Permission.PLANNER_LISTING_MANAGE], group: 'business', icon: Star },
+  {
+    to: '/planner',
+    label: 'My Wedding Plan',
+    requires: [Permission.PLAN_MANAGE_OWN, Permission.PLAN_MANAGE_ENGAGED],
+    /*
+     * Not the wedding planner's, despite the permission.
+     *
+     * `requires` is any-of, and a planner holds PLAN_MANAGE_ENGAGED because
+     * they genuinely co-manage the weddings they are hired for. So the entry
+     * matched and the screen appeared — but this screen is the couple's own
+     * timeline, it is written in the couple's voice ("Your own timeline",
+     * "Looking to hire a wedding planner?"), and generating a plan on it needs
+     * PLAN_MANAGE_OWN, which a planner does not hold. Pressing the button
+     * produced a permission error naming a capability the account was never
+     * meant to have.
+     *
+     * The screen a planner should reach from here — a client's wedding they
+     * are engaged on — does not exist yet. Offering them the couple's instead
+     * is worse than offering nothing, so the entry goes until that is built.
+     */
+    hideFor: ['planner'],
+    group: 'wedding',
+    icon: CalendarCheck,
+  },
+  {
+    to: '/bookings',
+    label: 'Bookings',
+    requires: [Permission.BOOKING_READ_OWN, Permission.BOOKING_READ_INCOMING],
+    group: 'wedding',
+    icon: Receipt,
+  },
+  // The couple's escrow, across every booking (EZ1-I148). Buyer-only: a provider
+  // reads the same money from the other side on Accounts, so BOOKING_READ_OWN —
+  // which only the individual holds — is exactly the right gate.
+  {
+    to: '/escrow',
+    label: 'Escrow',
+    requires: [Permission.BOOKING_READ_OWN],
+    group: 'wedding',
+    icon: Vault,
+  },
+  {
+    to: '/events',
+    label: 'Events',
+    // The couple's own days. A planner manages a client's events from My
+    // Clients (EZ1-I121), so this page is the individual's alone.
+    requires: [Permission.EVENT_MANAGE_OWN],
+    group: 'wedding',
+    icon: Confetti,
+  },
+  { to: '/travel', label: 'Honeymoon', requires: [Permission.TRAVEL_BOOK], group: 'wedding', icon: AirplaneTilt },
+  { to: '/media', label: 'Media', requires: [Permission.MEDIA_MANAGE_OWN], group: 'wedding', icon: Images },
+  { to: '/genie', label: 'WOW Genie', requires: [Permission.AI_ASSIST], group: 'account', icon: MagicWand },
+  {
+    to: '/verification',
+    label: 'Verification',
+    requires: [Permission.VERIFICATION_PROCESS, Permission.VERIFICATION_ALLOCATE],
+    group: 'operations',
+    icon: SealCheck,
+  },
+  /*
+    Cases, not Visits and Calendar.
+
+    Visits and Calendar were two more views over the very same allocated
+    requests the Verification queue already shows, so an officer had three
+    entries for one queue and none for the investigations they also carry
+    (EZ1-I219). Cases replaces both: it is different work with a different
+    shape, and it was previously reachable only as a tab that shared its
+    filters with the visit list.
+  */
+  {
+    to: '/cases',
+    label: 'Cases',
+    requires: [Permission.CASE_INVESTIGATE],
+    // An administrator works cases from Support, which is the same records
+    // with the allocation controls attached (EZ1-I203).
+    hideFor: ['admin'],
+    group: 'operations',
+    icon: ClipboardText,
+  },
+  // Vendors had nowhere at all to say something had gone wrong outside a
+  // booking they were already inside. Everyone who can raise a case gets it.
+  { to: '/support', label: 'Support', requires: [Permission.CASE_RAISE], group: 'account', icon: Lifebuoy },
+  // Security sits in the navigation rather than under the email dropdown:
+  // sessions, two-factor and recovery codes are things people go looking for,
+  // and a menu they have to discover first is a menu they never open.
+  { to: '/security', label: 'Security', requires: [], group: 'account', icon: ShieldCheck },
+  { to: '/admin', label: 'Admin', requires: [Permission.ADMIN_ANALYTICS_READ], group: 'operations', icon: Gauge },
+];
+
+/** Path to the roles refused it, for the route guard. */
+const DENIED_BY_PATH: { to: string; hideFor?: UserRole[]; deniedRedirect?: string }[] = NAV;
+
+/** The global header bell and the notification centre share this count. */
+function useUnreadCount(): number {
+  const { data } = useQuery({
+    queryKey: ['unread-count'],
+    queryFn: async () => (await api.get('/notifications/unread-count')).data,
+    refetchInterval: UNREAD_POLL_MS,
+    retry: false,
+  });
+  return data?.unread ?? 0;
+}
+
+/** A lightweight preview: the bell is a toggle, not a navigation-only icon. */
+function NotificationPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data = [], isLoading } = useQuery<Notification[]>({
+    queryKey: ['notifications'],
+    queryFn: async () => (await api.get('/notifications')).data,
+    enabled: open,
+    retry: false,
+  });
+  if (!open) return null;
+  const latest = data.slice(0, 5);
+  return (
+    <div role="dialog" aria-label="Notifications" className="absolute right-0 top-11 z-30 w-[min(24rem,calc(100vw-2rem))] overflow-hidden border border-brand/15 bg-surface shadow-xl shadow-brand/10">
+      <div className="flex items-center justify-between border-b border-brand/10 px-4 py-3">
+        <p className="section-title">Notifications</p>
+        <Link to="/notifications" onClick={onClose} className="text-xs font-semibold text-brand hover:underline">View all</Link>
+      </div>
+      <div className="max-h-[min(28rem,calc(100dvh-6rem))] overflow-y-auto">
+        {isLoading ? <p className="px-4 py-5 text-sm text-gray-500">Loading notificationsâ€¦</p> : latest.length === 0 ? <p className="px-4 py-5 text-sm text-gray-500">You are all caught up.</p> : latest.map((notification) => (
+          <Link key={notification.id} to="/notifications" onClick={onClose} className={`block border-b border-brand/10 px-4 py-3 last:border-b-0 hover:bg-surface-sunken ${notification.isRead ? '' : 'bg-brand-light/25'}`}>
+            <p className="text-sm font-medium text-gray-900">{describe(notification) || 'There is an update on your account.'}</p>
+            <p className="mt-1 text-xs text-gray-500">{new Date(notification.createdAt).toLocaleString()}</p>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function useNavigationCounts(): Record<string, number> {
+  const { data } = useQuery({
+    queryKey: ['navigation-counts'],
+    queryFn: async () => (await api.get('/users/me/navigation-counts')).data as Record<string, number>,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  return data ?? {};
+}
+
+
+/**
+ * How the account signs out, switches business, and changes theme.
+ *
+ * A popover rather than three controls in the bar: none of them is used often,
+ * and three rarely-used controls beside the one thing that is used constantly
+ * (the navigation) is how a header stops being scannable.
+ */
+function AccountMenu({
+  email,
+  displayName,
+  role,
+  onSignOut,
+}: {
+  email?: string;
+  displayName?: string | null;
+  role?: UserRole;
+  onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const loc = useLocation();
+  const { choice, set } = useTheme();
+
+  useEffect(() => setOpen(false), [loc.pathname]);
+
+  const labelText = (displayName && displayName.trim() ? displayName : email ?? '?').trim();
+  const initial = labelText.slice(0, 1).toUpperCase();
+
+  return (
+    <div className="relative">
+      <button
+        className="flex items-center gap-2.5 rounded-md p-1 pr-2 text-left transition-colors hover:bg-gray-100"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        <span
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-soft
+            text-[0.8125rem] font-semibold text-brand-strong"
+          aria-hidden
+        >
+          {initial}
+        </span>
+        <span className="hidden text-left sm:block">
+          <span className="block max-w-[13rem] truncate text-[0.8125rem] font-medium text-gray-800">
+            {displayName ?? email}
+          </span>
+          <span className="block text-[0.6875rem] text-gray-400">
+            {role ? (ROLE_LABEL[role] ?? role) : ''}
+          </span>
+        </span>
+        <CaretDown size={14} className="shrink-0 text-gray-400" aria-hidden />
+      </button>
+
+      {open && (
+        <>
+          {/* Click-away. A bare document listener would fight the toggle above. */}
+          <button
+            className="fixed inset-0 z-30 cursor-default"
+            aria-hidden
+            tabIndex={-1}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="menu"
+            className="absolute right-0 z-40 mt-2 w-60 overflow-hidden rounded-lg border
+              border-gray-200 bg-surface-raised p-1.5 shadow-pop"
+          >
+            <Link
+              className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-gray-700
+                transition-colors hover:bg-gray-100"
+              to="/profile"
+            >
+              <UserCircle size={17} aria-hidden /> My Profile
+            </Link>
+
+            {DARK_MODE_ENABLED && (
+            <div className="my-1.5 px-2.5">
+              <p className="mb-1.5 text-[0.6875rem] font-medium uppercase tracking-[0.09em] text-gray-400">
+                Appearance
+              </p>
+              {/*
+                Three states, not a switch. "System" is a real answer and the
+                default one; a two-way toggle forces somebody whose laptop
+                already flips at dusk to pick a side and then re-pick it.
+              */}
+              <div
+                role="radiogroup"
+                aria-label="Appearance"
+                className="flex gap-1 rounded-md bg-surface-sunken p-1"
+              >
+                {(
+                  [
+                    ['light', 'Light', Sun],
+                    ['dark', 'Dark', Moon],
+                    ['system', 'Auto', Desktop],
+                  ] as const
+                ).map(([value, label, Glyph]) => (
+                  <button
+                    key={value}
+                    role="radio"
+                    aria-checked={choice === value}
+                    onClick={() => set(value)}
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-sm px-2 py-1.5
+                      text-[0.6875rem] font-medium transition-colors ${
+                        choice === value
+                          ? 'bg-surface-raised text-gray-900 shadow-btn'
+                          : 'text-gray-500 hover:text-gray-800'
+                      }`}
+                  >
+                    <Glyph size={13} aria-hidden />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            )}
+
+            <button
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm
+                text-gray-700 transition-colors hover:bg-gray-100"
+              onClick={onSignOut}
+            >
+              <SignOut size={17} aria-hidden /> Sign out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Layout({ children }: { children: ReactNode }) {
+  const { user, clear } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const [drawer, setDrawer] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const reduce = useReducedMotion();
+
+  const { data: profile } = useQuery({
+    queryKey: ['me'],
+    queryFn: async () => (await api.get('/users/me')).data,
+    enabled: Boolean(user),
+    retry: false,
+  });
+
+  const isFamily = user?.role === 'family';
+  const accountDisplayName = isFamily
+    ? (profile?.accountName ?? user?.accountName ?? profile?.displayName)
+    : (profile?.accountName ?? profile?.displayName);
+
+  const signOut = async () => {
+    try {
+      await api.post('/auth/logout');
+    } finally {
+      clear();
+      nav('/login');
+    }
+  };
+
+  const permissions = user?.permissions ?? [];
+  const isAdmin = user?.role === 'admin';
+  const portal =
+    user?.role === 'admin'
+      ? 'admin'
+      : user?.role === 'in_person'
+        ? 'verification'
+        : user?.role === 'vendor'
+          ? 'vendor'
+          : user?.role === 'planner'
+            ? 'planner'
+            : user?.role === 'agent'
+              ? 'agent'
+              : 'individual';
+  const unread = useUnreadCount();
+  const navCounts = useNavigationCounts();
+
+  /*
+   * For an administrator the left rail *is* the admin portal navigation
+   * (EZ1-I169). The portal nav — Users, Agents, Vendors, Payments, Audit
+   * Logs — used to render a second time inside AdminLayout, so every admin
+   * screen carried two navigations: the generic application rail (Dashboard,
+   * Bookings, Verification, Admin, …) and the portal submenu, with the same
+   * destinations under different names. Making the portal nav the single rail
+   * removes the duplication; the generic nav no longer renders for an admin at
+   * all. Every other persona keeps its capability-filtered application nav.
+   *
+   * The admin's flat list of operations screens gets no group headings: the
+   * headings are the consumer's vocabulary — "The wedding", "Your business" —
+   * which reads as nonsense over an operations console, and grouping earns its
+   * place at about fifteen entries in one band, not eighteen across many.
+   */
+  const entries: SidebarEntry[] = isAdmin
+    ? ADMIN_PORTAL_NAV.filter((n) => canAny(permissions, n.requires)).map((n) => ({
+        to: n.to,
+        label: n.label,
+        icon: n.icon,
+        group: 'main',
+        badge: navCounts[n.to] ?? undefined,
+      }))
+    : NAV.filter(
+        (n) =>
+          !(user && navDenied(n, user.role)) &&
+          (n.requires.length === 0 || canAny(permissions, n.requires)),
+      ).map((n) => ({
+        to: n.to,
+        label: (user && n.labelFor?.[user.role]) ?? n.label,
+        icon: n.icon,
+        group: n.group,
+        badge: navCounts[n.to] ?? undefined,
+      }));
+
+  const groups = isAdmin ? [{ key: 'main', title: null }] : NAV_GROUPS;
+
+  // The drawer closes on navigation. Leaving it open over the page somebody
+  // just asked for is the most common way a mobile menu goes wrong.
+  useEffect(() => { setDrawer(false); setNotificationsOpen(false); }, [loc.pathname]);
+
+  return (
+    <div className="portal-shell min-h-[100dvh]" data-portal={portal}>
+      {/*
+        Two columns above `lg`, one below. The rail is sticky and scrolls
+        independently, so a long navigation never pushes the page down and the
+        content column keeps its own scroll position.
+      */}
+      <div className="mx-auto flex w-full max-w-content gap-8 px-4 sm:px-6 lg:px-8">
+        <aside className="sticky top-0 hidden h-[100dvh] w-[13rem] shrink-0 flex-col gap-5 border-r border-gold/35 bg-surface/55 py-5 pr-4 lg:flex">
+          <Wordmark />
+          <div className="-mr-2 flex-1 overflow-y-auto pr-2">
+            <Sidebar entries={entries} groups={groups} />
+          </div>
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header
+            className="portal-header sticky top-0 z-20 -mx-4 flex h-16 items-center justify-between gap-3
+              border-b border-brand/12 bg-canvas/90 px-4 backdrop-blur-xl sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                className="btn-ghost -ml-1.5 px-2 lg:hidden"
+                onClick={() => setDrawer(true)}
+                aria-label="Open navigation"
+              >
+                <List size={20} aria-hidden />
+              </button>
+              <span className="lg:hidden">
+                <Wordmark compact />
+              </span>
+              <h1 className="hidden truncate text-[0.75rem] font-normal uppercase tracking-[0.18em] text-gray-600 lg:block">
+                {entries.find((e) => e.to === loc.pathname)?.label ?? ''}
+              </h1>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {/* Only rendered for an account that holds more than one business. */}
+              {canAny(permissions, [Permission.VENDOR_LISTING_MANAGE]) && <BusinessSwitcher />}
+              <div className="relative">
+              <button
+                aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+                className="relative grid h-9 w-9 place-items-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-brand"
+                aria-expanded={notificationsOpen}
+                aria-haspopup="dialog"
+                onClick={() => setNotificationsOpen((open) => !open)}
+              >
+                <Bell size={20} weight={unread > 0 ? 'fill' : 'regular'} aria-hidden />
+                {unread > 0 && (
+                  <span className="absolute -right-1 -top-1 grid min-w-4 h-4 place-items-center rounded-full bg-brand px-1 text-[0.625rem] font-semibold leading-none text-brand-fg">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </button>
+              <NotificationPanel open={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
+              </div>
+              <AccountMenu email={user?.email} displayName={accountDisplayName} role={user?.role} onSignOut={signOut} />
+            </div>
+          </header>
+
+          {user && !user.isVerified && (
+            <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-gold/75 bg-surface-sunken px-4 py-3 text-sm text-gray-800">
+              <Warning size={17} className="mt-0.5 shrink-0 text-gold-deep" aria-hidden />
+              <p>
+                Please confirm your email address.{' '}
+                <Link className="font-medium underline underline-offset-2" to="/security">
+                  Resend the confirmation
+                </Link>
+                .
+              </p>
+            </div>
+          )}
+
+          {/*
+            A rejected planner is told plainly the moment they are in the app,
+            not only if they happen to open My Business (EZ1-I110). Gated on the
+            planner capability so the check runs for no one else.
+          */}
+          {canAny(permissions, [Permission.PLANNER_LISTING_MANAGE]) && <PlannerRejectionModal />}
+
+          {/*
+            A short rise on route change. Long enough to register as a change of
+            place, short enough that nobody waiting on it notices waiting. It is
+            keyed on the path, so it fires per navigation rather than per render.
+          */}
+          <motion.main
+            key={loc.pathname}
+            initial={reduce ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 py-8 pb-20"
+          >
+            {/*
+              Keyed on the path, so leaving a screen that failed clears the
+              error rather than stranding somebody on it. Inside the main
+              element rather than around the layout, because the whole point is
+              that the rail and the account menu survive: a person whose page
+              broke needs a way off it.
+            */}
+            <ErrorBoundary key={loc.pathname}>{children}</ErrorBoundary>
+          </motion.main>
+        </div>
+      </div>
+
+      {/* Mobile drawer. Same component, same grouping, different container. */}
+      {drawer && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <motion.button
+            initial={reduce ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="absolute inset-0 bg-scrim/55 backdrop-blur-sm"
+            aria-label="Close navigation"
+            onClick={() => setDrawer(false)}
+          />
+          <motion.div
+            initial={reduce ? false : { x: '-100%' }}
+            animate={{ x: 0 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 36 }}
+            className="absolute inset-y-0 left-0 flex w-[15rem] flex-col gap-5 overflow-y-auto border-r border-gold/35 bg-surface p-5"
+          >
+            <Wordmark />
+            <Sidebar
+              entries={entries}
+              groups={groups}
+              onNavigate={() => setDrawer(false)}
+            />
+          </motion.div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The mark.
+ *
+ * The template's masthead: the serif in widely tracked capitals, with the
+ * name beside it in small spaced caps, so it reads as a wordmark rather than
+ * as the first heading on the page. No drawn logo: an invented glyph would be a decoration standing in
+ * for an identity the brand has not decided on yet.
+ */
+function Wordmark({ compact = false, light = false }: { compact?: boolean; light?: boolean }) {
+  return (
+    <Link to="/" className="flex items-baseline gap-2 px-3 py-1">
+      <span className={`font-serif text-[1.5rem] uppercase tracking-[0.18em] ${light ? 'text-brand-fg' : 'text-brand'}`}>WOW</span>
+      {!compact && (
+        <span className={`text-[0.625rem] uppercase tracking-[0.22em] ${light ? 'text-brand-fg/65' : 'text-gray-500'}`}>
+          World of Weddingz
+        </span>
+      )}
+    </Link>
+  );
+}
+
+/**
+ * `/` for somebody signed out is the public home page — only once the silent
+ * refresh has answered, so a signed-in reload never flashes it.
+ */
+function HomeOrDashboard() {
+  const token = useAuth((s) => s.accessToken);
+  const ready = useAuth((s) => s.ready);
+  if (ready && !token) return <Home />;
+  return (
+    <Protected>
+      <Dashboard />
+    </Protected>
+  );
+}
+
+/**
+ * Route guard. `requires` mirrors the server-side permission on the matching
+ * endpoints; the server still enforces it, this just avoids rendering a page
+ * that would only produce 403s.
+ */
+function Protected({
+  children,
+  requires = [],
+}: {
+  children: ReactNode;
+  requires?: PermissionValue[];
+}) {
+  const token = useAuth((s) => s.accessToken);
+  const ready = useAuth((s) => s.ready);
+  const role = useAuth((s) => s.user?.role);
+  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const mustResetPassword = useAuth((s) => s.user?.mustResetPassword ?? false);
+  const path = useLocation().pathname;
+
+  // Tokens are held in memory now, so a reload has nothing until the silent
+  // refresh finishes. Waiting here stops a signed-in user being bounced to
+  // /login for a frame on every page load.
+  if (!ready) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loading rows={3} />
+      </div>
+    );
+  }
+  if (!token) return <Navigate to="/login" replace />;
+
+  // An account still holding an emailed temporary password can reach exactly
+  // one screen. The server enforces this; sending them there directly saves
+  // them a wall of refusals on the way to the same place.
+  if (mustResetPassword) return <Navigate to="/set-password" replace />;
+
+  /*
+   * A role refused the link is refused the address.
+   *
+   * Permission alone cannot express this. The officer holds CHAT_INQUIRE and
+   * the administrator holds everything, so both passed the check below and got
+   * a page neither should have — the officer a private line to the applicant
+   * they are assessing, the admin the couple's honeymoon planner.
+   */
+  const entry = role ? DENIED_BY_PATH.find((n) => n.to === path) : undefined;
+  if (role && entry && navDenied(entry, role)) {
+    return <Navigate to={entry.deniedRedirect ?? '/'} replace />;
+  }
+
+  if (requires.length > 0 && !canAny(permissions, requires)) {
+    return (
+      <Layout>
+        <Forbidden />
+      </Layout>
+    );
+  }
+  return <Layout>{children}</Layout>;
+}
+
+export default function App() {
+  // Restore the session from the httpOnly refresh cookie, once, on start-up.
+  useEffect(() => {
+    void bootstrapSession();
+  }, []);
+
+  /*
+   * A wheel over a focused native number field changes its value in browsers.
+   * Forms use number fields for money, guest counts and planner budgets, where
+   * an accidental increment is worse than losing focus. Capture it once at the
+   * document edge so every current and future form behaves the same way while
+   * the wheel still scrolls the page normally.
+   */
+  useEffect(() => {
+    const blurNumberInput = (event: WheelEvent) => {
+      const input = event.target instanceof HTMLInputElement ? event.target : null;
+      if (input?.type === 'number' && document.activeElement === input) input.blur();
+    };
+    document.addEventListener('wheel', blurNumberInput, { capture: true, passive: true });
+    return () => document.removeEventListener('wheel', blurNumberInput, true);
+  }, []);
+
+  /*
+   * Wipe every cached query when the signed-in user changes (EZ1-I122).
+   *
+   * This is a single-page app: logging out and back in as somebody else never
+   * reloads the page, so React Query kept the previous user's answers until
+   * they happened to refetch — which is how a new wedding planner opened My
+   * Business and saw the last planner's business details. Clearing on any
+   * change of user id (login, logout, or switching accounts) makes one user's
+   * data structurally unable to appear under another's session. Only a change
+   * away from a real user clears, so restoring a session on a cold load (null →
+   * user) keeps the cache it just filled.
+   */
+  const qc = useQueryClient();
+  const userId = useAuth((s) => s.user?.id ?? null);
+  const prevUserId = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevUserId.current != null && prevUserId.current !== userId) {
+      qc.clear();
+    }
+    prevUserId.current = userId;
+  }, [userId, qc]);
+
+  return (
+    <Routes>
+      {/* Public, token-addressed entry points. */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/invite/:token" element={<AcceptInvite />} />
+      <Route path="/join/:token" element={<AgentSignup />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password/:token" element={<ResetPassword />} />
+      <Route path="/verify-email/:token" element={<VerifyEmail />} />
+      <Route path="/rsvp/:token" element={<GuestRsvp />} />
+      {/* Mobile test builds, with QR codes for scanning from a laptop. */}
+      <Route path="/app" element={<GetApp />} />
+      {/*
+        Public, like the per-guest RSVP above it. Whoever the link reached can
+        open it; that is what a forwarded invitation is.
+      */}
+      <Route path="/invitation/:token" element={<SharedInvitation />} />
+      <Route path="/biodata/:token" element={<SharedBiodata />} />
+      <Route path="/album/:token" element={<SharedAlbum />} />
+
+      {/* Signed in, but locked to the password reset. Deliberately outside
+          Protected, which would bounce straight back here. */}
+      <Route path="/set-password" element={<SetPassword />} />
+
+      {/* The public home page to a visitor, the dashboard to everyone else. */}
+      <Route path="/" element={<HomeOrDashboard />} />
+      <Route
+        path="/profile"
+        element={
+          <Protected requires={[Permission.PROFILE_MANAGE_OWN]}>
+            <Profile />
+          </Protected>
+        }
+      />
+      <Route
+        path="/security"
+        element={
+          <Protected requires={[Permission.SESSION_MANAGE_OWN]}>
+            <Security />
+          </Protected>
+        }
+      />
+      <Route
+        path="/cases"
+        element={
+          <Protected requires={[Permission.CASE_INVESTIGATE]}>
+            <OfficerCases />
+          </Protected>
+        }
+      />
+      <Route
+        path="/verification"
+        element={
+          <Protected requires={[Permission.VERIFICATION_PROCESS, Permission.VERIFICATION_ALLOCATE]}>
+            <Verification />
+          </Protected>
+        }
+      />
+      <Route
+        path="/visits"
+        element={
+          <Protected requires={[Permission.VERIFICATION_FIELDWORK]}>
+            <Visits />
+          </Protected>
+        }
+      />
+      <Route
+        path="/calendar"
+        element={
+          <Protected requires={[Permission.VERIFICATION_FIELDWORK]}>
+            <CalendarPage />
+          </Protected>
+        }
+      />
+      <Route
+        path="/matches"
+        element={
+          <Protected requires={[Permission.MATCH_BROWSE]}>
+            <Matches />
+          </Protected>
+        }
+      />
+      <Route
+        path="/client-profiles"
+        element={
+          <Protected requires={[Permission.MANAGED_PROFILE_MANAGE]}>
+            <ManagedProfiles />
+          </Protected>
+        }
+      />
+      <Route
+        path="/shared-with-me"
+        element={
+          <Protected requires={[Permission.ACT_ON_BEHALF]}>
+            <SharedWithMe />
+          </Protected>
+        }
+      />
+      <Route
+        path="/pool"
+        element={
+          <Protected requires={[Permission.NETWORK_POOL_BROWSE]}>
+            <NetworkPool />
+          </Protected>
+        }
+      />
+      <Route
+        path="/interests"
+        element={
+          <Protected requires={[Permission.MATCH_BROWSE, Permission.ACT_ON_BEHALF]}>
+            <Interests />
+          </Protected>
+        }
+      />
+      {/* The old address still works: a bookmark should not 404 because a
+          section was renamed. */}
+      <Route path="/proposals" element={<Navigate to="/interests" replace />} />
+      <Route
+        path="/clients"
+        element={
+          <Protected requires={[Permission.CLIENT_READ]}>
+            <AgentClients />
+          </Protected>
+        }
+      />
+      <Route
+        path="/agency"
+        element={
+          <Protected requires={[Permission.AGENCY_MANAGE]}>
+            <Agency />
+          </Protected>
+        }
+      />
+      {/*
+        Distinct paths. Both pages used to declare path="/my-reviews"; React Router
+        scores them identically and keeps the earlier one, so the agent route
+        always won and a vendor following their own My Reviews nav entry, stat
+        card or dashboard action got Forbidden -- MyReviews.tsx and the endpoint
+        behind it were unreachable by anyone (council review).
+      */}
+      <Route
+        path="/agency/reviews"
+        element={
+          <Protected requires={[Permission.AGENCY_MANAGE]}>
+            <AgentReviews />
+          </Protected>
+        }
+      />
+      {/* Buyers book vendors; planners browse them to recommend (EZ1-I29). */}
+      <Route
+        path="/vendors"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE, Permission.PLANNER_LISTING_MANAGE]}>
+            <Vendors />
+          </Protected>
+        }
+      />
+      {/* A single vendor's full profile before choosing them (EZ1-I76). */}
+      <Route
+        path="/vendors/:id"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE, Permission.PLANNER_LISTING_MANAGE]}>
+            <VendorDetail />
+          </Protected>
+        }
+      />
+      <Route
+        path="/wedding-planners"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE]}>
+            <WeddingPlanners />
+          </Protected>
+        }
+      />
+      {/* A planner's full profile and availability, like a vendor's. */}
+      <Route
+        path="/wedding-planners/:id"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE]}>
+            <PlannerDetail />
+          </Protected>
+        }
+      />
+      {/* A planner's portfolio weddings, opened from their profile. */}
+      <Route
+        path="/wedding-planners/:id/weddings"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE]}>
+            <PlannerPortfolio />
+          </Protected>
+        }
+      />
+      <Route
+        path="/wedding-planners/:id/weddings/:weddingId"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE]}>
+            <PlannerWeddingDetail />
+          </Protected>
+        }
+      />
+      <Route
+        path="/console"
+        element={
+          <Protected
+            requires={[Permission.VENDOR_LISTING_MANAGE, Permission.PLANNER_LISTING_MANAGE]}
+          >
+            <ProviderConsole />
+          </Protected>
+        }
+      />
+      <Route
+        path="/my-clients"
+        element={
+          <Protected requires={[Permission.PLAN_MANAGE_ENGAGED]}>
+            <PlannerClients />
+          </Protected>
+        }
+      />
+      {/*
+        There used to be two "My Weddings" pages over the same engagements, one
+        in each sidebar group. /weddings is the one; old links land on it.
+      */}
+      <Route path="/my-weddings" element={<Navigate to="/weddings" replace />} />
+      <Route
+        path="/weddings"
+        element={
+          <Protected requires={[Permission.PLAN_MANAGE_ENGAGED]}>
+            <PlannerWeddings />
+          </Protected>
+        }
+      />
+      <Route
+        path="/tasks"
+        element={
+          <Protected requires={[Permission.PLAN_MANAGE_ENGAGED]}>
+            <PlannerTasks />
+          </Protected>
+        }
+      />
+      {/*
+        A couple's requests to this planner, as a list beside the one open.
+        Declared ahead of /my-clients/:userId, though the static segment wins
+        either way.
+      */}
+      {['/my-clients/requests', '/my-clients/requests/:bookingId'].map((path) => (
+        <Route
+          key={path}
+          path={path}
+          element={
+            <Protected requires={[Permission.PLANNER_LISTING_MANAGE]}>
+              <PlannerRequests />
+            </Protected>
+          }
+        />
+      ))}
+      <Route
+        path="/my-clients/:userId"
+        element={
+          <Protected requires={[Permission.PLAN_MANAGE_ENGAGED]}>
+            <PlannerClientDetail />
+          </Protected>
+        }
+      />
+      <Route
+        path="/my-clients/:userId/events/:eventId"
+        element={
+          <Protected requires={[Permission.PLAN_MANAGE_ENGAGED]}>
+            <PlannerEventWorkspace />
+          </Protected>
+        }
+      />
+      <Route
+        path="/planner"
+        element={
+          <Protected requires={[Permission.PLAN_MANAGE_OWN, Permission.PLAN_MANAGE_ENGAGED]}>
+            <Planner />
+          </Protected>
+        }
+      />
+      <Route
+        path="/chat"
+        element={
+          <Protected requires={[Permission.CHAT_INQUIRE, Permission.CHAT_MATCH]}>
+            <Chat />
+          </Protected>
+        }
+      />
+      <Route
+        path="/bookings"
+        element={
+          <Protected requires={[Permission.BOOKING_READ_OWN, Permission.BOOKING_READ_INCOMING]}>
+            <Bookings />
+          </Protected>
+        }
+      />
+      <Route
+        path="/support"
+        element={
+          <Protected requires={[Permission.CASE_RAISE]}>
+            <Support />
+          </Protected>
+        }
+      />
+      <Route
+        path="/events"
+        element={
+          <Protected requires={[Permission.EVENT_MANAGE_OWN]}>
+            <Events />
+          </Protected>
+        }
+      />
+      <Route
+        path="/travel"
+        element={
+          <Protected requires={[Permission.TRAVEL_BOOK]}>
+            <Travel />
+          </Protected>
+        }
+      />
+      <Route
+        path="/media"
+        element={
+          <Protected requires={[Permission.MEDIA_MANAGE_OWN]}>
+            <Media />
+          </Protected>
+        }
+      />
+      <Route
+        path="/genie"
+        element={
+          <Protected requires={[Permission.AI_ASSIST]}>
+            <Genie />
+          </Protected>
+        }
+      />
+      <Route
+        path="/biodata"
+        element={
+          <Protected requires={[Permission.MATCH_BROWSE, Permission.MANAGED_PROFILE_MANAGE]}>
+            <Biodata />
+          </Protected>
+        }
+      />
+      <Route
+        path="/availability"
+        element={
+          <Protected requires={[Permission.VENDOR_LISTING_MANAGE, Permission.PLANNER_LISTING_MANAGE]}>
+            <Availability />
+          </Protected>
+        }
+      />
+      <Route
+        path="/accounts"
+        element={
+          <Protected requires={[Permission.BOOKING_READ_INCOMING]}>
+            <Accounts />
+          </Protected>
+        }
+      />
+      <Route
+        path="/agent-escrow"
+        element={
+          <Protected requires={[Permission.AGENCY_MANAGE]}>
+            <AgentEscrow />
+          </Protected>
+        }
+      />
+      <Route
+        path="/accounts/transactions/:id"
+        element={
+          <Protected requires={[Permission.BOOKING_READ_INCOMING]}>
+            <AccountsTransaction />
+          </Protected>
+        }
+      />
+      <Route
+        path="/escrow"
+        element={
+          <Protected requires={[Permission.BOOKING_READ_OWN]}>
+            <Escrow />
+          </Protected>
+        }
+      />
+      <Route
+        path="/my-reviews"
+        element={
+          <Protected requires={[Permission.VENDOR_LISTING_MANAGE]}>
+            <MyReviews />
+          </Protected>
+        }
+      />
+      <Route
+        path="/planner-reviews"
+        element={
+          <Protected requires={[Permission.PLANNER_LISTING_MANAGE]}>
+            <PlannerReviews />
+          </Protected>
+        }
+      />
+      <Route
+        path="/notifications"
+        element={
+          <Protected>
+            <Notifications />
+          </Protected>
+        }
+      />
+      {/*
+        The Admin Portal is a page per module, not a tabbed console (EZ1-I153).
+        The parent guard covers every child, so access follows the same admin
+        permission the child endpoints require; the module nav lives in
+        AdminLayout. Modules with no backend yet are honest "coming soon" routes
+        rather than fabricated data.
+      */}
+      <Route
+        path="/admin"
+        element={
+          <Protected requires={[Permission.ADMIN_ANALYTICS_READ]}>
+            <AdminLayout />
+          </Protected>
+        }
+      >
+        <Route index element={<AdminDashboard />} />
+        <Route path="users" element={<AdminUsers />} />
+        {/*
+          The drill-down pages (EZ1-I171/I172). Agents, their clients, vendors,
+          planners and officers are all user accounts, so all five detail
+          routes render one component keyed by the account id.
+        */}
+        <Route path="clients/:id" element={<AdminAccountDetail kind="client" />} />
+        <Route path="clients/:clientId" element={<AdminAccountDetail kind="client" />} />
+        <Route path="agents" element={<AdminAgents />} />
+        <Route path="agents/:agentId" element={<AdminAccountDetail kind="agent" />} />
+        <Route path="vendors" element={<AdminVendors />} />
+        <Route path="vendors/:vendorId" element={<AdminAccountDetail kind="vendor" />} />
+        <Route path="officers" element={<AdminOfficers />} />
+        <Route path="officers/:officerId" element={<AdminAccountDetail kind="officer" />} />
+        <Route path="planners" element={<AdminPlanners />} />
+        <Route path="planners/:plannerId" element={<AdminAccountDetail kind="planner" />} />
+        {/* Drill-downs from an account: one profile, one business, in full (EZ1-I185/I188). */}
+        <Route path="profiles/:id" element={<AdminProfileDetail />} />
+        <Route path="businesses/:id" element={<AdminBusinessDetail />} />
+        <Route path="bookings" element={<AdminBookings />} />
+        <Route path="bookings/:id" element={<AdminBookingDetail />} />
+        <Route path="payments" element={<AdminPayments />} />
+        <Route path="payments/:id" element={<AdminPaymentDetail />} />
+        {/*
+          Services and Catalog are one screen now (EZ1-I174): a service and its
+          packages are managed together, so they are a single nav item. The old
+          /admin/services and /admin/catalog paths redirect here so existing
+          bookmarks keep working.
+        */}
+        <Route path="services-catalog" element={<AdminServicesCatalog />} />
+        <Route path="services" element={<Navigate to="/admin/services-catalog" replace />} />
+        <Route path="catalog" element={<Navigate to="/admin/services-catalog" replace />} />
+        <Route path="analytics" element={<AdminReports />} />
+        {/* Keep links sent before Analytics was named as its own module working. */}
+        <Route path="reports" element={<Navigate to="/admin/analytics" replace />} />
+        <Route path="audit" element={<AdminAuditLogs />} />
+        <Route path="support" element={<AdminSupport />} />
+        {/*
+          Notifications and Security are the real modules, not placeholders
+          (EZ1-I176). For an administrator the portal nav is the only nav
+          (EZ1-I169), so these routes are how an admin reaches their own
+          notifications and their sessions/two-factor — the same screens the
+          standalone /notifications and /security routes render.
+        */}
+        <Route path="notifications" element={<Notifications />} />
+        <Route path="security" element={<Security />} />
+        <Route
+          path="settings"
+          element={
+            <AdminComingSoon
+              title="Settings"
+              note="Platform configuration is not built yet. Per-agency fees are managed from the agency's own screen today."
+            />
+          }
+        />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

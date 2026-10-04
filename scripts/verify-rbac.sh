@@ -1,0 +1,679 @@
+#!/bin/sh
+# Live RBAC and schema-validation verification against a running stack.
+#
+# Runs from inside the compose network so it does not depend on host port
+# forwarding. It needs curl and jq, and an admin seeded with the credentials in
+# docker/.env.
+#
+#   docker compose -f docker/docker-compose.yml up -d --build
+#   docker compose -f docker/docker-compose.yml --profile seed run --rm seed-admin
+#   docker run --rm --network docker_default -v "$PWD/scripts:/scripts" alpine:3.20 #     sh -c "apk add --no-cache curl jq redis >/dev/null && sh /scripts/verify-rbac.sh"
+#
+# Exits non-zero if any check fails, so it can gate a deploy.
+API=${API:-http://backend:3000/api}
+ADMIN_EMAIL=${ADMIN_EMAIL:-admin@wow.example.com}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-AdminLocalDev2026!}
+PASS=0
+FAIL=0
+STAMP=$(head -c 8 /proc/sys/kernel/random/uuid | tr -d '-')
+
+# code=$(req METHOD PATH JSON TOKEN); response body lands in /tmp/body.
+# Refresh tokens now travel in an httpOnly cookie, so keep a jar: that is what a
+# browser does, and it is the path the app actually uses.
+JAR=/tmp/cookies.txt
+: > "$JAR"
+req() {
+  m=$1; p=$2; b=$3; t=$4
+  set -- -s -o /tmp/body -w '%{http_code}' -X "$m" "$API$p" -b "$JAR" -c "$JAR"
+  [ -n "$b" ] && set -- "$@" -H 'Content-Type: application/json' -d "$b"
+  [ -n "$t" ] && set -- "$@" -H "Authorization: Bearer $t"
+  curl "$@"
+}
+
+check() {
+  name=$1; actual=$2; expected=$3
+  if [ "$actual" = "$expected" ]; then
+    printf '  PASS  %s (HTTP %s)\n' "$name" "$actual"
+    PASS=$((PASS + 1))
+  else
+    printf '  FAIL  %s (got %s, expected %s) %s\n' "$name" "$actual" "$expected" "$(head -c 300 /tmp/body)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# The same vocabulary the other suites use. This one grew its own idiom —
+# `grep -q ... && PASS=... || FAIL=...` written out longhand at each site — and
+# the cost showed up the first time an assertion was copied in from elsewhere:
+# `body_has` was not defined here, sh printed "not found" to stderr, and the
+# suite carried on reporting green. An assertion that silently does not run is
+# worse than one that fails.
+assert() {
+  if [ "$2" = "1" ]; then
+    printf '  PASS  %s
+' "$1"
+    PASS=$((PASS + 1))
+  else
+    printf '  FAIL  %s: %s
+' "$1" "$(head -c 300 /tmp/body)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+body_has() { grep -q "$1" /tmp/body && assert "$2" 1 || assert "$2" 0; }
+# Identity verification now gates sending an interest, accepting one and
+# fixing a match. Every persona that does any of those has to go through it
+# first — the gate itself is asserted in verify-phase2.
+. /scripts/lib-identity.sh
+
+
+# Precise extraction; jq is present in the runner image.
+field() { jq -r ".$2 // empty" "$1"; }
+
+# A business now has a life rather than a boolean, so getting one live means
+# walking the path a vendor actually walks: fill in the catalog, look it over,
+# submit, then allocate, visit and decide. Skipping to "approved" is refused,
+# which is the point of the state machine.
+#
+#   go_live <businessToken> <businessId> <adminToken> <officerId> <officerToken>
+FINDINGS_JSON='{"visited":true,"observations":"Attended the address; the business is as described.","issues":[],"recommendation":"approve"}'
+
+# The catalog is configuration, so a service asks whatever an administrator
+# decided it should ask. The helper therefore reads the form and answers it,
+# rather than assuming a shape — which is the same reason the form exists.
+answers_for() { # answers_for <serviceForm json on stdin>
+  jq -c '[.[] | select(.required)] | map({(.key): (
+      if   .type == "boolean"       then true
+      elif .type == "single_select" then (.constraints.options[0].value // "other")
+      elif .type == "multi_select"  then [(.constraints.options[0].value // "other")]
+      elif .type == "date"          then "2027-01-01"
+      elif .type == "time"          then "10:00"
+      elif .type == "date_time"     then "2027-01-01T10:00:00.000Z"
+      elif .type == "url"           then "https://example.com/portfolio"
+      elif (.type == "number" or .type == "decimal" or .type == "currency"
+            or .type == "duration" or .type == "range")
+                                    then (.constraints.min // 1)
+      else "Not specified" end)}) | add // {}'
+}
+
+seed_catalog() { # seed_catalog <token> <businessId>
+  req GET /catalog/categories "" "$1" >/dev/null
+  cat_ids=$(jq -r '.[].id' /tmp/body)
+  # An empty catalog is a setup problem, not a test failure, and it used to
+  # look like one six assertions later: this returned quietly, the business got
+  # no priced service, and the suite reported "Finish these first: Catalog
+  # services" from somewhere else entirely. Say it here, where it is true.
+  if [ -z "$cat_ids" ]; then
+    echo "  FAIL  the service catalog is empty — run the catalog seed first:" >&2
+    echo "        docker compose -f docker/docker-compose.yml --profile seed run --rm seed-catalog" >&2
+    FAIL=$((FAIL + 1))
+    return 1
+  fi
+
+  for cat_id in $cat_ids; do
+    req GET "/catalog/categories/$cat_id/services" "" "$1" >/dev/null
+    def_ids=$(jq -r '.[].id' /tmp/body)
+    for def_id in $def_ids; do
+      req GET "/catalog/services/$def_id" "" "$1" >/dev/null
+      def_json=$(cat /tmp/body)
+      attrs=$(echo "$def_json" | jq -c '.serviceForm' | answers_for)
+      req POST "/vendors/$2/services" "{\"definitionId\":\"$def_id\",\"attributes\":$attrs}" "$1" >/dev/null
+      svc_id=$(jq -r '.id // empty' /tmp/body)
+      [ -z "$svc_id" ] && continue
+
+      # The definition decides which pricing models a service may use, so the
+      # price is built from that rather than assumed. Quote-only models carry
+      # no amount; everything else does.
+      model=$(echo "$def_json" | jq -r '.definition.allowedPricingModels[0] // "fixed"')
+      case "$model" in
+        custom_quote|no_public_price) price_json="" ;;
+        *) price_json=',"price":"25000"' ;;
+      esac
+      req POST "/vendors/$2/services/$svc_id/offerings" \
+        "{\"name\":\"Standard\",\"pricingModel\":\"$model\"$price_json,\"active\":true}" "$1" >/dev/null
+      [ "$(jq -r '.id // empty' /tmp/body)" != "" ] && return 0
+    done
+  done
+  return 1
+}
+
+go_live() { # go_live <vendorToken> <businessId> <adminToken> <officerId> <officerToken>
+  seed_catalog "$1" "$2" || return 1
+  req POST "/vendors/$2/first-review" "" "$1" >/dev/null
+  req POST "/vendors/$2/submit-verification" "" "$1" >/dev/null
+
+  req GET "/verification/requests?applicantType=vendor&limit=100" "" "$3" >/dev/null
+  vreq=$(jq -r --arg id "$2" '(.data // .)[] | select(.subjectId == $id) | .id' /tmp/body | head -1)
+  [ -z "$vreq" ] && return 1
+
+  req PUT "/verification/requests/$vreq/allocate" "{\"officerUserId\":\"$4\"}" "$3" >/dev/null
+  req PUT "/verification/requests/$vreq/start" "" "$5" >/dev/null
+  req PUT "/verification/requests/$vreq/findings" "$FINDINGS_JSON" "$5" >/dev/null
+  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$5" >/dev/null
+  return 0
+}
+
+# Intake now records how the family gave permission, so every profile the agent
+# builds carries a consent block. Defined once and appended to each body below.
+CONSENT='"consent":{"method":"in_person","givenByRelation":"father","givenByName":"Ramesh Sharma","givenAt":"2026-08-01","allowsCirculation":true}'
+
+# Phone is the duplicate key for an agency-built profile, and the check is
+# global by design — the same number twice means the same person twice. So the
+# numbers have to be unique per run, or the second run of this suite collides
+# with the first one's data and every downstream check fails for the wrong
+# reason.
+PHONE_BASE=$(date +%s | tail -c 7)
+phone() { echo "+919${PHONE_BASE}$1"; }
+
+
+# Rate-limit counters live in Redis and deliberately survive restarts, so a
+# repeated run inside the same window would trip limits unrelated to what is
+# being tested. Clear only the throttle keys (never the caches).
+if command -v redis-cli >/dev/null 2>&1; then
+  KEYS=$(redis-cli -h "${REDIS_HOST:-redis}" --scan --pattern 'throttle:*' 2>/dev/null)
+  [ -n "$KEYS" ] && echo "$KEYS" | xargs -r redis-cli -h "${REDIS_HOST:-redis}" DEL >/dev/null 2>&1
+  echo "-- cleared rate-limit counters so this run starts clean --"
+fi
+ufield() { jq -r ".user.$2 // empty" "$1"; }
+
+echo
+echo "== 1. One account per persona =="
+# Registration now insists on a real person's name (letters and spaces only)
+# and, for a business account, a 10-digit mobile. The counter keeps each
+# registration on its own number.
+# A distinct 10-digit mobile per registration. The number has to start 6-9 and
+# be unique enough that two runs do not collide on the profile duplicate check.
+# A vendor listing is activated by the officer who visited it, never by an
+# administrator clicking approve — that route no longer exists. This walks the
+# real path: raise (automatic on listing), allocate, decide.
+OFFICER_TOKEN=""
+OFFICER_USER_ID=""
+ensure_officer() {
+  [ -n "$OFFICER_TOKEN" ] && return 0
+  req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Officer $STAMP\"}" "$ADMIN" >/dev/null
+  OFFICER_USER_ID=$(field /tmp/body id)
+  temp=$(field /tmp/body devPassword)
+  req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"$temp\"}" >/dev/null
+  t=$(field /tmp/body accessToken)
+  req POST /auth/password/change "{\"currentPassword\":\"$temp\",\"newPassword\":\"OfficerPass1\"}" "$t" >/dev/null
+  req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"OfficerPass1\"}" >/dev/null
+  OFFICER_TOKEN=$(field /tmp/body accessToken)
+}
+
+# verify_applicant <applicant-token>
+verify_applicant() {
+  ensure_officer
+  req GET /verification/me "" "$1" >/dev/null
+  vreq=$(field /tmp/body id)
+  [ -z "$vreq" ] && return 1
+  req PUT "/verification/requests/$vreq/allocate" "{\"officerUserId\":\"$OFFICER_USER_ID\"}" "$ADMIN" >/dev/null
+  req PUT "/verification/requests/$vreq/start" "" "$OFFICER_TOKEN" >/dev/null
+  # An approval rests on a visit somebody wrote up. Without the findings the
+  # decision is refused, which is the point of having a verification step.
+  req PUT "/verification/requests/$vreq/findings" "$FINDINGS_JSON" "$OFFICER_TOKEN" >/dev/null
+  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$OFFICER_TOKEN" >/dev/null
+}
+
+# A vendor listing has to be walked to live rather than flipped: complete the
+# catalog, look it over, submit, then verify.
+verify_business() { # verify_business <vendorToken> <businessId>
+  ensure_officer
+  go_live "$1" "$2" "$ADMIN" "$OFFICER_USER_ID" "$OFFICER_TOKEN"
+}
+
+REG_PHONE_BASE=$(date +%s | tail -c 7)
+# Suffixes start at 900 so a registration number can never collide with the
+# profile numbers `phone()` hands out in the same run.
+regphone() { printf '9%s%03d' "$REG_PHONE_BASE" "$((900 + $1))"; }
+REG_N=0
+reg() { # reg key accountType role -> writes /tmp/$key.json
+  key=$1; at=$2; role=$3
+  extra=""
+  [ -n "$role" ] && extra=",\"role\":\"$role\""
+  REG_N=$((REG_N + 1))
+  name="Test $(echo "$key" | tr -d '0-9')"
+  c=$(req POST /auth/register "{\"email\":\"$key-$STAMP@t.com\",\"password\":\"Password123\",\"accountType\":\"$at\",\"displayName\":\"$name\",\"phone\":\"$(regphone $REG_N)\"$extra}")
+  cp /tmp/body "/tmp/$key.json"
+  check "register $key" "$c" 201
+}
+reg bride individual bride
+reg groom individual groom
+reg agent agent ""
+reg agent2 agent ""
+reg vendor vendor ""
+reg planner planner ""
+
+tok() { field "/tmp/$1.json" accessToken; }
+uid() { ufield "/tmp/$1.json" id; }
+
+BRIDE=$(tok bride);   GROOM=$(tok groom)
+AGENT=$(tok agent);   AGENT2=$(tok agent2)
+VENDOR=$(tok vendor); PLANNER=$(tok planner)
+BRIDE_ID=$(uid bride); GROOM_ID=$(uid groom); AGENT_ID=$(uid agent)
+
+grep -q '"role":"vendor"' /tmp/vendor.json && { echo "  PASS  vendor accountType mapped to vendor role"; PASS=$((PASS+1)); } || { echo "  FAIL  vendor role mapping"; FAIL=$((FAIL+1)); }
+grep -q '"role":"planner"' /tmp/planner.json && { echo "  PASS  planner accountType mapped to planner role"; PASS=$((PASS+1)); } || { echo "  FAIL  planner role mapping"; FAIL=$((FAIL+1)); }
+grep -q '"role":"agent"' /tmp/agent.json && { echo "  PASS  agent accountType mapped to agent role"; PASS=$((PASS+1)); } || { echo "  FAIL  agent role mapping"; FAIL=$((FAIL+1)); }
+grep -q '"managedByAgentId":null' /tmp/bride.json && { echo "  PASS  self-registered user has no managing agent"; PASS=$((PASS+1)); } || { echo "  FAIL  self-registered user attached to an agent"; FAIL=$((FAIL+1)); }
+
+c=$(req POST /auth/login "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}")
+check "admin sign-in" "$c" 200
+cp /tmp/body /tmp/admin.json
+ADMIN=$(tok admin)
+
+
+echo
+echo "-- pausing 65s: /auth/register is deliberately capped at 10/min --"
+sleep 65
+echo
+echo "== 2. Privilege escalation at registration =="
+c=$(req POST /auth/register "{\"email\":\"esc1-$STAMP@t.com\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"admin\"}")
+check "individual + role=admin rejected" "$c" 400
+c=$(req POST /auth/register "{\"email\":\"esc2-$STAMP@t.com\",\"password\":\"Password123\",\"accountType\":\"admin\"}")
+check "accountType=admin rejected" "$c" 400
+c=$(req POST /auth/register "{\"email\":\"esc3-$STAMP@t.com\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"vendor\"}")
+check "individual + role=vendor rejected" "$c" 400
+c=$(req POST /auth/register "{\"email\":\"esc4-$STAMP@t.com\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"agent\"}")
+check "individual + role=agent rejected" "$c" 400
+c=$(req POST /auth/register "{\"email\":\"weak-$STAMP@t.com\",\"password\":\"alllowercase\",\"accountType\":\"individual\",\"role\":\"bride\"}")
+check "weak password rejected" "$c" 400
+c=$(req POST /auth/register "{\"email\":\"ex-$STAMP@t.com\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"bride\",\"isVerified\":true}")
+check "unknown field isVerified rejected" "$c" 400
+c=$(req POST /auth/register "{\"email\":\"notanemail\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"bride\"}")
+check "malformed email rejected" "$c" 400
+
+echo
+echo "== 3. Only users and agents may book; providers may not =="
+FAKE=00000000-0000-4000-8000-000000000000
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$FAKE\",\"amount\":1000}" "$VENDOR")
+check "vendor cannot create a booking" "$c" 403
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$FAKE\",\"amount\":1000}" "$PLANNER")
+check "planner cannot create a booking" "$c" 403
+c=$(req GET /matches/suggestions "" "$VENDOR")
+check "vendor cannot browse matches" "$c" 403
+c=$(req GET /matches/suggestions "" "$PLANNER")
+check "planner cannot browse matches" "$c" 403
+c=$(req POST /matches/interest "{\"toUserId\":\"$GROOM_ID\"}" "$VENDOR")
+check "vendor cannot send interest" "$c" 403
+c=$(req POST /vendors "{\"name\":\"Sneaky\",\"category\":\"venue\"}" "$BRIDE")
+check "bride cannot create a vendor listing" "$c" 403
+c=$(req PUT /wedding-planners/me "{\"agencyName\":\"Sneaky\"}" "$VENDOR")
+check "vendor cannot create a planner listing" "$c" 403
+c=$(req POST /vendors "{\"name\":\"Sneaky\",\"category\":\"venue\"}" "$PLANNER")
+check "planner cannot create a vendor listing" "$c" 403
+c=$(req GET /agents/clients "" "$BRIDE")
+check "bride cannot list agent clients" "$c" 403
+c=$(req POST /agents/profiles "{\"displayName\":\"X\",\"contactEmail\":\"x-$STAMP@t.com\",\"contactPhone\":\"$(phone 002)\",$CONSENT}" "$VENDOR")
+check "vendor cannot build a profile for anyone" "$c" 403
+
+echo
+echo "== 4. Admin surface closed to every other persona =="
+for pair in "bride:$BRIDE" "agent:$AGENT" "vendor:$VENDOR" "planner:$PLANNER"; do
+  n=${pair%%:*}; t=${pair#*:}
+  c=$(req GET /admin/analytics "" "$t");        check "$n cannot read analytics" "$c" 403
+  c=$(req GET /admin/users "" "$t");            check "$n cannot list all users" "$c" 403
+  c=$(req GET /admin/vendors/pending "" "$t");  check "$n cannot see pending vendors" "$c" 403
+done
+c=$(req GET /admin/analytics "" "$ADMIN"); check "admin can read analytics" "$c" 200
+
+echo
+echo "== 5. Agent stewardship: vetting, profiles, invitations, scoping =="
+# An agent must be vetted before they can act for anybody.
+c=$(req PUT /agents/agency "{\"agencyName\":\"Agency $STAMP\",\"city\":\"Hyderabad\"}" "$AGENT")
+check "agent registers their agency" "$c" 200
+AGENCY=$(field /tmp/body id)
+c=$(req POST /agents/profiles "{\"displayName\":\"Too Early\",\"contactEmail\":\"early-$STAMP@t.com\",\"contactPhone\":\"$(phone 003)\",$CONSENT}" "$AGENT")
+check "an unapproved agency cannot build profiles" "$c" 403
+c=$(req PUT "/admin/agents/$AGENCY/approve" "" "$ADMIN")
+check "admin approves the agency" "$c" 200
+
+c=$(req PUT /agents/agency "{\"agencyName\":\"Agency2 $STAMP\"}" "$AGENT2")
+AGENCY2=$(field /tmp/body id)
+c=$(req PUT "/admin/agents/$AGENCY2/approve" "" "$ADMIN")
+check "admin approves the second agency" "$c" 200
+
+# A profile for somebody with no account at all.
+c=$(req POST /agents/profiles "{\"displayName\":\"Client\",\"contactEmail\":\"client-$STAMP@t.com\",\"contactPhone\":\"$(phone 004)\",\"gender\":\"female\",\"dateOfBirth\":\"1997-01-01\",\"city\":\"Hyderabad\",$CONSENT}" "$AGENT")
+check "agent builds a profile for an account-less person" "$c" 201
+MANAGED=$(field /tmp/body id)
+
+c=$(req GET /agents/profiles "" "$AGENT")
+check "agent lists the profiles they steward" "$c" 200
+grep -q "$MANAGED" /tmp/body && { echo "  PASS  agent sees their own managed profile"; PASS=$((PASS+1)); } || { echo "  FAIL  agent cannot see own managed profile"; FAIL=$((FAIL+1)); }
+
+c=$(req GET /agents/profiles "" "$AGENT2")
+grep -q '"total":0' /tmp/body && { echo "  PASS  second agent has an empty book"; PASS=$((PASS+1)); } || { echo "  FAIL  second agent book leaked: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+c=$(req GET "/agents/profiles/$MANAGED" "" "$AGENT2")
+check "second agent cannot read that profile" "$c" 403
+
+c=$(req GET /matches/suggestions "" "$AGENT")
+check "agent must name a profile to browse" "$c" 400
+c=$(req GET "/matches/suggestions?profileId=$MANAGED" "" "$AGENT")
+check "agent browses as the profile they steward" "$c" 200
+c=$(req GET "/matches/suggestions?profileId=$MANAGED" "" "$AGENT2")
+check "second agent cannot browse as that profile" "$c" 403
+
+# Profile ids for the individuals, since interests are keyed on profiles now.
+# Matchmaking is gated on a completed profile now, so fill both in before
+# anything tries to browse or send an interest.
+PREFS='{"religion":"hindu","community":"kamma","preferredAgeMin":24,"preferredAgeMax":34,"preferredLocations":["Hyderabad"]}'
+req PUT /users/me/profile "{\"displayName\":\"Groom\",\"gender\":\"male\",\"dateOfBirth\":\"1994-03-02\",\"city\":\"Hyderabad\",\"visibility\":\"public\",\"preferences\":$PREFS}" "$GROOM" >/dev/null
+req PUT /users/me/profile "{\"displayName\":\"Bride\",\"gender\":\"female\",\"dateOfBirth\":\"1997-07-11\",\"city\":\"Hyderabad\",\"visibility\":\"public\",\"preferences\":$PREFS}" "$BRIDE" >/dev/null
+
+c=$(req GET /users/me "" "$GROOM")
+GROOM_PROFILE=$(field /tmp/body id)
+c=$(req GET /users/me "" "$BRIDE")
+BRIDE_PROFILE=$(field /tmp/body id)
+
+verify_identity "$GROOM_PROFILE" "$GROOM" >/dev/null
+verify_identity "$BRIDE_PROFILE" "$BRIDE" >/dev/null
+verify_identity "$MANAGED" "$AGENT" >/dev/null
+
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\",\"profileId\":\"$MANAGED\"}" "$AGENT2")
+check "second agent cannot send interest from that profile" "$c" 403
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\",\"profileId\":\"$MANAGED\"}" "$AGENT")
+check "agent sends interest for the profile they steward" "$c" 201
+
+# Invite the subject so an actual account exists for the booking checks below.
+c=$(req POST "/agents/profiles/$MANAGED/invite" "" "$AGENT")
+check "agent emails the invitation" "$c" 201
+INVITE_TOKEN=$(field /tmp/body devToken)
+if [ -n "$INVITE_TOKEN" ]; then
+  c=$(req POST /auth/invitations/accept "{\"token\":\"$INVITE_TOKEN\",\"password\":\"ClientPass1\"}")
+  check "the subject claims the profile and gets an account" "$c" 201
+  CLIENT_ID=$(jq -r '.user.id' /tmp/body)
+  c=$(req GET /agents/clients "" "$AGENT")
+  check "the new account appears on the agent book" "$c" 200
+  c=$(req GET "/agents/clients/$CLIENT_ID" "" "$AGENT2")
+  check "second agent cannot read that client" "$c" 403
+else
+  echo "  NOTE  no devToken (MAIL_PROVIDER is not 'log'); skipping claim-dependent checks"
+  CLIENT_ID=""
+fi
+
+echo "== 6. Independent user may approach any user or agent =="
+c=$(req POST /matches/interest "{\"toProfileId\":\"$MANAGED\"}" "$BRIDE")
+check "independent user approaches an agent-built profile" "$c" 201
+c=$(req POST /chat/messages "{\"toUserId\":\"$AGENT_ID\",\"body\":\"Hello, can you help?\"}" "$BRIDE")
+check "independent user messages any agent" "$c" 201
+c=$(req POST /chat/messages "{\"toUserId\":\"$GROOM_ID\",\"body\":\"hi\"}" "$BRIDE")
+check "user cannot message an unmatched individual" "$c" 403
+
+echo
+echo "== 6b. Match Fixed: two confirmations, then the marketplace opens =="
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\"}" "$BRIDE")
+check "bride sends the groom an interest" "$c" 201
+FIXED_INTEREST=$(field /tmp/body id)
+c=$(req PUT "/matches/$FIXED_INTEREST/accept" "" "$GROOM")
+check "groom accepts" "$c" 200
+
+# The marketplace does not wait for a match. What refuses this attempt is the
+# provider id — which is a profile, not a listing — and proving that is the
+# assertion: the refusal is about the shop, not about who is allowed in it.
+c=$(req GET /matches/status "" "$BRIDE")
+body_has '"servicesUnlocked":true' "services are open before any match is fixed"
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$BRIDE_PROFILE\",\"amount\":5000}" "$BRIDE")
+check "and a booking is refused for the listing, not for the match" "$c" 404
+
+c=$(req PUT "/matches/$FIXED_INTEREST/match-fixed" "" "$BRIDE")
+check "bride confirms her side" "$c" 200
+grep -q '"state":"pending_confirmation"' /tmp/body && { echo "  PASS  one confirmation is not enough"; PASS=$((PASS+1)); } || { echo "  FAIL  one side confirming already fixed the match: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+c=$(req PUT "/matches/$FIXED_INTEREST/match-fixed" "" "$BRIDE")
+check "the same side cannot confirm twice" "$c" 400
+
+c=$(req PUT "/matches/$FIXED_INTEREST/match-fixed" "" "$GROOM")
+check "groom confirms and the match is fixed" "$c" 200
+grep -q '"state":"confirmed"' /tmp/body && { echo "  PASS  both confirmations fix the match"; PASS=$((PASS+1)); } || { echo "  FAIL  match not confirmed: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+
+c=$(req GET /matches/suggestions "" "$BRIDE")
+check "matchmaking closes once the match is fixed" "$c" 403
+c=$(req GET /matches/status "" "$BRIDE")
+check "the dashboard reports the fixed match" "$c" 200
+grep -q '"servicesUnlocked":true' /tmp/body && { echo "  PASS  services report as unlocked"; PASS=$((PASS+1)); } || { echo "  FAIL  services still locked after the fix: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+c=$(req PUT "/matches/$FIXED_INTEREST/unmatch" '{"reason":"changed our minds"}' "$BRIDE")
+check "a fixed match cannot be quietly unmatched" "$c" 400
+
+echo
+echo "== 7. Booking IDOR and escrow lifecycle =="
+GST_R=$(printf '36RBACX%04dQ1Z5' "$(( RANDOM % 10000 ))")
+c=$(req POST /vendors "{\"name\":\"Venue $STAMP\",\"category\":\"venue\",\"city\":\"Hyderabad\",\"gstNumber\":\"$GST_R\",\"panNumber\":\"RBACX1111R\",\"registeredAddress\":\"7 Banjara Hills, Hyderabad\"}" "$VENDOR")
+check "vendor creates a listing" "$c" 201
+LISTING=$(field /tmp/body id)
+grep -q '"isApproved":false' /tmp/body && { echo "  PASS  new listing starts unapproved"; PASS=$((PASS+1)); } || { echo "  FAIL  new listing not unapproved"; FAIL=$((FAIL+1)); }
+grep -q '"status":"draft"' /tmp/body && { echo "  PASS  and starts as a draft"; PASS=$((PASS+1)); } || { echo "  FAIL  a new listing is not a draft"; FAIL=$((FAIL+1)); }
+
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":5000}" "$BRIDE")
+check "cannot book an unapproved listing" "$c" 400
+
+# A listing is walked to live rather than flipped: catalog, first review,
+# submit, visit, decide. Jumping straight to approved is refused.
+verify_business "$VENDOR" "$LISTING"
+c=$(req GET "/vendors/$LISTING" "")
+grep -q '"isApproved":true' /tmp/body && { echo "  PASS  the officer's approval activated the listing"; PASS=$((PASS+1)); } || { echo "  FAIL  listing still unapproved after verification: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+
+# Search is unauthenticated and returns many listings at once, so anything it
+# carries is public in bulk. It used to carry the tax numbers.
+c=$(req GET "/vendors/search?limit=20" "")
+check "the public search is served to anybody" "$c" 200
+grep -q '"panNumber"' /tmp/body && assert "search leaks PAN numbers" 0 || assert "search carries no PAN numbers" 1
+grep -q '"gstNumber"' /tmp/body && assert "search leaks GST numbers" 0 || assert "nor GST numbers" 1
+grep -q '"complianceDocuments"' /tmp/body && assert "search leaks compliance documents" 0 || assert "nor links to compliance documents" 1
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":5000}" "$BRIDE")
+check "bride books the approved vendor" "$c" 201
+BOOKING=$(field /tmp/body id)
+
+c=$(req PUT "/bookings/$BOOKING/complete" "" "$GROOM")
+check "unrelated user cannot complete (escrow release)" "$c" 403
+c=$(req PUT "/bookings/$BOOKING/cancel" '{}' "$GROOM")
+check "unrelated user cannot cancel (escrow refund)" "$c" 403
+c=$(req PUT "/bookings/$BOOKING/pay" "" "$GROOM")
+check "unrelated user cannot pay" "$c" 403
+c=$(req PUT "/bookings/$BOOKING/confirm" "" "$PLANNER")
+check "a different provider cannot confirm" "$c" 403
+c=$(req PUT "/bookings/$BOOKING/complete" "" "$VENDOR")
+check "provider cannot mark work done before accepting the job" "$c" 400
+
+# Money and work alternate, and neither side gets ahead of the other.
+c=$(req PUT "/bookings/$BOOKING/pay" '{"milestone":"advance"}' "$BRIDE")
+check "the advance is not payable until the provider accepts" "$c" 400
+c=$(req PUT "/bookings/$BOOKING/confirm" "" "$VENDOR")
+check "owning vendor accepts the job" "$c" 200
+
+c=$(req PUT "/bookings/$BOOKING/start" "" "$VENDOR")
+check "vendor cannot start before the advance is held" "$c" 400
+c=$(req PUT "/bookings/$BOOKING/pay" '{"milestone":"advance"}' "$BRIDE")
+check "buyer pays the advance into escrow" "$c" 200
+c=$(req PUT "/bookings/$BOOKING/pay" '{"milestone":"second"}' "$BRIDE")
+check "the second instalment waits for work to start" "$c" 400
+
+c=$(req PUT "/bookings/$BOOKING/start" "" "$VENDOR")
+check "vendor starts work" "$c" 200
+c=$(req PUT "/bookings/$BOOKING/complete" "" "$VENDOR")
+check "vendor cannot mark work done before the second instalment" "$c" 400
+c=$(req PUT "/bookings/$BOOKING/pay" '{"milestone":"second"}' "$BRIDE")
+check "buyer pays the second instalment" "$c" 200
+
+c=$(req PUT "/bookings/$BOOKING/complete" "" "$VENDOR")
+check "vendor marks the work delivered" "$c" 200
+c=$(req PUT "/bookings/$BOOKING/pay" '{"milestone":"final"}' "$BRIDE")
+check "buyer pays the balance, closing the booking" "$c" 200
+c=$(req PUT "/bookings/$BOOKING/settle" "" "$VENDOR")
+check "the held instalments are released to the provider" "$c" 200
+c=$(req PUT "/bookings/$BOOKING/confirm" "" "$VENDOR")
+check "no transition out of COMPLETED" "$c" 400
+
+c=$(req GET /bookings/incoming "" "$VENDOR")
+check "vendor lists incoming bookings" "$c" 200
+c=$(req GET /bookings/incoming "" "$BRIDE")
+check "bride cannot list incoming bookings" "$c" 403
+
+echo
+echo "== 8. Agent books on behalf of a client =="
+if [ -z "$CLIENT_ID" ]; then
+  echo "  NOTE  no claimed client available; skipping on-behalf-of booking checks"
+else
+  # The lock follows the client, not the person clicking, so the agent has to
+  # fix their client's match before booking anything for them. An agency
+  # matching two of its own clients is the ordinary case here, and the agent
+  # confirms both sides because neither client has an account.
+  c=$(req POST /agents/profiles "{\"displayName\":\"Partner\",\"contactEmail\":\"partner-$STAMP@t.com\",\"contactPhone\":\"$(phone 005)\",\"gender\":\"male\",\"dateOfBirth\":\"1995-05-05\",\"city\":\"Hyderabad\",$CONSENT}" "$AGENT")
+  check "agent builds the counterpart profile" "$c" 201
+  PARTNER=$(field /tmp/body id)
+  verify_identity "$PARTNER" "$AGENT" >/dev/null
+
+  c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":2500,\"onBehalfOfUserId\":\"$CLIENT_ID\"}" "$AGENT")
+  check "agent cannot book for a client with no fixed match" "$c" 403
+
+  c=$(req POST /matches/interest "{\"toProfileId\":\"$PARTNER\",\"profileId\":\"$MANAGED\"}" "$AGENT")
+  check "agent introduces two of their own clients" "$c" 201
+  CLIENT_INTEREST=$(field /tmp/body id)
+  c=$(req PUT "/matches/$CLIENT_INTEREST/accept" "" "$AGENT")
+  check "agent records the acceptance" "$c" 200
+  c=$(req PUT "/matches/$CLIENT_INTEREST/match-fixed" "" "$AGENT")
+  check "agent confirms the first side" "$c" 200
+  c=$(req PUT "/matches/$CLIENT_INTEREST/match-fixed" "" "$AGENT")
+  check "agent confirms the second side" "$c" 200
+  grep -q '"state":"confirmed"' /tmp/body && { echo "  PASS  the agent-brokered match is fixed"; PASS=$((PASS+1)); } || { echo "  FAIL  agent-brokered match not fixed: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+
+  c=$(req GET "/agents/profiles/$MANAGED/charges" "" "$AGENT")
+  check "the agency ledger lists the client's charges" "$c" 200
+  grep -q '"match_settlement"' /tmp/body && { echo "  PASS  the success fee is raised when the match is fixed"; PASS=$((PASS+1)); } || { echo "  FAIL  no settlement fee raised: $(head -c 200 /tmp/body)"; FAIL=$((FAIL+1)); }
+  c=$(req GET "/agents/profiles/$MANAGED/charges" "" "$AGENT2")
+  check "another agency cannot read those charges" "$c" 403
+
+  # The wedding marketplace belongs to the couple, not to the agency that
+  # introduced them. An agent has no booking surface at all now — not the
+  # directory, not bookings, not events or travel — and the API refuses it
+  # rather than merely hiding it.
+  c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":2500,\"onBehalfOfUserId\":\"$CLIENT_ID\"}" "$AGENT")
+  check "an agent cannot place a booking at all" "$c" 403
+  c=$(req GET /bookings "" "$AGENT")
+  check "nor read a booking list" "$c" 403
+  c=$(req POST /events '{"name":"Reception"}' "$AGENT")
+  check "nor create events" "$c" 403
+  # The field is gone from the API surface entirely, so an attempt to book for
+  # somebody else is now rejected as a malformed request rather than a refused
+  # one — there is no such request to refuse.
+  c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":2500,\"onBehalfOfUserId\":\"$CLIENT_ID\"}" "$BRIDE")
+  check "booking on behalf of another account is not part of the API" "$c" 400
+fi
+
+echo "== 9. Planner persona: listing, approval, booking =="
+c=$(req PUT /wedding-planners/me "{\"agencyName\":\"Everafter $STAMP\",\"city\":\"Hyderabad\",\"yearsExperience\":7}" "$PLANNER")
+check "planner creates their listing" "$c" 200
+PLISTING=$(field /tmp/body id)
+c=$(req PUT "/admin/planners/$PLISTING/approve" "" "$ADMIN")
+check "admin approves the planner" "$c" 200
+c=$(req POST /bookings "{\"providerType\":\"planner\",\"providerId\":\"$PLISTING\",\"amount\":9000}" "$BRIDE")
+check "bride books a wedding planner" "$c" 201
+PBOOKING=$(field /tmp/body id)
+c=$(req PUT "/bookings/$PBOOKING/confirm" "" "$VENDOR")
+check "a vendor cannot accept a planner booking" "$c" 403
+c=$(req PUT "/bookings/$PBOOKING/confirm" "" "$PLANNER")
+check "the owning planner accepts the job" "$c" 200
+c=$(req PUT "/bookings/$PBOOKING/pay" '{"milestone":"advance"}' "$BRIDE")
+check "buyer pays the planner advance" "$c" 200
+
+echo
+echo "== 10. Reviews gated on a completed booking =="
+c=$(req POST "/vendors/$LISTING/reviews" '{"rating":5,"comment":"Great"}' "$GROOM")
+check "user with no booking cannot review" "$c" 403
+c=$(req POST "/vendors/$LISTING/reviews" '{"rating":5,"comment":"Great"}' "$BRIDE")
+check "buyer who completed can review" "$c" 201
+c=$(req POST "/vendors/$LISTING/reviews" '{"rating":9}' "$BRIDE")
+check "out-of-range rating rejected" "$c" 400
+c=$(req POST "/vendors/$LISTING/reviews" '{"rating":5}' "$VENDOR")
+check "vendor cannot review (no review permission)" "$c" 403
+
+echo
+echo "== 11. Events IDOR =="
+c=$(req POST /events '{"name":"Mehendi","venue":"Hall A"}' "$BRIDE")
+check "bride creates an event" "$c" 201
+EV=$(field /tmp/body id)
+c=$(req GET "/events/$EV/guest-list" "" "$GROOM")
+check "another user cannot read the guest list" "$c" 403
+c=$(req GET "/events/$EV/guest-list" "" "$BRIDE")
+check "the host can read the guest list" "$c" 200
+c=$(req POST /events/guests '{"name":"Guest One"}' "$GROOM")
+check "groom adds their own guest" "$c" 201
+G=$(field /tmp/body id)
+c=$(req POST "/events/$EV/invite" "{\"guestId\":\"$G\"}" "$BRIDE")
+check "host cannot invite another user guest record" "$c" 403
+
+echo
+echo "== 12. Request schema validation =="
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"not-a-uuid\",\"amount\":5000}" "$BRIDE")
+check "non-uuid providerId rejected" "$c" 400
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":-50}" "$BRIDE")
+check "negative amount rejected" "$c" 400
+c=$(req POST /bookings "{\"providerType\":\"satellite\",\"providerId\":\"$LISTING\",\"amount\":50}" "$BRIDE")
+check "unknown providerType rejected" "$c" 400
+c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":999999999999}" "$BRIDE")
+check "absurd amount rejected" "$c" 400
+c=$(req POST /admin/disputes "{\"bookingId\":\"$BOOKING\",\"reason\":\"x\"}" "$BRIDE")
+check "too-short dispute reason rejected" "$c" 400
+c=$(req POST /admin/disputes "{\"bookingId\":\"$BOOKING\",\"reason\":\"The venue was not as described at all.\"}" "$GROOM")
+check "dispute by a non-party rejected" "$c" 403
+c=$(req POST /admin/disputes "{\"bookingId\":\"$BOOKING\",\"reason\":\"The venue was not as described at all.\"}" "$BRIDE")
+check "dispute by the buyer accepted" "$c" 201
+c=$(req POST "/media/albums/$FAKE/presign" '{"filename":"../../etc/passwd"}' "$BRIDE")
+check "path traversal in presign filename rejected" "$c" 400
+c=$(req PUT /users/me/profile '{"displayName":"A","photos":["javascript:alert(1)"]}' "$BRIDE")
+check "non-url photo rejected" "$c" 400
+c=$(req GET "/vendors/search?limit=100000" "")
+check "oversized page limit rejected" "$c" 400
+
+echo
+echo "== 13. Token handling =="
+c=$(req GET /auth/me/permissions "" "garbage.token.here")
+check "garbage token rejected" "$c" 401
+c=$(req GET /auth/me/permissions "")
+check "missing token rejected" "$c" 401
+# The refresh token is in the httpOnly cookie the jar picked up at login, not
+# in the response body — which is the point: page script cannot read it.
+grep -q "$(printf 'wow_rt')" "$JAR" && { echo "  PASS  refresh token is set as an httpOnly cookie"; PASS=$((PASS+1)); } || { echo "  FAIL  no refresh cookie was set"; FAIL=$((FAIL+1)); }
+jq -e 'has("refreshToken") | not' /tmp/bride.json >/dev/null && { echo "  PASS  refresh token is NOT returned in the JSON body"; PASS=$((PASS+1)); } || { echo "  FAIL  refresh token leaked into the response body"; FAIL=$((FAIL+1)); }
+
+c=$(req POST /auth/refresh '{}')
+check "refresh works from the cookie alone, with no access token" "$c" 200
+# Explicit body token beats the cookie, so a tampered one is still rejected.
+c=$(curl -s -o /tmp/body -w '%{http_code}' -X POST "$API/auth/refresh" \
+      -H 'Content-Type: application/json' -d '{"refreshToken":"tampered.token.value.here"}')
+check "tampered refresh token rejected" "$c" 401
+c=$(req PUT "/admin/users/$BRIDE_ID/status" '{"isActive":false}' "$ADMIN")
+check "admin deactivates an account" "$c" 200
+c=$(req GET /auth/me/permissions "" "$BRIDE")
+check "deactivated user blocked on an existing token" "$c" 403
+c=$(req PUT "/admin/users/$BRIDE_ID/status" '{"isActive":true}' "$ADMIN")
+check "admin reinstates the account" "$c" 200
+c=$(req GET /auth/me/permissions "" "$BRIDE")
+check "reinstated user works again" "$c" 200
+
+echo
+echo "== 14. A boolean that cannot be talked into a yes =="
+
+# The application converts body values to the declared type before validating
+# them, and that conversion reads any non-empty string as true — so "false"
+# means yes. Fine for a page filter. Not fine for suspending an account, or for
+# consent to circulate somebody's biodata.
+
+c=$(req GET "/admin/users?limit=1" "" "$ADMIN")
+check "the admin user list is served" "$c" 200
+TARGET=$(jq -r '.data[0].id // empty' /tmp/body)
+
+# "false" is honoured as false. It used to be read as true, so an administrator
+# posting it from a form reinstated the account they meant to suspend.
+c=$(req PUT "/admin/users/$TARGET/status" '{"isActive":"false"}' "$ADMIN")
+check "the string false is accepted" "$c" 200
+body_has '"isActive":false' "and means false, which it did not used to"
+
+# Anything that is not unambiguously a boolean is refused rather than guessed.
+c=$(req PUT "/admin/users/$TARGET/status" '{"isActive":"nonsense"}' "$ADMIN")
+check "and anything else is refused rather than read as yes" "$c" 400
+c=$(req PUT "/admin/users/$TARGET/status" '{"isActive":true}' "$ADMIN")
+check "a real boolean still works" "$c" 200
+body_has '"isActive":true' "reinstating the account"
+
+echo
+echo "============================="
+printf ' PASSED: %s   FAILED: %s\n' "$PASS" "$FAIL"
+echo "============================="
+[ "$FAIL" = "0" ]
