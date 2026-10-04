@@ -16,6 +16,13 @@ Required capabilities:
 - configure the `railway-beta`, `aws-rehearsal` and `production` environments;
 - create an AWS OIDC trust relationship without storing AWS access keys.
 
+Required cross-repository source-review secret:
+
+- `WOW_SYNC_TOKEN`, a fine-grained token scoped only to the private `RohithTadiparti/WOW-MD` repository with **Contents: read-only**;
+- stored only as a GitHub Actions repository secret in `world-of-weddingz-production`;
+- expires within 90 days and has a named rotation owner;
+- used only by the daily/manual source synchronization review, which has no push or merge permissions.
+
 ## Railway
 
 Required account: project owner initially; later grant a least-privilege deployer role where the plan permits.

@@ -4,6 +4,9 @@
 - Requirements:
 - GitHub issue:
 - Source repository commits: None
+- Shared source impact: None
+- WOW-MD mirror PR: None
+- Dependency changes: None
 
 ## Change
 
