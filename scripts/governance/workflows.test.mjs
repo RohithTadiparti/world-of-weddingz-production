@@ -11,6 +11,9 @@ test('secret scan can enumerate pull-request commits', () => {
 
 test('private-tier CodeQL keeps a 30-day SARIF artifact without native upload', () => {
   assert.match(codeql, /upload:\s*false/);
+  assert.match(codeql, /output:\s*results/);
+  assert.match(codeql, /path:\s*results/);
+  assert.doesNotMatch(codeql, /\.\.\/results/);
   assert.match(codeql, /actions\/upload-artifact@/);
   assert.match(codeql, /retention-days:\s*30/);
 });

@@ -50,7 +50,7 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: /language:${{ matrix.language }}
-          output: ../results
+          output: results
           upload: false
 
       - name: Retain SARIF report
@@ -58,6 +58,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: ../results
+          path: results
           if-no-files-found: error
           retention-days: 30
