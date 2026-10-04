@@ -1,73 +1,89 @@
 ---
-title: Zoho Mail SMTP operating guide
+title: Zoho SSO and mail operating guide
 status: approved-candidate
 owner: security-and-operations
-related: [SEC-001, CFG-001, OPS-003]
+related: [SEC-001, CFG-001, OPS-003, AUTH-001]
 ---
 
-# Zoho Mail SMTP operating guide
+# Zoho SSO and mail operating guide
 
 ## Decision
 
-Zoho Mail is feasible for the initial low-volume beta because the backend already uses authenticated SMTP through Nodemailer. No Zoho-specific SDK or application-code dependency is required.
+Zoho Accounts and Zoho Mail serve separate purposes.
 
-It is not the application MFA factor. Administrator MFA remains authenticator-based TOTP with recovery codes. Zoho delivers verification, invitation, password-reset, RSVP and operational email.
+- Zoho Accounts OAuth is the administrator login. An administrator does not use an application password and does not have to enrol in application TOTP for routine access.
+- Any existing bride, groom, family, agent, vendor or planner account may also choose Zoho SSO when its WOW email matches the verified email returned by Zoho. Accounts using Gmail or another provider continue to work with username, email address or mobile number plus password.
+- OTP is limited to signup/contact verification and password recovery. It is not a passwordless login method.
+- Zoho Mail SMTP sends verification, invitation, password-reset, RSVP and operational messages. It does not control application login.
 
-Zoho Mail is not the long-term high-volume transactional endpoint. Zoho documents a reputation-dependent external limit of roughly 50–500 messages per rolling hour and does not support bulk/burst sending. Zoho recommends ZeptoMail for automated transactional messages. Create an `OPS-003` migration decision before sustained traffic reaches 25 external messages/hour, or immediately after any rate restriction, bounce spike or delayed security email.
+Zoho SSO uses the Authorization Code flow and the least-privilege `AaaServer.profile.Read` scope. The application accepts only an already-existing account with a matching email and never creates or changes roles from an SSO assertion.
 
-Official references:
+## TOTP and step-up
 
-- [Zoho SMTP server configuration](https://www.zoho.com/mail/help/zoho-smtp.html)
-- [Zoho Mail sending limits](https://www.zoho.com/mail/help/adminconsole/rates-and-limits.html)
-- [Zoho Mail usage policy](https://www.zoho.com/mail/help/usage-policy.html)
-- [Zoho ZeptoMail transactional SMTP/API](https://www.zoho.com/zeptomail/)
+Application TOTP remains optional and is not part of routine administrator login. Zoho account MFA should protect the Zoho identity itself.
+
+For a later high-risk action such as starting the one-button AWS migration, prefer fresh Zoho reauthentication and a five-minute, single-use, action-scoped token. Add application TOTP only if the chosen Zoho plan cannot provide adequate fresh-authentication evidence. If TOTP is enabled, the sequence is: enrol from an authenticated session, scan the QR code, confirm one current six-digit code, store recovery codes, then enter a current code only when the protected action requests step-up.
 
 ## Required account and access
 
-The owner creates a domain mailbox such as `no-reply@your-domain.com` and keeps human access protected by Zoho MFA. The application uses a separately generated app-specific password, never the human account password.
+At final deployment, the owner must provide:
 
-Required permissions and setup:
+- a Zoho OAuth web application client ID and secret;
+- an exact callback URI for the production domain;
+- the permitted Zoho Accounts data-centre URL;
+- a verified sending domain and DNS access for SPF, DKIM and DMARC;
+- a sender mailbox or alias used by `MAIL_FROM` and `SMTP_USER`;
+- a revocable SMTP application password;
+- access to Zoho security, sending and restriction reports.
 
-- verified sending domain;
-- access to publish SPF, DKIM and DMARC DNS records;
-- mailbox/alias used by `MAIL_FROM` and `SMTP_USER`;
-- Zoho MFA enabled for the mailbox owner;
-- revocable app-specific password for the application;
-- access to Zoho sending/security reports and restriction notices.
-
-Store `SMTP_USER` and `SMTP_PASSWORD` only in Railway/GitHub/Kubernetes secret storage. Record owners and verification dates in `access.csv`, never credential values.
+Store client secrets and SMTP credentials only in Railway/GitHub/Kubernetes secret storage. Record owners and verification dates in `access.csv`, never credential values.
 
 ## Configuration
 
-Use the exact server shown in the Zoho account's **Server Configuration** because it varies by account type and data centre.
+The committed configuration contains placeholders only until the final deployment gate.
 
 ```text
-DEPLOYMENT_TIER=public-beta
+ADMIN_LOGIN_PROVIDER=zoho
+ZOHO_SSO_ENABLED=true
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.<approved-data-centre>
+ZOHO_CLIENT_ID=<secret-store reference>
+ZOHO_CLIENT_SECRET=<secret-store reference>
+ZOHO_REDIRECT_URI=https://<public-host>/api/auth/sso/zoho/callback
+
 MAIL_PROVIDER=smtp
 MAIL_FROM=WOW <no-reply@your-domain.com>
 SMTP_HOST=<Zoho account SMTP host>
 SMTP_PORT=465
 SMTP_SECURE=true
 SMTP_USER=no-reply@your-domain.com
-SMTP_PASSWORD=<app-specific password from secret store>
-APP_BASE_URL=https://<public application host>
+SMTP_PASSWORD=<secret-store reference>
+APP_BASE_URL=https://<public-host>
 ```
 
-Port `465` uses implicit TLS and requires `SMTP_SECURE=true`. Port `587` uses a TLS upgrade and requires `SMTP_SECURE=false`. The authenticated address must match the sender address or a configured alias.
+Use the exact SMTP host shown by Zoho for the account and data centre. Port 465 uses implicit TLS. Port 587 uses STARTTLS and `SMTP_SECURE=false`.
 
-## Enablement sequence
+## Final enablement sequence
+
+Do this at the end of the release process, after application and infrastructure validation:
 
 1. Verify the domain and publish SPF, DKIM and DMARC without weakening existing policies.
-2. Enable MFA on the Zoho owner account and create an application-specific password.
-3. Store the two SMTP secrets in the target platform; set non-secret values through canonical configuration.
-4. Keep `DEPLOYMENT_TIER=staging` and send verification, password-reset and administrator-alert messages to controlled inboxes.
-5. Confirm delivery, link host, expiry, From/Reply-To identity, SPF/DKIM/DMARC alignment and redacted application logs.
-6. Enrol every administrator in TOTP MFA.
-7. Select `DEPLOYMENT_TIER=public-beta`; boot must fail if mail or security settings are unsafe.
-8. Monitor send failures, restriction notices, bounces and time-to-delivery.
+2. Create the Zoho OAuth web application with the exact production callback URI.
+3. Protect the Zoho administrator/mailbox owner with Zoho MFA and create the SMTP application password.
+4. Store SSO and SMTP secrets in the target platform; set only non-secret values through canonical configuration.
+5. Keep the deployment restricted and test SSO for an administrator and one non-admin matching-email account.
+6. Send verification, reset and administrator-alert messages to controlled inboxes. Confirm delivery, expiry, From/Reply-To identity, SPF/DKIM/DMARC alignment and redacted logs.
+7. Select the public-beta tier only after those checks pass.
 
-## Rotation and rollback
+## Capacity and fallback
 
-To rotate, create a new app-specific password, update the platform secret, restart one candidate instance, perform the controlled delivery checks, then revoke the old password.
+Zoho Mail is suitable for the initial low-volume beta, not high-volume bulk delivery. Create an `OPS-003` provider decision before sustained external traffic reaches 25 messages per hour, or immediately after any restriction, bounce spike or delayed security email.
 
-If Zoho is unavailable, do not switch a public deployment to `MAIL_PROVIDER=log`: that would expose reset/invitation links to logs and the boot policy correctly rejects it. Roll back to the previous working SMTP secret/provider or temporarily pause workflows that require email. Existing tokens retain their normal expiry and may be resent after service recovery.
+Do not switch a public deployment to `MAIL_PROVIDER=log`. Roll back to the previous working SMTP secret/provider or pause email-dependent workflows until delivery is restored.
+
+Official references:
+
+- [Zoho OAuth web-server flow](https://www.zoho.com/developer/oauth/web-server-apps/overview.html)
+- [Zoho OAuth authorization code](https://www.zoho.com/developer/oauth/web-server-apps/get-authorization-code.html)
+- [Zoho OAuth user information](https://www.zoho.com/accounts/protocol/oauth/use-access-token.html)
+- [Zoho SMTP configuration](https://www.zoho.com/mail/help/zoho-smtp.html)
+- [Zoho Mail sending limits](https://www.zoho.com/mail/help/adminconsole/rates-and-limits.html)
