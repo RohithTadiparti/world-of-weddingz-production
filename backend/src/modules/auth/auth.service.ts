@@ -104,6 +104,8 @@ export interface AuthResult {
 
 /** Thrown as a 401 body the client can branch on to prompt for a TOTP code. */
 export const MFA_REQUIRED = 'MFA_REQUIRED';
+/** Administrator password was valid, but mandatory MFA has not been enrolled. */
+export const MFA_ENROLLMENT_REQUIRED = 'MFA_ENROLLMENT_REQUIRED';
 
 /**
  * Per-number limits on signing in by mobile (EZ1-I258). The routes are also
@@ -366,10 +368,23 @@ export class AuthService {
     }
     if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
 
-    // Two-factor, mandatory for admins once configured.
-    const mfaRequired =
-      user.mfaEnabled ||
-      (user.role === UserRole.ADMIN && this.cfg.auth.mfaRequiredForAdmin && user.mfaEnabled);
+    // Administrators do not receive a privileged session until enrollment is
+    // complete. This is deliberately a refusal rather than a normal login:
+    // enrollment happens in a restricted staging window before the public
+    // deployment tier is enabled, so no admin-only route becomes the setup
+    // route for an account protected by only one factor.
+    if (
+      user.role === UserRole.ADMIN &&
+      this.cfg.auth.mfaRequiredForAdmin &&
+      !user.mfaEnabled
+    ) {
+      throw new ForbiddenException({
+        message: 'Administrator two-factor enrollment is required before sign-in',
+        code: MFA_ENROLLMENT_REQUIRED,
+      });
+    }
+
+    const mfaRequired = user.mfaEnabled;
     if (mfaRequired) {
       if (!dto.mfaCode) {
         throw new UnauthorizedException({

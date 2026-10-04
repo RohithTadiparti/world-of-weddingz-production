@@ -9,7 +9,7 @@ import { authenticator } from 'otplib';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
-import { AuthService } from './auth.service';
+import { AuthService, MFA_ENROLLMENT_REQUIRED, MFA_REQUIRED } from './auth.service';
 import { SessionsService } from './sessions.service';
 import { MfaRecoveryCode } from './entities/mfa-recovery-code.entity';
 import { User } from './entities/user.entity';
@@ -380,6 +380,40 @@ describe('AuthService', () => {
       await expect(service.login({ email: 'a.tester@gmail.com', password: 'correct' })).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
+    });
+
+    it('refuses an administrator whose required MFA is not enrolled', async () => {
+      repo.findOne.mockResolvedValueOnce(
+        await activeUser({ role: UserRole.ADMIN, mfaEnabled: false, mfaSecret: null }),
+      );
+
+      try {
+        await service.login({ email: 'admin@example.com', password: 'correct' });
+        throw new Error('Expected administrator login to be refused');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect((error as ForbiddenException).getResponse()).toMatchObject({
+          code: MFA_ENROLLMENT_REQUIRED,
+        });
+      }
+    });
+
+    it('gives an enrolled administrator the normal TOTP challenge', async () => {
+      repo.findOne.mockResolvedValueOnce(
+        await activeUser({
+          role: UserRole.ADMIN,
+          mfaEnabled: true,
+          mfaSecret: 'JBSWY3DPEHPK3PXP',
+        }),
+      );
+
+      try {
+        await service.login({ email: 'admin@example.com', password: 'correct' });
+        throw new Error('Expected administrator TOTP challenge');
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnauthorizedException);
+        expect((error as UnauthorizedException).getResponse()).toMatchObject({ code: MFA_REQUIRED });
+      }
     });
 
     it('rejects a wrong TOTP code', async () => {

@@ -8,12 +8,15 @@ import * as Joi from 'joi';
  */
 export const configValidationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'test', 'staging', 'production').default('development'),
+  DEPLOYMENT_TIER: Joi.string()
+    .valid('local', 'staging', 'public-beta', 'revenue')
+    .default('local'),
   PORT: Joi.number().default(3000),
   HOST: Joi.string().default('0.0.0.0'),
   API_PREFIX: Joi.string().default('api'),
   LOG_LEVEL: Joi.string().valid('fatal', 'error', 'warn', 'info', 'debug', 'trace').default('info'),
   CORS_ORIGINS: Joi.string().optional(),
-  SWAGGER_ENABLED: Joi.string().optional(),
+  SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').optional(),
 
   // Database
   DB_HOST: Joi.string().required(),
@@ -190,7 +193,7 @@ export const configValidationSchema = Joi.object({
 
   // Auth hardening
   REFRESH_COOKIE_NAME: Joi.string().optional(),
-  COOKIE_SECURE: Joi.string().optional(),
+  COOKIE_SECURE: Joi.boolean().truthy('true').falsy('false').optional(),
   COOKIE_SAME_SITE: Joi.string().valid('lax', 'strict', 'none').optional(),
   COOKIE_DOMAIN: Joi.string().allow('').optional(),
   MAX_FAILED_LOGINS: Joi.number().min(3).max(100).default(8),
@@ -201,7 +204,7 @@ export const configValidationSchema = Joi.object({
   PASSWORD_RESET_TTL_MINUTES: Joi.number().min(5).max(1440).default(30),
   RSVP_TOKEN_TTL_DAYS: Joi.number().min(1).max(730).default(120),
   MFA_ISSUER: Joi.string().allow('').optional(),
-  MFA_REQUIRED_FOR_ADMIN: Joi.string().optional(),
+  MFA_REQUIRED_FOR_ADMIN: Joi.boolean().truthy('true').falsy('false').default(true),
 
   // Mail
   MAIL_PROVIDER: Joi.string().valid('log', 'smtp').default('log'),
@@ -227,7 +230,7 @@ export const configValidationSchema = Joi.object({
   MAIL_FROM: Joi.string().allow('').optional(),
   SMTP_HOST: Joi.string().allow('').optional(),
   SMTP_PORT: Joi.number().default(587),
-  SMTP_SECURE: Joi.string().optional(),
+  SMTP_SECURE: Joi.boolean().truthy('true').falsy('false').optional(),
   SMTP_USER: Joi.string().allow('').optional(),
   SMTP_PASSWORD: Joi.string().allow('').optional(),
   APP_BASE_URL: Joi.string().uri().default('http://localhost:8080'),
@@ -267,6 +270,69 @@ export const configValidationSchema = Joi.object({
         custom:
           `ESCROW_ADVANCE_PERCENT + ESCROW_SECOND_PERCENT + ESCROW_FINAL_PERCENT must be 100, got ${total}`,
       } as never);
+    }
+
+    const publicDeployment = ['public-beta', 'revenue'].includes(value.DEPLOYMENT_TIER);
+    if (!publicDeployment) return value;
+
+    const violations: string[] = [];
+    if (value.NODE_ENV !== 'production') {
+      violations.push('NODE_ENV must be production for a public deployment tier');
+    }
+    if (value.MFA_REQUIRED_FOR_ADMIN !== true) {
+      violations.push('MFA_REQUIRED_FOR_ADMIN must be true');
+    }
+    if (value.MAIL_PROVIDER !== 'smtp') {
+      violations.push('MAIL_PROVIDER must be smtp');
+    }
+    for (const key of ['MAIL_FROM', 'SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD']) {
+      if (!String(value[key] ?? '').trim()) violations.push(`${key} is required for SMTP mail`);
+    }
+    if (/@wow\.local\b/i.test(String(value.MAIL_FROM ?? ''))) {
+      violations.push('MAIL_FROM must use a deliverable domain');
+    }
+    if (Number(value.SMTP_PORT) === 465 && value.SMTP_SECURE !== true) {
+      violations.push('SMTP_SECURE must be true when SMTP_PORT is 465');
+    }
+    if (Number(value.SMTP_PORT) === 587 && value.SMTP_SECURE === true) {
+      violations.push('SMTP_SECURE must be false when SMTP_PORT is 587');
+    }
+    if (value.COOKIE_SECURE !== true) violations.push('COOKIE_SECURE must be true');
+    if (value.SWAGGER_ENABLED !== false) violations.push('SWAGGER_ENABLED must be false');
+    if (!String(value.APP_BASE_URL ?? '').startsWith('https://')) {
+      violations.push('APP_BASE_URL must use https');
+    }
+    const corsOrigins = String(value.CORS_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+    if (!corsOrigins.length || corsOrigins.some((origin) => origin === '*' || !origin.startsWith('https://'))) {
+      violations.push('CORS_ORIGINS must be an explicit HTTPS allow-list');
+    }
+    if (value.MEDIA_STORAGE_PROVIDER !== 's3') {
+      violations.push('MEDIA_STORAGE_PROVIDER must be s3');
+    }
+    if (!String(value.S3_BUCKET ?? '').trim()) violations.push('S3_BUCKET is required for private media');
+    if (!String(value.S3_REGION ?? '').trim()) violations.push('S3_REGION is required for private media');
+
+    if (value.DEPLOYMENT_TIER === 'revenue') {
+      if (value.PAYMENT_PROVIDER !== 'razorpay') {
+        violations.push('PAYMENT_PROVIDER must be razorpay');
+      }
+      for (const key of ['PAYMENT_WEBHOOK_SECRET', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET']) {
+        if (!String(value[key] ?? '').trim()) violations.push(`${key} is required for Razorpay`);
+      }
+      if (value.AADHAAR_PROVIDER !== 'licensed') {
+        violations.push('AADHAAR_PROVIDER must be licensed');
+      }
+      const identityClient = String(value.AADHAAR_CLIENT_ID || value.AADHAAR_API_KEY || '').trim();
+      const identitySecret = String(value.AADHAAR_CLIENT_SECRET || value.AADHAAR_API_SECRET || '').trim();
+      if (!identityClient) violations.push('Aadhaar client identifier is required');
+      if (!identitySecret) violations.push('Aadhaar client secret is required');
+    }
+
+    if (violations.length) {
+      return helpers.message({ custom: violations.join('; ') } as never);
     }
     return value;
   });

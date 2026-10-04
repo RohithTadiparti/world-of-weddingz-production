@@ -49,6 +49,7 @@ services:
       - media_store:/app/media-store
     environment:
       NODE_ENV: production
+      DEPLOYMENT_TIER: ${DEPLOYMENT_TIER:-local}
       PORT: 3000
       API_PREFIX: api
       # The frontend is served same-origin through nginx, so the browser calls
@@ -72,6 +73,7 @@ services:
       SMTP_SECURE: ${SMTP_SECURE:-false}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MFA_REQUIRED_FOR_ADMIN: ${MFA_REQUIRED_FOR_ADMIN:-true}
       # Where every link the platform hands out points: the SPA, not the API.
       # Invitations, password resets and RSVP links are all built from this.
       #
