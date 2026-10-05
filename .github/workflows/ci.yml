@@ -58,6 +58,7 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run lint
       - run: npm run typecheck
 
@@ -89,6 +90,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run typecheck
       # The frontend suite was never run here, so the check that the client's
       # permission mirror still matches the backend enum only ever ran on a
@@ -109,6 +111,7 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
+      - run: node ../scripts/security/audit-mobile-production.mjs
       - run: npm run typecheck
       # The bundle, not just the types.
       #

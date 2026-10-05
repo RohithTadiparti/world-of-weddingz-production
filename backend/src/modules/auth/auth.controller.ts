@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Req,
   Res,
   UnauthorizedException,
@@ -24,11 +25,9 @@ import {
   ConfirmMfaDto,
   DisableMfaDto,
   LoginDto,
-  MobileOtpLoginDto,
   RefreshDto,
   RegisterDto,
   RegisterViaAgentLinkDto,
-  RequestMobileOtpDto,
   RequestPasswordResetDto,
   ResetPasswordDto,
   RegenerateRecoveryCodesDto,
@@ -42,6 +41,8 @@ import { AllowDuringPasswordReset } from '../../common/decorators/password-reset
 import { Permission, permissionsFor } from '../../common/authz/permissions';
 import { ACCOUNT_TYPE_ROLE, AccountType, INDIVIDUAL_ROLES } from '../../common/enums';
 import { AppConfigService } from '../../config/app-config.service';
+import { ZohoSsoService } from './zoho-sso.service';
+import { sealTokenForCookie, unsealTokenFromCookie } from '../../common/util/tokens';
 
 /**
  * The ceiling on the credential-guessing surface: register, login, refresh and
@@ -67,10 +68,39 @@ export class AuthController {
     private readonly invitations: InvitationsService,
     private readonly phones: PhoneVerificationService,
     private readonly cfg: AppConfigService,
+    private readonly zohoSso: ZohoSsoService,
   ) {}
 
   private ctx(req: Request) {
     return { userAgent: req.headers['user-agent'] ?? null, ip: req.ip ?? null };
+  }
+
+  @Public()
+  @Get('login-options')
+  loginOptions() {
+    return { zohoSso: this.cfg.auth.zohoSsoEnabled };
+  }
+
+  @Public()
+  @Get('sso/zoho/start')
+  @ApiOperation({ summary: 'Begin Zoho SSO for an existing account' })
+  async beginZohoSso(@Res() res: Response) {
+    return res.redirect(await this.zohoSso.authorizationUrl());
+  }
+
+  @Public()
+  @Get('sso/zoho/callback')
+  @ApiOperation({ summary: 'Complete Zoho SSO and open an application session' })
+  async completeZohoSso(
+    @Query('code') code: string,
+    @Query('state') state: string,
+    @Query('location') location: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const email = await this.zohoSso.exchange(code, state, location);
+    this.respond(req, res, await this.auth.loginWithZoho(email, this.ctx(req)));
+    return res.redirect(`${this.cfg.mail.appBaseUrl.replace(/\/$/, '')}/login?sso=complete`);
   }
 
   /**
@@ -111,7 +141,10 @@ export class AuthController {
     if (this.isNativeClient(req)) return result;
 
     const a = this.cfg.auth;
-    res.cookie(a.refreshCookieName, result.refreshToken, {
+    res.cookie(
+      a.refreshCookieName,
+      sealTokenForCookie(result.refreshToken, a.jwtRefreshSecret),
+      {
       httpOnly: true,
       secure: a.cookieSecure,
       sameSite: a.cookieSameSite,
@@ -120,7 +153,8 @@ export class AuthController {
       // to every ordinary API call.
       path: `/${this.cfg.runtime.apiPrefix}/auth`,
       maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+      },
+    );
     const { refreshToken, ...body } = result;
     void refreshToken;
     return body;
@@ -136,7 +170,10 @@ export class AuthController {
   /** Cookie first; body only for clients that cannot hold cookies. */
   private readRefreshToken(req: Request, dto?: RefreshDto): string | undefined {
     const cookies = (req as Request & { cookies?: Record<string, string> }).cookies;
-    return cookies?.[this.cfg.auth.refreshCookieName] ?? dto?.refreshToken;
+    const cookie = cookies?.[this.cfg.auth.refreshCookieName];
+    return cookie
+      ? unsealTokenFromCookie(cookie, this.cfg.auth.jwtRefreshSecret)
+      : dto?.refreshToken;
   }
 
   // ------------------------------------------------------------ sign-up flow
@@ -318,15 +355,6 @@ export class AuthController {
    * to send and a loop here is somebody else's phone ringing all night. The
    * answer does not say whether the number is on an account.
    */
-  @Public()
-  @Throttle({ default: { limit: 3, ttl: 300000 } })
-  @ApiOperation({ summary: 'Send a sign-in code to a mobile number' })
-  @HttpCode(200)
-  @Post('otp/request')
-  requestOtp(@Body() dto: RequestMobileOtpDto) {
-    return this.auth.requestMobileOtp(dto.mobile);
-  }
-
   /**
    * The code, exchanged for the same session a password would have given.
    *
@@ -334,23 +362,6 @@ export class AuthController {
    * it: the first is what stops somebody working through numbers, the second is
    * what makes six digits a credential.
    */
-  @Public()
-  @Throttle({ default: { limit: 10, ttl: 300000 } })
-  @ApiOperation({ summary: 'Sign in with a mobile number and its code' })
-  @HttpCode(200)
-  @Post('otp/login')
-  async otpLogin(
-    @Body() dto: MobileOtpLoginDto,
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    return this.respond(
-      req,
-      res,
-      await this.auth.loginWithMobileOtp(dto.mobile, dto.code, dto.mfaCode, this.ctx(req)),
-    );
-  }
-
   // ------------------------------------------------------ phone verification
 
   /**

@@ -73,7 +73,13 @@ services:
       SMTP_SECURE: ${SMTP_SECURE:-false}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      MFA_REQUIRED_FOR_ADMIN: ${MFA_REQUIRED_FOR_ADMIN:-true}
+      MFA_REQUIRED_FOR_ADMIN: ${MFA_REQUIRED_FOR_ADMIN:-false}
+      ADMIN_LOGIN_PROVIDER: ${ADMIN_LOGIN_PROVIDER:-password}
+      ZOHO_SSO_ENABLED: ${ZOHO_SSO_ENABLED:-false}
+      ZOHO_ACCOUNTS_URL: ${ZOHO_ACCOUNTS_URL:-https://accounts.zoho.in}
+      ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID:-}
+      ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET:-}
+      ZOHO_REDIRECT_URI: ${ZOHO_REDIRECT_URI:-}
       # Where every link the platform hands out points: the SPA, not the API.
       # Invitations, password resets and RSVP links are all built from this.
       #

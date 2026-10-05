@@ -280,12 +280,12 @@ describe('WOW API (e2e)', () => {
       .expect(409);
   });
 
-  it('refuses registration with an address that is not Gmail', async () => {
-    const refused = await http()
+  it('accepts registration with any valid email provider', async () => {
+    const accepted = await http()
       .post('/api/auth/register')
       .send({ ...solo, email: `wow.e2e.${unique}@example.com`, phone: freshPhone(5) })
-      .expect(400);
-    expect(JSON.stringify(refused.body)).toContain('gmail.com');
+      .expect(201);
+    expect(accepted.body.user.email).toBe(`wow.e2e.${unique}@example.com`);
   });
 
   it('lets a solo user sign in on their own, with no agent involved', async () => {

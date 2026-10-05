@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, LessThan, MoreThan, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { RefreshSession } from './entities/refresh-session.entity';
-import { hashToken } from '../../common/util/tokens';
+import { hashSecretToken } from '../../common/util/tokens';
 import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { AppConfigService } from '../../config/app-config.service';
 
@@ -51,6 +51,10 @@ export class SessionsService {
     private readonly cfg: AppConfigService,
   ) {}
 
+  private hashRefreshToken(token: string): string {
+    return hashSecretToken(token, this.cfg.auth.jwtRefreshSecret);
+  }
+
   async create(
     userId: string,
     token: string,
@@ -61,7 +65,7 @@ export class SessionsService {
     return this.sessions.save(
       this.sessions.create({
         userId,
-        tokenHash: hashToken(token),
+        tokenHash: this.hashRefreshToken(token),
         familyId,
         expiresAt,
         userAgent: ctx.userAgent?.slice(0, 400) ?? null,
@@ -83,7 +87,7 @@ export class SessionsService {
     newExpiresAt: Date,
     ctx: SessionContext = {},
   ): Promise<RefreshSession> {
-    const tokenHash = hashToken(presentedToken);
+    const tokenHash = this.hashRefreshToken(presentedToken);
     const existing = await this.sessions.findOne({ where: { tokenHash } });
 
     if (!existing || existing.userId !== userId) {
@@ -169,7 +173,7 @@ export class SessionsService {
 
   async revokeByToken(token: string, reason: string): Promise<void> {
     await this.sessions.update(
-      { tokenHash: hashToken(token), revokedAt: IsNull() },
+      { tokenHash: this.hashRefreshToken(token), revokedAt: IsNull() },
       { revokedAt: new Date(), revokedReason: reason },
     );
   }
@@ -179,7 +183,7 @@ export class SessionsService {
       where: { userId, revokedAt: IsNull() },
       order: { createdAt: 'DESC' },
     });
-    const currentHash = currentToken ? hashToken(currentToken) : null;
+    const currentHash = currentToken ? this.hashRefreshToken(currentToken) : null;
     return rows
       .filter((r) => r.expiresAt.getTime() > Date.now())
       .map((r) => ({
