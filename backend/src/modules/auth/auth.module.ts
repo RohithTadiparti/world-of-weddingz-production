@@ -15,6 +15,7 @@ import { PhoneVerification } from './entities/phone-verification.entity';
 import { MfaRecoveryCode } from './entities/mfa-recovery-code.entity';
 import { PhoneVerificationService } from './phone-verification.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { ZohoSsoService } from './zoho-sso.service';
 
 @Module({
   imports: [
@@ -23,7 +24,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     JwtModule.register({}),
     InvitationsModule,
   ],
-  providers: [AuthService, SessionsService, JwtStrategy, PhoneVerificationService],
+  providers: [AuthService, SessionsService, JwtStrategy, PhoneVerificationService, ZohoSsoService],
   controllers: [AuthController],
   exports: [TypeOrmModule, JwtModule, AuthService, SessionsService, PhoneVerificationService],
 })

@@ -39,16 +39,18 @@ export const PASSWORD_MESSAGE =
 export const normaliseEmail = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;
 
-/** Accepts either of the two things a person can be signing in with. */
-@ValidatorConstraint({ name: 'emailOrMobile' })
+export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,39}$/;
+
+/** Accepts every supported stable account identifier. */
+@ValidatorConstraint({ name: 'loginIdentifier' })
 export class EmailOrMobileConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
     if (typeof value !== 'string') return false;
-    return MOBILE_PATTERN.test(value) || isEmail(value);
+    return MOBILE_PATTERN.test(value) || isEmail(value) || USERNAME_PATTERN.test(value);
   }
 
   defaultMessage(): string {
-    return 'Enter your email address or the mobile number your account was set up with';
+    return 'Enter your username, email address or mobile number';
   }
 }
 
@@ -58,6 +60,15 @@ export class RegisterDto {
   @MaxLength(254)
   @Transform(normaliseEmail)
   email: string;
+
+  @ApiPropertyOptional({ example: 'asha_rao', minLength: 3, maxLength: 40 })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @Matches(USERNAME_PATTERN, {
+    message: 'Username must be 3-40 lowercase letters, numbers, dots, underscores or hyphens',
+  })
+  username?: string;
 
   @ApiProperty({ example: 'StrongP@ssw0rd', minLength: 8, maxLength: 128 })
   @IsString()
@@ -146,7 +157,7 @@ export class RegisterViaAgentLinkDto extends RegisterDto {
  * Normalises a mobile to the stored E.164 form and leaves everything else to
  * be trimmed and lower-cased as an address.
  */
-const normaliseIdentifier = (args: { value: unknown }): unknown => {
+export const normaliseIdentifier = (args: { value: unknown }): unknown => {
   if (typeof args.value !== 'string') return args.value;
   const asMobile = normaliseMobile(args);
   if (typeof asMobile === 'string' && MOBILE_PATTERN.test(asMobile)) return asMobile;
@@ -156,7 +167,7 @@ const normaliseIdentifier = (args: { value: unknown }): unknown => {
 export class LoginDto {
   @ApiProperty({
     example: 'bride@example.com',
-    description: 'Email address, or the mobile number the account was set up with',
+    description: 'Username, email address, or the mobile number on the account',
   })
   @MaxLength(254)
   @Validate(EmailOrMobileConstraint)
@@ -207,7 +218,7 @@ export class RequestPasswordResetDto {
    * recovery has to accept the number too or those accounts are locked out of
    * their own password reset for good (EZ1-I233).
    */
-  @ApiProperty({ description: 'Email address, or the mobile number the account was set up with' })
+  @ApiProperty({ description: 'Username, email address, or mobile number on the account' })
   @MaxLength(254)
   @Validate(EmailOrMobileConstraint)
   @Transform(normaliseIdentifier)

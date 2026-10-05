@@ -5,14 +5,14 @@ import { User } from '../entities/user.entity';
 import { JwtPayload } from '../auth.service';
 import { JwtStrategy } from './jwt.strategy';
 
-describe('JwtStrategy administrator MFA policy', () => {
+describe('JwtStrategy administrator SSO policy', () => {
   const users = { findOne: jest.fn() };
   const cfg = {
     auth: {
       jwtSecret: 'test-jwt-secret-at-least-32-characters',
-      mfaRequiredForAdmin: true,
+      adminLoginProvider: 'zoho',
     },
-  } as AppConfigService;
+  } as unknown as AppConfigService;
   const payload: JwtPayload = {
     sub: 'user-1',
     email: 'admin@example.com',
@@ -37,18 +37,18 @@ describe('JwtStrategy administrator MFA policy', () => {
     } as User;
   }
 
-  it('rejects an existing administrator session when required MFA is not enrolled', async () => {
+  it('rejects an administrator token not issued through Zoho SSO', async () => {
     users.findOne.mockResolvedValue(account());
     const strategy = new JwtStrategy(cfg, users as never);
 
     await expect(strategy.validate(payload)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('accepts an administrator session after MFA enrollment', async () => {
-    users.findOne.mockResolvedValue(account({ mfaEnabled: true }));
+  it('accepts an administrator token issued through Zoho SSO', async () => {
+    users.findOne.mockResolvedValue(account());
     const strategy = new JwtStrategy(cfg, users as never);
 
-    await expect(strategy.validate(payload)).resolves.toMatchObject({
+    await expect(strategy.validate({ ...payload, authMethod: 'zoho' })).resolves.toMatchObject({
       userId: 'user-1',
       role: UserRole.ADMIN,
     });

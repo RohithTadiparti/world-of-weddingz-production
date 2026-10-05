@@ -33,6 +33,11 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   email: string | null;
 
+  /** Stable public sign-in name, independent of the contact email address. */
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  username: string | null;
+
   @Column({ type: 'varchar', nullable: true })
   phone: string | null;
 
