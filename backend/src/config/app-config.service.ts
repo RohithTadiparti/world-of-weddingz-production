@@ -24,6 +24,9 @@ export class AppConfigService {
   get redis() {
     return this.section('redis');
   }
+  get observability() {
+    return this.section('observability');
+  }
   get auth() {
     return this.section('auth');
   }

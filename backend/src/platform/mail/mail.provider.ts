@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { AppConfigService } from '../../config/app-config.service';
+import { errorType, maskEmail } from '../../common/logging/log-redaction';
+import { DeliveryCaptureService } from '../delivery-capture/delivery-capture.service';
 
 export interface MailMessage {
   to: string;
@@ -23,10 +25,16 @@ export interface MailProvider {
 export class LogMailProvider implements MailProvider {
   private readonly logger = new Logger('Mail');
 
+  constructor(@Optional() private readonly capture?: DeliveryCaptureService) {}
+
   async send(message: MailMessage): Promise<void> {
-    // The link is the whole point of these emails, so keep the plain-text body
-    // intact rather than truncating it.
-    this.logger.log(`[mail:log] to=${message.to} subject="${message.subject}"\n${message.text}`);
+    this.logger.log({
+      event: 'provider_delivery',
+      channel: 'mail',
+      destination: maskEmail(message.to),
+      delivered: true,
+    });
+    await this.capture?.store('mail', message.to, message);
   }
 }
 
@@ -62,7 +70,13 @@ export class SmtpMailProvider implements MailProvider {
     } catch (err) {
       // A mail failure must not roll back the action that triggered it — an
       // invitation row already exists and can be resent.
-      this.logger.error(`Failed to send "${message.subject}" to ${message.to}`, err as Error);
+      this.logger.error({
+        event: 'provider_delivery_failure',
+        channel: 'mail',
+        destination: maskEmail(message.to),
+        delivered: false,
+        errorType: errorType(err),
+      });
       throw err;
     }
   }

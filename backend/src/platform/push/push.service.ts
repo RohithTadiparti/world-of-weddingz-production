@@ -82,7 +82,7 @@ export class PushService {
       }
       return { delivered: result.delivered };
     } catch (err) {
-      this.logger.warn(`Push to ${userId} failed: ${(err as Error).message}`);
+      this.logger.warn(`Push delivery failed: ${(err as Error).name}`);
       return { delivered: 0 };
     }
   }

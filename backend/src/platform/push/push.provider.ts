@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
+import { correlatedHeaders } from '../../common/logging/request-context';
+import { errorType } from '../../common/logging/log-redaction';
+import { DeliveryCaptureService } from '../delivery-capture/delivery-capture.service';
 
 export interface PushMessage {
   /** Device registration tokens. One message, many devices — people have several. */
@@ -44,11 +47,16 @@ export interface PushProvider {
 export class LogPushProvider implements PushProvider {
   private readonly logger = new Logger('Push');
 
+  constructor(@Optional() private readonly capture?: DeliveryCaptureService) {}
+
   async send(message: PushMessage): Promise<PushResult> {
-    this.logger.log(
-      `[push:log] devices=${message.tokens.length} "${message.title}" — ${message.body} ` +
-        `${JSON.stringify(message.data)}`,
-    );
+    this.logger.log({
+      event: 'provider_delivery',
+      channel: 'push',
+      destinations: message.tokens.length,
+      delivered: true,
+    });
+    await Promise.all(message.tokens.map((token) => this.capture?.store('push', token, message)));
     // The default mirrors the real rule rather than pretending everything
     // worked: a message with no devices delivered to nobody, and code that
     // reports otherwise hides an empty token table until production.
@@ -77,10 +85,10 @@ export class FcmPushProvider implements PushProvider {
     try {
       const response = await fetch(push.url, {
         method: 'POST',
-        headers: {
+        headers: correlatedHeaders({
           'Content-Type': 'application/json',
           Authorization: `key=${push.serverKey}`,
-        },
+        }),
         body: JSON.stringify({
           registration_ids: message.tokens,
           notification: { title: message.title, body: message.body },
@@ -106,7 +114,13 @@ export class FcmPushProvider implements PushProvider {
 
       return { delivered: payload.success ?? 0, expired };
     } catch (err) {
-      this.logger.error(`Push to ${message.tokens.length} device(s) failed`, err as Error);
+      this.logger.error({
+        event: 'provider_delivery_failure',
+        channel: 'push',
+        destinations: message.tokens.length,
+        delivered: false,
+        errorType: errorType(err),
+      });
       throw err;
     } finally {
       clearTimeout(timeout);

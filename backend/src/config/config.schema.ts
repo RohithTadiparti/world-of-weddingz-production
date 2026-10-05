@@ -15,6 +15,8 @@ export const configValidationSchema = Joi.object({
   HOST: Joi.string().default('0.0.0.0'),
   API_PREFIX: Joi.string().default('api'),
   LOG_LEVEL: Joi.string().valid('fatal', 'error', 'warn', 'info', 'debug', 'trace').default('info'),
+  SERVICE_NAME: Joi.string().pattern(/^[a-z0-9-]+$/).default('backend'),
+  RELEASE: Joi.string().max(128).default('unknown'),
   CORS_ORIGINS: Joi.string().optional(),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').optional(),
 
@@ -33,6 +35,11 @@ export const configValidationSchema = Joi.object({
   REDIS_PORT: Joi.number().default(6379),
   REDIS_PASSWORD: Joi.string().allow('').optional(),
   REDIS_DEFAULT_TTL: Joi.number().default(300),
+  TEST_DELIVERY_CAPTURE_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  TEST_DELIVERY_CAPTURE_KEY: Joi.string().allow('').when('TEST_DELIVERY_CAPTURE_ENABLED', {
+    is: true,
+    then: Joi.string().min(32).required(),
+  }),
 
   // Auth, secrets must not use the insecure defaults in production.
   JWT_SECRET: Joi.string().min(16).when('NODE_ENV', {
