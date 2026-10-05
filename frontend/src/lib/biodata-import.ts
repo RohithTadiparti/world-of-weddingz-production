@@ -330,20 +330,17 @@ export async function readBiodata(file: File): Promise<Record<string, string>> {
       const mammoth = await import('mammoth');
       text = (await mammoth.extractRawText({ arrayBuffer: bufferFor(bytes) })).value;
     } else if (kind === 'spreadsheet') {
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(bytes, { type: 'array', cellText: true, cellDates: false });
-      text = workbook.SheetNames
-        .map((name) => spreadsheetRowsToText(XLSX.utils.sheet_to_json(workbook.Sheets[name], {
-          header: 1,
-          defval: '',
-          raw: false,
-        }) as unknown[][]))
+      const { default: readXlsxFile } = await import('read-excel-file/browser');
+      const sheets = await readXlsxFile(file);
+      text = sheets
+        .map(({ data }) => spreadsheetRowsToText(data as unknown[][]))
         .filter(Boolean)
         .join('\n');
     } else if (kind === 'pdf') {
       const lib = await import('pdfjs-dist');
       lib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).href;
-      const doc = await lib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+      const loadingTask = lib.getDocument({ data: bytes });
+      const doc = await loadingTask.promise;
       try {
         if (doc.numPages > 10) throw new Error('Choose a biodata PDF with at most 10 pages.');
         for (let i = 1; i <= doc.numPages; i++) {
@@ -364,7 +361,7 @@ export async function readBiodata(file: File): Promise<Record<string, string>> {
           text += pageText + '\n';
           page.cleanup();
         }
-      } finally { await doc.destroy(); }
+      } finally { await loadingTask.destroy(); }
     } else text = await ocr(file);
   } finally { await worker?.terminate(); }
   const fields = parseBiodata(text);
