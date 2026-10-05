@@ -1,0 +1,61 @@
+data_dir: /vector-data
+
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+sources:
+  docker:
+    type: docker_logs
+    include_containers:
+      - wow-
+    exclude_containers:
+      - wow-vector
+
+transforms:
+  normalize_and_redact:
+    type: remap
+    inputs: [docker]
+    source: |-
+      .timestamp = now()
+      .service = replace(to_string(.container_name) ?? "unknown", r'^/', "")
+      .environment = get_env_var("DEPLOYMENT_TIER") ?? "local"
+      raw_level = downcase(to_string(.level) ?? "")
+      .level = if raw_level == "" { "info" } else { raw_level }
+      .stream = to_string(.stream) ?? "stdout"
+      message = to_string(.message) ?? ""
+      message = replace(message, r'(?i)(authorization|cookie|password|otp|mfa[_-]?secret|recovery[_-]?code|reset[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|bank[_-]?account|account[_-]?number)(["=: ]+)([^,}\s]+)', "[REDACTED]")
+      message = replace(message, r'(?i)(X-Amz-(Credential|Signature|Security-Token))=[^&\s]+', "[REDACTED]")
+      .message = message
+      del(.label)
+      del(.container_created_at)
+      del(.image)
+      del(.source_type)
+
+sinks:
+  service_files:
+    type: file
+    inputs: [normalize_and_redact]
+    path: /logs/services/{{ service }}/%Y-%m-%d.jsonl
+    encoding:
+      codec: json
+    healthcheck:
+      enabled: true
+
+  loki:
+    type: loki
+    inputs: [normalize_and_redact]
+    endpoint: ${LOKI_ENDPOINT}
+    labels:
+      service: '{{ service }}'
+      environment: '{{ environment }}'
+      level: '{{ level }}'
+      stream: '{{ stream }}'
+    encoding:
+      codec: json
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    healthcheck:
+      enabled: true

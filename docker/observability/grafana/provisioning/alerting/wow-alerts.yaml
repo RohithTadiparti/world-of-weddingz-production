@@ -1,0 +1,127 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: WOW log alerts
+    folder: WOW
+    interval: 1m
+    rules:
+      - uid: wow-backend-5xx
+        title: backend_5xx
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'sum(count_over_time({service="wow-backend"} | json | statusCode >= 500 [5m]))', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [0] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations: { summary: 'Backend 5xx activity detected' }
+        labels: { severity: warning }
+      - uid: wow-audit-write
+        title: audit_write_failure
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'sum(count_over_time({service="wow-backend"} | json | event="audit_write_failure" [5m]))', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [0] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: { summary: 'Audit persistence failed' }
+        labels: { severity: critical }
+      - uid: wow-job-failure
+        title: job_failure
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'sum(count_over_time({service="wow-backend"} | json | event="job_failure" [10m]))', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [2] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: { summary: 'Repeated scheduled job failures' }
+        labels: { severity: warning }
+      - uid: wow-provider-failure
+        title: provider_failure
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'sum(count_over_time({service="wow-backend"} | json | event=~"provider_.*failure" [10m]))', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [2] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: { summary: 'Repeated provider failures' }
+        labels: { severity: warning }
+      - uid: wow-vector-sink
+        title: vector_sink_failure
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'sum(count_over_time({service="wow-vector"} |= "error" [5m]))', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [0] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: { summary: 'Vector sink failure detected' }
+        labels: { severity: critical }
+      - uid: wow-loki-ingestion
+        title: loki_ingestion_failure
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'sum(count_over_time({service="wow-loki"} |= "error" [5m]))', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [0] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: { summary: 'Loki ingestion failure detected' }
+        labels: { severity: critical }
+      - uid: wow-log-disk
+        title: log_disk_health
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: wow-loki
+            model: { refId: A, expr: 'max_over_time({service="wow-log-disk-monitor"} | json | unwrap usedPercent [10m])', queryType: range }
+          - refId: C
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: '-100'
+            model: { refId: C, type: classic_conditions, conditions: [{ type: query, evaluator: { type: gt, params: [79] }, operator: { type: and }, query: { params: [A] }, reducer: { type: last, params: [] } }] }
+        noDataState: Alerting
+        execErrState: Error
+        for: 5m
+        annotations: { summary: 'Log storage is at or above 80 percent; 90 percent is critical' }
+        labels: { severity: warning }
