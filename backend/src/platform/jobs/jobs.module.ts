@@ -12,6 +12,7 @@ import { Profile } from '../../modules/users/entities/profile.entity';
 import { ProfileConsent } from '../../modules/circulation/entities/profile-consent.entity';
 import { Vendor } from '../../modules/vendors/entities/vendor.entity';
 import { PlannerProfile } from '../../modules/wedding-planners/entities/planner-profile.entity';
+import { ReplicaLockModule } from '../locks/replica-lock.module';
 
 /**
  * Scheduled maintenance.
@@ -31,6 +32,7 @@ import { PlannerProfile } from '../../modules/wedding-planners/entities/planner-
     // The payout sweep needs the booking service's own retry, so the split and
     // the gateway call stay in one place rather than being re-derived here.
     forwardRef(() => BookingsModule),
+    ReplicaLockModule,
   ],
   providers: [JobsService],
   exports: [JobsService],

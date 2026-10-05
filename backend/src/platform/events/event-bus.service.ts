@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { Subject, filter, Observable } from 'rxjs';
 
 export interface DomainEvent<T = Record<string, unknown>> {
+  /** Stable across retries so remote consumers can reject duplicate delivery. */
+  idempotencyKey?: string;
   eventType: string;
   aggregateType: string;
   payload: T;
