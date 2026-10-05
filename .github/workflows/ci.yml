@@ -59,6 +59,8 @@ jobs:
 
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
+      - name: Verify unique migration order
+        run: node ../scripts/verify-migration-order.mjs ../backend/src/database/migrations
       - run: npm run lint
       - run: npm run typecheck
 
