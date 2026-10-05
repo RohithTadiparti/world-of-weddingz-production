@@ -12,9 +12,9 @@ describe('AdminCountsGateway', () => {
   const emit = jest.fn();
   let gateway: AdminCountsGateway;
 
-  const socket = (userId: string) =>
+  const socket = (userId: string, origin = 'https://app.example.com') =>
     ({
-      handshake: { auth: { token: userId }, headers: {} },
+      handshake: { auth: { token: userId }, headers: { origin } },
       data: {},
       join: jest.fn(),
       disconnect: jest.fn(),
@@ -24,14 +24,20 @@ describe('AdminCountsGateway', () => {
     jest.useFakeTimers();
     jest.clearAllMocks();
     gateway = new AdminCountsGateway(
-      { verifyAsync: jest.fn(async (token: string) => ({ sub: token })) } as unknown as JwtService,
-      { auth: { jwtSecret: 'secret' } } as unknown as AppConfigService,
+      { verifyAsync: jest.fn(async (token: string) => ({ sub: token, tv: 0 })) } as unknown as JwtService,
+      {
+        auth: { jwtSecret: 'secret', mfaRequiredForAdmin: true },
+        runtime: { corsOrigins: ['https://app.example.com'] },
+      } as unknown as AppConfigService,
       { getCounts } as unknown as AdminPendingCountsService,
       {
         findOne: jest.fn(async ({ where }: { where: { id: string } }) => ({
           id: where.id,
           role: UserRole.ADMIN,
           isActive: true,
+          mustResetPassword: false,
+          tokenVersion: 0,
+          mfaEnabled: true,
         })),
       } as unknown as Repository<User>,
     );
@@ -74,5 +80,12 @@ describe('AdminCountsGateway', () => {
     await gateway.handleConnection(two);
     gateway.handleDisconnect(one);
     expect(gateway.connectedAdmins()).toEqual(['admin-1']);
+  });
+
+  it('rejects a browser from an unlisted origin before loading the account', async () => {
+    const client = socket('admin-1', 'https://hostile.example');
+    await gateway.handleConnection(client);
+    expect(client.disconnect).toHaveBeenCalledWith(true);
+    expect(getCounts).not.toHaveBeenCalled();
   });
 });

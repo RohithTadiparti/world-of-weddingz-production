@@ -21,6 +21,9 @@ import { Permission, roleHasPermission } from '../../common/authz/permissions';
 import { PresenceService } from './presence.service';
 import { buildIceServers } from './ice-servers';
 import { StorageService } from '../../platform/storage/storage.service';
+import { isAllowedSocketOrigin, socketCorsOrigin } from '../../common/websocket/socket-origin';
+
+export { isAllowedSocketOrigin } from '../../common/websocket/socket-origin';
 
 /**
  * Real-time chat. Authenticated on the handshake via JWT. Runs behind the Redis
@@ -28,7 +31,7 @@ import { StorageService } from '../../platform/storage/storage.service';
  * Each user joins a room named by their userId; a message is emitted to the
  * recipient's room regardless of which replica they are connected to.
  */
-@WebSocketGateway({ namespace: 'chat', cors: true })
+@WebSocketGateway({ namespace: 'chat', cors: { origin: socketCorsOrigin, credentials: true } })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(ChatGateway.name);
 
@@ -46,6 +49,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   async handleConnection(client: Socket) {
     try {
+      const origin = client.handshake.headers.origin;
+      if (!isAllowedSocketOrigin(origin, this.cfg.runtime.corsOrigins)) {
+        throw new Error('origin');
+      }
       const token =
         (client.handshake.auth?.token as string) ||
         (client.handshake.headers?.authorization as string)?.replace('Bearer ', '');
@@ -55,9 +62,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // not the token, so a suspension takes effect on the next connection.
       const user = await this.users.findOne({
         where: { id: payload.sub },
-        select: ['id', 'role', 'isActive'],
+        select: ['id', 'role', 'isActive', 'mustResetPassword', 'tokenVersion'],
       });
       if (!user || !user.isActive) throw new Error('inactive');
+      if (user.mustResetPassword) throw new Error('password-reset-required');
+      if ((payload.tv ?? 0) !== (user.tokenVersion ?? 0)) throw new Error('revoked');
       if (!roleHasPermission(user.role, Permission.CHAT_INQUIRE)) throw new Error('forbidden');
 
       client.data.userId = user.id;
@@ -65,7 +74,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.join(`user:${user.id}`);
 
       await this.presence.markOnline(user.id);
-      this.server.emit('presence:changed', { userId: user.id, online: true });
+      await this.emitPresenceToAudience(user.id, true);
     } catch {
       this.logger.warn('Rejected socket: invalid token or ineligible account');
       client.disconnect(true);
@@ -85,7 +94,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (sockets.length > 0) return;
 
     await this.presence.markOffline(userId);
-    this.server.emit('presence:changed', { userId, online: false });
+    await this.emitPresenceToAudience(userId, false);
+  }
+
+  private async emitPresenceToAudience(userId: string, online: boolean) {
+    const audience = await this.chat.presenceAudienceOf(userId);
+    await Promise.all(
+      audience.map(async (peerId) => {
+        this.server.to(`user:${peerId}`).emit('presence:changed', { userId, online });
+      }),
+    );
   }
 
   /** Keeps the presence key alive while a tab is open but quiet. */
@@ -183,18 +201,23 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   /**
    * Candidate exchange, which continues for the life of the negotiation.
    *
-   * Deliberately not authorization-checked on every candidate: the offer and
-   * the answer were, and re-running the whole chat rule for each of the dozens
-   * of candidates a connection produces would put a database round trip on a
-   * path that has to complete in a second or two.
+   * Authorization is repeated because a caller can forge signalling events
+   * without first sending an offer, and a relationship may be revoked while
+   * negotiation is in progress.
    */
   @SubscribeMessage('call:candidate')
-  onCallCandidate(
+  async onCallCandidate(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { toUserId: string; candidate: unknown },
   ) {
     const userId = client.data.userId as string;
     if (!userId || typeof payload?.toUserId !== 'string') return { error: 'unauthenticated' };
+
+    try {
+      await this.chat.assertCanChat(userId, payload.toUserId);
+    } catch {
+      return { error: 'Call rejected' };
+    }
 
     this.server.to(`user:${payload.toUserId}`).emit('call:candidate', {
       fromUserId: userId,
@@ -205,12 +228,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /** Hang up, decline, or give up on a connection that will not form. */
   @SubscribeMessage('call:end')
-  onCallEnd(
+  async onCallEnd(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { toUserId: string; reason?: string },
   ) {
     const userId = client.data.userId as string;
     if (!userId || typeof payload?.toUserId !== 'string') return { error: 'unauthenticated' };
+
+    try {
+      await this.chat.assertCanChat(userId, payload.toUserId);
+    } catch {
+      return { error: 'Call rejected' };
+    }
 
     this.server.to(`user:${payload.toUserId}`).emit('call:ended', {
       fromUserId: userId,

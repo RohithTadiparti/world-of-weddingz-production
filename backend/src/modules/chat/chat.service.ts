@@ -1036,4 +1036,21 @@ export class ChatService {
     ]);
     return { online, lastSeen };
   }
+
+  /** Existing conversation peers are the only audience for presence events. */
+  async presenceAudienceOf(userId: string): Promise<string[]> {
+    const conversations = await this.conversations.find({
+      where: [{ participantA: userId }, { participantB: userId }],
+      select: ['participantA', 'participantB'],
+    });
+    return [
+      ...new Set(
+        conversations.map((conversation) =>
+          conversation.participantA === userId
+            ? conversation.participantB
+            : conversation.participantA,
+        ),
+      ),
+    ];
+  }
 }

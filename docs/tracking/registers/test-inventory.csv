@@ -10,3 +10,4 @@ QA-SEC-001,Security,Admin MFA provider startup WebSockets headers secrets depend
 QA-PERF-001,Performance,Railway ramp spike soak recovery,None,Not run,Measured limits with 30 percent headroom,QA-001
 QA-RES-001,Resilience,Backup restore and failed cutover,None,Not run,Successful restore and two rollback rehearsals,"QA-002 QA-003"
 QA-GOV-001,Source synchronization,Private-source report and shared-code mirror gate,PR 55 local evidence,19 of 19 governance and synchronization tests passed,Configure WOW_SYNC_TOKEN and capture first scheduled artifact,SYNC-002
+QA-SEC-002,WebSocket authorization,Origin token-version forced-reset call relay and presence audience,SEC-002 PR 62,"11 focused gateway tests and complete backend suite 800 passed with 9 skipped",Repeat browser and native reconnect smoke tests on Railway candidate,SEC-002

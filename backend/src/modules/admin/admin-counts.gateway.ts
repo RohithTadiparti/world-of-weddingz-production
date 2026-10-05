@@ -14,6 +14,7 @@ import { Permission, roleHasPermission } from '../../common/authz/permissions';
 import { User } from '../auth/entities/user.entity';
 import { UserRole } from '../../common/enums';
 import { AdminPendingCounts, AdminPendingCountsService } from './admin-pending-counts.service';
+import { isAllowedSocketOrigin, socketCorsOrigin } from '../../common/websocket/socket-origin';
 
 /** How often the counts are recomputed for the administrators watching them. */
 export const ADMIN_COUNTS_POLL_MS = 5000;
@@ -25,7 +26,7 @@ export const ADMIN_COUNTS_POLL_MS = 5000;
  * instance, and the timer runs only while there is at least one. With nobody
  * connected there is no one to tell, so there is nothing to count.
  */
-@WebSocketGateway({ namespace: 'admin', cors: true })
+@WebSocketGateway({ namespace: 'admin', cors: { origin: socketCorsOrigin, credentials: true } })
 export class AdminCountsGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   private readonly logger = new Logger(AdminCountsGateway.name);
   private readonly snapshots = new Map<string, string>();
@@ -49,15 +50,26 @@ export class AdminCountsGateway implements OnGatewayConnection, OnGatewayDisconn
 
   async handleConnection(client: Socket) {
     try {
+      if (!isAllowedSocketOrigin(client.handshake.headers.origin, this.config.runtime.corsOrigins)) {
+        throw new Error('origin');
+      }
       const token =
         (client.handshake.auth?.token as string) ||
         (client.handshake.headers?.authorization as string)?.replace('Bearer ', '');
       const payload = await this.jwt.verifyAsync(token, { secret: this.config.auth.jwtSecret });
       const user = await this.users.findOne({
         where: { id: payload.sub },
-        select: ['id', 'role', 'isActive'],
+        select: ['id', 'role', 'isActive', 'mustResetPassword', 'tokenVersion', 'mfaEnabled'],
       });
-      if (!user || !user.isActive || user.role !== UserRole.ADMIN || !roleHasPermission(user.role, Permission.ADMIN_ANALYTICS_READ)) {
+      if (
+        !user ||
+        !user.isActive ||
+        user.mustResetPassword ||
+        (payload.tv ?? 0) !== (user.tokenVersion ?? 0) ||
+        (this.config.auth.mfaRequiredForAdmin && !user.mfaEnabled) ||
+        user.role !== UserRole.ADMIN ||
+        !roleHasPermission(user.role, Permission.ADMIN_ANALYTICS_READ)
+      ) {
         throw new Error('forbidden');
       }
       client.data.userId = user.id;
