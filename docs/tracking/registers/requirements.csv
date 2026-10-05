@@ -17,3 +17,7 @@ REQ-QA-001,CI unit database E2E Playwright mobile security and IaC checks are ma
 REQ-QA-002,Database and UI values must match exactly after documented normalization,QA mandate,P0,Reconciliation evidence,MIG-004 QA-002,Approved
 REQ-LOG-001,Logs remain searchable locally and in Loki for 30 days,Logging decision,P0,Retention and query tests,OBS-003,Approved
 REQ-REV-001,AWS migration readiness reports INR 1.2M target and INR 1.5M preferred monthly net revenue,Migration design,P1,Admin readiness UI test,UI-001,Approved
+REQ-AUTH-001,Administrators authenticate through Zoho SSO and do not require routine application TOTP,User direction,P0,Authentication integration tests and controlled Zoho sign-in evidence,SEC-001,Approved
+REQ-AUTH-002,Existing users may sign in with Zoho SSO or username email or mobile plus password and any valid email provider is accepted,User direction,P0,Backend frontend mobile and Playwright authentication tests,SEC-001,Approved
+REQ-AUTH-003,OTP is used only for signup/contact verification and password recovery and never as passwordless login,User direction,P0,Route inventory and authentication tests,SEC-001,Approved
+REQ-AUTH-004,Zoho domain DNS sender mailbox SMTP application password and production OAuth callback are configured only at the final deployment gate,User direction,P0,Final release checklist and controlled delivery/SSO evidence,"SEC-001,REL-001",Approved

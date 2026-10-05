@@ -18,7 +18,7 @@ Required capabilities:
 
 Required cross-repository source-review secret:
 
-- `WOW_SYNC_TOKEN`, a fine-grained token scoped only to the private `RohithTadiparti/WOW-MD` repository with **Contents: read-only**;
+- `WOW_SYNC_TOKEN`, a fine-grained token scoped only to `RohithTadiparti/WOW-MD` with **Contents: read-only**; defer it while the source is public and create it before returning the source to private visibility;
 - stored only as a GitHub Actions repository secret in `world-of-weddingz-production`;
 - expires within 90 days and has a named rotation owner;
 - used only by the daily/manual source synchronization review, which has no push or merge permissions.
