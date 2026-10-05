@@ -1,0 +1,43 @@
+version: 1
+deployment:
+  tier: local
+  liveMediaProvider: s3
+providers:
+  mail: log
+  sms: log
+  whatsapp: log
+  push: log
+  payment: mock
+  identity: mock
+  media: mock
+  ai: mock
+operations:
+  logRetentionDays: 30
+  alertReminderHours: 24
+  consecutiveCountSamples: 2
+  sustainedPerformanceMinutes: 15
+  thresholds:
+    accounts: { warning: 5000, critical: 10000 }
+    dailyActiveUsers: { warning: 500, critical: 1000 }
+    requestsPerDay: { warning: 50000, critical: 100000 }
+    concurrentUsers: { warning: 30, critical: 75 }
+    databaseGigabytes: { warning: 5, critical: 10 }
+    p95LatencyMs: { warning: 400, critical: 750 }
+    errorRatePercent: { warning: 0.5, critical: 1 }
+    cpuPercent: { warning: 70, critical: 80 }
+    memoryPercent: { warning: 70, critical: 80 }
+    railwayMonthlyInr: { warning: 15000, critical: 30000 }
+  revenue:
+    minimumMonthlyNetInr: 1200000
+    preferredMonthlyNetInr: 1500000
+features:
+  individualUserEnabled: true
+  chatRedactContacts: true
+  servicesRequireMatchFixed: false
+  catalogReviewThresholdPercent: 0
+migration:
+  enabled: false
+  executor: mock
+  dryRun: true
+  readOnlyWindowMinutes: 15
+  railwayRetentionHours: 72

@@ -3,11 +3,12 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 # Install ALL deps (incl. dev) using the lockfile for reproducibility.
-COPY package.json package-lock.json* ./
+COPY backend/package.json backend/package-lock.json* ./
 RUN npm ci
 
 # Compile TypeScript -> dist (includes data-source + migrations).
-COPY . .
+COPY backend/. .
+COPY config/platform.yaml ./config/platform.yaml
 RUN npm run build
 
 # ---------- Stage 2: runtime ----------
@@ -16,11 +17,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Only production dependencies in the final image.
-COPY package.json package-lock.json* ./
+COPY backend/package.json backend/package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy compiled output.
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/config ./config
 
 # Where the mock storage writes uploads. Created here, with the right owner,
 # because a named volume mounted over an empty path is created root-owned — and

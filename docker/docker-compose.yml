@@ -46,8 +46,8 @@ services:
 
   backend:
     build:
-      context: ../backend
-      dockerfile: ../docker/Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     image: wow-backend:local
     container_name: wow-backend
     ports:
@@ -57,6 +57,7 @@ services:
       - media_store:/app/media-store
     environment:
       NODE_ENV: production
+      PLATFORM_CONFIG_PATH: /app/config/platform.yaml
       DEPLOYMENT_TIER: ${DEPLOYMENT_TIER:-local}
       PORT: 3000
       API_PREFIX: api
@@ -74,7 +75,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-characters-long}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production-min-32-chars}
       # Mail: 'log' writes invitation and reset links to this container's log.
-      MAIL_PROVIDER: ${MAIL_PROVIDER:-log}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-}
       MAIL_FROM: ${MAIL_FROM:-WOW <no-reply@wow.local>}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -101,7 +102,7 @@ services:
       # real Razorpay credentials in docker/.env and still run on the mock
       # provider, because the container never received them — the escrow would
       # look like it worked and no money would move.
-      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-}
       PAYMENT_CURRENCY: ${PAYMENT_CURRENCY:-INR}
       PAYMENT_COMMISSION_PERCENT: ${PAYMENT_COMMISSION_PERCENT:-10}
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
@@ -115,7 +116,7 @@ services:
       PAYMENT_CASH_COMMISSION_OWED: ${PAYMENT_CASH_COMMISSION_OWED:-true}
       # SMS. Missing here for the same reason and with the same effect: an OTP
       # that silently goes to a log file instead of a phone.
-      SMS_PROVIDER: ${SMS_PROVIDER:-log}
+      SMS_PROVIDER: ${SMS_PROVIDER:-}
       SMS_URL: ${SMS_URL:-}
       SMS_API_KEY: ${SMS_API_KEY:-}
       SMS_SENDER_ID: ${SMS_SENDER_ID:-WOWMAT}
@@ -137,9 +138,9 @@ services:
       CHAT_REDACT_CONTACTS: ${CHAT_REDACT_CONTACTS:-true}
       # Push and WhatsApp both default to `log`, which writes what would have
       # gone out rather than pretending it did.
-      PUSH_PROVIDER: ${PUSH_PROVIDER:-log}
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-}
       PUSH_SERVER_KEY: ${PUSH_SERVER_KEY:-}
-      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-log}
+      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
       WHATSAPP_LANGUAGE: ${WHATSAPP_LANGUAGE:-en}
@@ -163,7 +164,7 @@ services:
       # standard AWS_* variables work too. For the local MinIO below:
       #   MEDIA_STORAGE_PROVIDER=s3 S3_BUCKET=wow-media S3_REGION=us-east-1
       #   S3_ENDPOINT=http://minio:9000 S3_PUBLIC_ENDPOINT=http://localhost:9100
-      MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-mock}
+      MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-}
       MAX_FILE_SIZE: ${MAX_FILE_SIZE:-10485760}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-}

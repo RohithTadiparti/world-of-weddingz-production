@@ -11,6 +11,13 @@ export const configValidationSchema = Joi.object({
   DEPLOYMENT_TIER: Joi.string()
     .valid('local', 'staging', 'public-beta', 'revenue')
     .default('local'),
+  PLATFORM_CONFIG_PATH: Joi.string().allow('').optional(),
+  LOG_RETENTION_DAYS: Joi.number().integer().min(1).max(365).optional(),
+  MIGRATION_ENABLED: Joi.boolean().truthy('true').falsy('false').optional(),
+  MIGRATION_EXECUTOR: Joi.string().valid('mock', 'aws').optional(),
+  MIGRATION_DRY_RUN: Joi.boolean().truthy('true').falsy('false').optional(),
+  MIGRATION_READ_ONLY_MINUTES: Joi.number().integer().min(1).optional(),
+  RAILWAY_RETENTION_HOURS: Joi.number().integer().min(1).optional(),
   PORT: Joi.number().default(3000),
   HOST: Joi.string().default('0.0.0.0'),
   API_PREFIX: Joi.string().default('api'),

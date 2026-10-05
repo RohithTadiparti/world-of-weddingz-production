@@ -3,6 +3,8 @@
 
 region             = "ap-south-1"
 environment        = "production"
+# Application defaults live in config/platform.yaml inside the immutable image;
+# Terraform/secret stores supply environment-specific values and secrets only.
 cluster_name       = "wow-eks"
 kubernetes_version = "1.29"
 

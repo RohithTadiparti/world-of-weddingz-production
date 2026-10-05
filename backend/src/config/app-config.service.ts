@@ -27,6 +27,18 @@ export class AppConfigService {
   get observability() {
     return this.section('observability');
   }
+  get operations() {
+    return this.section('operations');
+  }
+  get deployment() {
+    return this.section('deployment');
+  }
+  get providers() {
+    return this.section('providers');
+  }
+  get migration() {
+    return this.section('migration');
+  }
   get auth() {
     return this.section('auth');
   }

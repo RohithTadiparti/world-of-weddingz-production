@@ -61,6 +61,8 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - name: Verify unique migration order
         run: node ../scripts/verify-migration-order.mjs ../backend/src/database/migrations
+      - name: Verify platform configuration boundary
+        run: node ../scripts/verify-config-boundary.mjs
       - run: npm run lint
       - run: npm run typecheck
 
@@ -132,7 +134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build backend production image
-        run: docker build -f docker/Dockerfile -t wow-backend:ci ./backend
+        run: docker build -f docker/Dockerfile -t wow-backend:ci .
       - name: Build frontend production image
         run: docker build -f docker/Dockerfile.frontend -t wow-frontend:ci ./frontend
       # In a real pipeline: scan (Trivy), push to registry, run DB migration job, deploy.

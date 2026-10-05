@@ -2,6 +2,8 @@
 
 > Production delivery and governance start at [PRODUCTION_PROGRAM.md](PRODUCTION_PROGRAM.md). This clean-history repository is temporarily public to use GitHub's free protection and security controls, and accepts changes only through traced issues and pull requests.
 
+Non-secret provider modes, operating limits and migration policy are centralized in [`config/platform.yaml`](config/platform.yaml); see the [platform configuration runbook](docs/operations/platform-configuration.md). Secrets remain outside Git.
+
 WOW is a full stack platform that carries a couple through the whole wedding journey. People discover and match with a partner, connect and chat once both sides agree, plan the wedding with an automatic timeline, book vendors and wedding planners with money held safely in escrow, run the individual ceremonies with guest lists and seating, arrange the honeymoon, and finally keep their photos and videos in shareable albums.
 
 The backend is a single well organised NestJS application written in TypeScript. It stores everything in PostgreSQL and uses Redis for caching, sessions, rate limiting and real time chat delivery. The frontend is a React application built with Vite and styled with Tailwind. The whole system is packaged to run with Docker, to scale on Kubernetes, and to be provisioned on AWS with Terraform.
