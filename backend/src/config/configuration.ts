@@ -122,10 +122,16 @@ export default () => ({
     passwordResetTtlMinutes: toNumber(process.env.PASSWORD_RESET_TTL_MINUTES, 30),
     rsvpTokenTtlDays: toNumber(process.env.RSVP_TOKEN_TTL_DAYS, 120),
 
-    // Two-factor. Required for admins by default: they can release escrow and
-    // suspend accounts, so a stolen password must not be enough.
+    // TOTP remains optional for ordinary accounts and may later be used for
+    // scoped high-risk step-up. Administrator login uses Zoho SSO in public.
     mfaIssuer: process.env.MFA_ISSUER || 'WOW Weddings',
-    mfaRequiredForAdmin: toBool(process.env.MFA_REQUIRED_FOR_ADMIN, true),
+    mfaRequiredForAdmin: toBool(process.env.MFA_REQUIRED_FOR_ADMIN, false),
+    adminLoginProvider: (process.env.ADMIN_LOGIN_PROVIDER || 'password') as 'password' | 'zoho',
+    zohoSsoEnabled: toBool(process.env.ZOHO_SSO_ENABLED, false),
+    zohoAccountsUrl: process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in',
+    zohoClientId: process.env.ZOHO_CLIENT_ID || '',
+    zohoClientSecret: process.env.ZOHO_CLIENT_SECRET || '',
+    zohoRedirectUri: process.env.ZOHO_REDIRECT_URI || '',
   },
 
   mail: {

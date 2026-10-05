@@ -43,12 +43,12 @@ export default function ForgotPassword() {
         ) : (
           <form onSubmit={submit} className="space-y-4">
             <p className="text-sm text-gray-600">
-              Enter your email address or mobile number and we will send you a link to choose a new
+              Enter your username, email address or mobile number and we will send you a link to choose a new
               password.
             </p>
             <div>
               <label className="label" htmlFor="email">
-                Email or mobile number
+                Username, email or mobile number
               </label>
               {/*
                 An account an agency took on by mobile alone has no address,

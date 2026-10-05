@@ -7,7 +7,7 @@ import { AppConfigService } from '../../../config/app-config.service';
 import { AuthUser } from '../../../common/decorators/current-user.decorator';
 import { UserRole } from '../../../common/enums';
 import { User } from '../entities/user.entity';
-import { JwtPayload, MFA_ENROLLMENT_REQUIRED } from '../auth.service';
+import { JwtPayload, SSO_REQUIRED } from '../auth.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -32,19 +32,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.sub },
       select: [
         'id', 'email', 'role', 'isActive', 'managedByAgentId', 'mustResetPassword',
-        'tokenVersion', 'mfaEnabled',
+        'tokenVersion',
       ],
     });
     if (!user) throw new UnauthorizedException('Account no longer exists');
     if (!user.isActive) throw new ForbiddenException('This account has been deactivated');
     if (
       user.role === UserRole.ADMIN &&
-      this.cfg.auth.mfaRequiredForAdmin &&
-      !user.mfaEnabled
+      this.cfg.auth.adminLoginProvider === 'zoho' &&
+      payload.authMethod !== 'zoho'
     ) {
       throw new ForbiddenException({
-        message: 'Administrator two-factor enrollment is required before access',
-        code: MFA_ENROLLMENT_REQUIRED,
+        message: 'Administrator SSO is required before access',
+        code: SSO_REQUIRED,
       });
     }
 

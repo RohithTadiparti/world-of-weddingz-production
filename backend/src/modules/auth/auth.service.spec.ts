@@ -9,7 +9,7 @@ import { authenticator } from 'otplib';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
-import { AuthService, MFA_ENROLLMENT_REQUIRED, MFA_REQUIRED } from './auth.service';
+import { AuthService, SSO_REQUIRED } from './auth.service';
 import { SessionsService } from './sessions.service';
 import { MfaRecoveryCode } from './entities/mfa-recovery-code.entity';
 import { User } from './entities/user.entity';
@@ -119,7 +119,8 @@ describe('AuthService', () => {
       emailVerifyTtlHours: 48,
       passwordResetTtlMinutes: 30,
       mfaIssuer: 'WOW',
-      mfaRequiredForAdmin: true,
+      mfaRequiredForAdmin: false,
+      adminLoginProvider: 'zoho',
     },
     features: { individualUserEnabled: true },
     // How long a one-time code lives (EZ1-I258). Read even on the path that
@@ -209,6 +210,14 @@ describe('AuthService', () => {
     }) as RegisterDto;
 
   describe('self-service registration (the solo-user path)', () => {
+    it('accepts a valid email from any provider', async () => {
+      repo.findOne.mockResolvedValue(null);
+      await expect(service.register(individual({ email: 'person@outlook.com' }))).resolves.toHaveProperty(
+        'user.email',
+        'person@outlook.com',
+      );
+    });
+
     it('registers a new individual and returns tokens', async () => {
       // Twice: the address, then the number.
       repo.findOne.mockResolvedValue(null);
@@ -337,6 +346,16 @@ describe('AuthService', () => {
       expect(result.user.permissions.length).toBeGreaterThan(0);
     });
 
+    it('finds an account by username as well as email or mobile', async () => {
+      repo.findOne.mockResolvedValueOnce(await activeUser({ username: 'asha_rao' }));
+      await expect(service.login({ email: 'asha_rao', password: 'correct' })).resolves.toHaveProperty(
+        'accessToken',
+      );
+      expect(repo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { username: 'asha_rao' } }),
+      );
+    });
+
     it('rejects the wrong password', async () => {
       repo.findOne.mockResolvedValueOnce(await activeUser());
       await expect(service.login({ email: 'a.tester@gmail.com', password: 'wrong' })).rejects.toBeInstanceOf(
@@ -382,37 +401,19 @@ describe('AuthService', () => {
       );
     });
 
-    it('refuses an administrator whose required MFA is not enrolled', async () => {
+    it('requires Zoho SSO for an administrator instead of password or TOTP login', async () => {
       repo.findOne.mockResolvedValueOnce(
         await activeUser({ role: UserRole.ADMIN, mfaEnabled: false, mfaSecret: null }),
       );
 
       try {
         await service.login({ email: 'admin@example.com', password: 'correct' });
-        throw new Error('Expected administrator login to be refused');
+        throw new Error('Expected administrator password login to be refused');
       } catch (error) {
         expect(error).toBeInstanceOf(ForbiddenException);
         expect((error as ForbiddenException).getResponse()).toMatchObject({
-          code: MFA_ENROLLMENT_REQUIRED,
+          code: SSO_REQUIRED,
         });
-      }
-    });
-
-    it('gives an enrolled administrator the normal TOTP challenge', async () => {
-      repo.findOne.mockResolvedValueOnce(
-        await activeUser({
-          role: UserRole.ADMIN,
-          mfaEnabled: true,
-          mfaSecret: 'JBSWY3DPEHPK3PXP',
-        }),
-      );
-
-      try {
-        await service.login({ email: 'admin@example.com', password: 'correct' });
-        throw new Error('Expected administrator TOTP challenge');
-      } catch (error) {
-        expect(error).toBeInstanceOf(UnauthorizedException);
-        expect((error as UnauthorizedException).getResponse()).toMatchObject({ code: MFA_REQUIRED });
       }
     });
 

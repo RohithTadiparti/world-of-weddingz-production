@@ -5,7 +5,6 @@ import { Link } from 'expo-router';
 import { acceptAuth, api, apiMessage } from '@/lib/api';
 import {
   EMAIL_PATTERN,
-  GMAIL_PATTERN,
   MOBILE_10_PATTERN,
   NAME_PATTERN,
   type AccountType,
@@ -71,6 +70,7 @@ export default function Register() {
   const [role, setRole] = useState('bride');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -98,9 +98,8 @@ export default function Register() {
     }
 
     if (!EMAIL_PATTERN.test(email.trim())) errors.email = 'Enter a valid email address';
-    // Every portal registers with a Gmail address (EZ1-I104).
-    else if (!GMAIL_PATTERN.test(email.trim())) {
-      errors.email = 'Registration requires a @gmail.com email address';
+    if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username.trim().toLowerCase())) {
+      errors.username = 'Use 3-40 lowercase letters, numbers, dots, underscores or hyphens';
     }
 
     /*
@@ -144,6 +143,7 @@ export default function Register() {
     try {
       const payload: Record<string, unknown> = {
         email: email.trim(),
+        username: username.trim().toLowerCase(),
         password,
         accountType,
         displayName: displayName.trim(),
@@ -256,6 +256,16 @@ export default function Register() {
         {fieldErrors.email ? <Caption tone="critical">{fieldErrors.email}</Caption> : null}
 
         <Field
+          label="Username"
+          value={username}
+          onChangeText={(value) => setUsername(value.toLowerCase())}
+          autoCapitalize="none"
+          autoComplete="username"
+          placeholder="asha_rao"
+        />
+        {fieldErrors.username ? <Caption tone="critical">{fieldErrors.username}</Caption> : null}
+
+        <Field
           label="Mobile number"
           hint={
             fieldErrors.phone
@@ -311,7 +321,7 @@ export default function Register() {
           onPress={submit}
           busy={busy}
           disabled={
-            !email.trim() || !password || !confirmPassword || !displayName.trim() || !phone.trim()
+            !email.trim() || !username.trim() || !password || !confirmPassword || !displayName.trim() || !phone.trim()
           }
         />
 

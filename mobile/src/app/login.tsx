@@ -4,7 +4,6 @@ import { Link } from 'expo-router';
 import type { AxiosError } from 'axios';
 
 import { acceptAuth, api, apiMessage } from '@/lib/api';
-import { OtpLogin } from '@/components/auth/otp-login';
 import {
   Alert,
   Body,
@@ -39,9 +38,6 @@ import { rgb, space, useTheme } from '@/theme';
  */
 export default function Login() {
   const theme = useTheme();
-  /** Which way in. Email and password stays the default: it is what every
-   *  existing account already uses, and nothing about it has changed. */
-  const [byMobile, setByMobile] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
@@ -67,7 +63,7 @@ export default function Login() {
         setNeedsMfa(true);
         setError('');
       } else {
-        setError(apiMessage(err, 'Invalid email or password.'));
+        setError(apiMessage(err, 'Invalid username, email, mobile number or password.'));
       }
     } finally {
       setBusy(false);
@@ -85,21 +81,18 @@ export default function Login() {
           <PageSubtitle>World of Weddingz. Sign in to pick up where you left off.</PageSubtitle>
         </View>
 
-        {byMobile ? (
-          <OtpLogin onNeedsPassword={() => setByMobile(false)} />
-        ) : (
-          <View accessibilityRole={'form' as any}>
+        <View accessibilityRole={'form' as any}>
         {error ? <Alert tone="critical">{error}</Alert> : null}
 
         <Field
-          label="Email"
+          label="Username, email or mobile number"
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
-          autoComplete="email"
-          keyboardType="email-address"
+          autoComplete="username"
+          keyboardType="default"
           textContentType="username"
-          placeholder="you@example.com"
+          placeholder="Your username, email or mobile"
           editable={!needsMfa}
         />
 
@@ -147,19 +140,7 @@ export default function Login() {
 
         {/* Offered, not defaulted to — and hidden mid-MFA, where the account is
             already half signed in. */}
-        {needsMfa ? null : (
-          <Button
-            label="Sign in with a mobile number instead"
-            variant="ghost"
-            small
-            onPress={() => {
-              setByMobile(true);
-              setError('');
-            }}
-          />
-        )}
-          </View>
-        )}
+        </View>
 
         {/*
           Hidden mid-MFA: the account already exists and is half signed in, so

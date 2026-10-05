@@ -2,7 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { SessionsService } from './sessions.service';
 import { RefreshSession } from './entities/refresh-session.entity';
-import { hashToken } from '../../common/util/tokens';
+import { hashSecretToken } from '../../common/util/tokens';
 import { AuditService } from '../../platform/audit/audit.service';
 import { AppConfigService } from '../../config/app-config.service';
 
@@ -12,6 +12,7 @@ import { AppConfigService } from '../../config/app-config.service';
 describe('SessionsService.rotate', () => {
   const userId = 'user-1';
   const familyId = 'family-1';
+  const refreshSecret = 'test-refresh-secret-with-enough-entropy';
   const later = () => new Date(Date.now() + 86_400_000);
 
   let rows: RefreshSession[];
@@ -22,7 +23,7 @@ describe('SessionsService.rotate', () => {
       id: `s-${token}`,
       userId,
       familyId,
-      tokenHash: hashToken(token),
+      tokenHash: hashSecretToken(token, refreshSecret),
       expiresAt: later(),
       revokedAt: null,
       revokedReason: null,
@@ -56,7 +57,7 @@ describe('SessionsService.rotate', () => {
     new SessionsService(
       repo as unknown as Repository<RefreshSession>,
       audit as unknown as AuditService,
-      { auth: { refreshReuseGraceSeconds: graceSeconds } } as unknown as AppConfigService,
+      { auth: { refreshReuseGraceSeconds: graceSeconds, jwtRefreshSecret: refreshSecret } } as unknown as AppConfigService,
     );
 
   const live = () => rows.filter((r) => !r.revokedAt);
@@ -83,7 +84,7 @@ describe('SessionsService.rotate', () => {
 
     const next = await service(10).rotate(userId, 'a', 'c', later());
 
-    expect(next.tokenHash).toBe(hashToken('c'));
+    expect(next.tokenHash).toBe(hashSecretToken('c', refreshSecret));
     expect(next.familyId).toBe(familyId);
     expect(live()).toEqual([next]);
     expect(audit.record).not.toHaveBeenCalled();

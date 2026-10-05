@@ -17,7 +17,13 @@ const publicBeta = {
   CORS_ORIGINS: 'https://app.example.com',
   SWAGGER_ENABLED: 'false',
   COOKIE_SECURE: 'true',
-  MFA_REQUIRED_FOR_ADMIN: 'true',
+  MFA_REQUIRED_FOR_ADMIN: 'false',
+  ADMIN_LOGIN_PROVIDER: 'zoho',
+  ZOHO_SSO_ENABLED: 'true',
+  ZOHO_ACCOUNTS_URL: 'https://accounts.zoho.in',
+  ZOHO_CLIENT_ID: 'zoho-client',
+  ZOHO_CLIENT_SECRET: 'zoho-secret',
+  ZOHO_REDIRECT_URI: 'https://app.example.com/api/auth/sso/zoho/callback',
   MAIL_PROVIDER: 'smtp',
   MAIL_FROM: 'WOW <security@example.com>',
   SMTP_HOST: 'smtp.zoho.in',
@@ -52,13 +58,18 @@ describe('production deployment provider policy', () => {
       CORS_ORIGINS: '*',
       SWAGGER_ENABLED: 'true',
       COOKIE_SECURE: 'false',
-      MFA_REQUIRED_FOR_ADMIN: 'false',
+      ADMIN_LOGIN_PROVIDER: 'password',
+      ZOHO_SSO_ENABLED: 'false',
+      ZOHO_CLIENT_ID: '',
+      ZOHO_CLIENT_SECRET: '',
+      ZOHO_REDIRECT_URI: '',
       MAIL_PROVIDER: 'log',
       APP_BASE_URL: 'http://app.example.com',
       MEDIA_STORAGE_PROVIDER: 'mock',
     }, { abortEarly: false });
 
-    expect(result.error?.message).toContain('MFA_REQUIRED_FOR_ADMIN must be true');
+    expect(result.error?.message).toContain('ADMIN_LOGIN_PROVIDER must be zoho');
+    expect(result.error?.message).toContain('ZOHO_SSO_ENABLED must be true');
     expect(result.error?.message).toContain('MAIL_PROVIDER must be smtp');
     expect(result.error?.message).toContain('COOKIE_SECURE must be true');
     expect(result.error?.message).toContain('SWAGGER_ENABLED must be false');
