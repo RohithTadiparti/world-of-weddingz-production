@@ -5,7 +5,7 @@ export const PINO_REDACT_PATHS = [
   'req.headers.Authorization',
   'req.headers.cookie',
   'req.headers.Cookie',
-  'res.headers.set-cookie',
+  'res.headers["set-cookie"]',
   'req.body.password',
   'req.body.currentPassword',
   'req.body.newPassword',
