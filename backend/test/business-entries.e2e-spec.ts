@@ -16,8 +16,9 @@ describe('Multiple Business Entries API', () => {
   let db: DataSource;
   const actors: { user: User; profile: Profile; token: string }[] = [];
   const base = { highestQualification: 'Masters', course: 'Commerce', occupationStatus: 'self_employed', incomeVisible: false };
+  const legacyBusiness = { businessName: 'Store', businessType: 'Retail', businessLocation: 'Hyderabad', businessIncome: '0' };
   const businesses = [
-    { businessName: 'Store', businessType: 'Retail', businessLocation: 'Hyderabad', businessIncome: '0' },
+    { businessName: 'Store', businessType: 'Retail', businessLocation: 'Hyderabad', businessIncome: '100000' },
     { businessName: 'Farm', businessType: 'Agriculture', businessLocation: 'Pune', businessIncome: '200000' },
     { businessName: 'Studio', businessType: 'Design', businessLocation: 'Mumbai', businessIncome: '300000' },
   ];
@@ -52,8 +53,8 @@ describe('Multiple Business Entries API', () => {
       .set('Authorization', `Bearer ${actor.token}`).send({ ...base, business, ...extra });
     const read = () => request(app.getHttpServer()).get(route).set('Authorization', `Bearer ${actor.token}`);
     // Existing rows require no destructive conversion or schema migration.
-    await db.getRepository(ProfileDetails).save({ profileId: actor.profile.id, business: businesses[0], religion: 'Hindu' });
-    expect((await read().expect(200)).body.details.business).toEqual(businesses[0]);
+    await db.getRepository(ProfileDetails).save({ profileId: actor.profile.id, business: legacyBusiness, religion: 'Hindu' });
+    expect((await read().expect(200)).body.details.business).toEqual(legacyBusiness);
     const created = await save({ entries: businesses }).expect(200);
     const entries = created.body.business.entries;
     expect(entries).toHaveLength(3);
@@ -79,6 +80,7 @@ describe('Multiple Business Entries API', () => {
     await save({ entries: [] }).expect(400);
     await save({ entries: [[]] }).expect(400);
     await save({ businessName: null }).expect(400);
+    await save({ entries: [legacyBusiness] }).expect(400);
     await save({ entries: [businesses[0], { ...businesses[1], businessIncome: '-1' }] }).expect(400);
     await save({ entries: [kept[0], kept[0]] }).expect(400);
     expect((await read().expect(200)).body.details.business.entries).toEqual(kept);

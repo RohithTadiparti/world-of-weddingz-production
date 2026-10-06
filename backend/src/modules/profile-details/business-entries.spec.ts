@@ -43,9 +43,10 @@ describe('business entries', () => {
 
   it('validates every entry, including income and empty arrays', async () => {
     const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true });
-    for (const entries of [[], null, {}, [null], [[]], [[first]], [{ businessName: ' ' }], [{ ...first, businessIncome: '-1' }], [{ ...first, businessIncome: '1.2' }], [first, { ...second, businessLocation: 'x'.repeat(201) }]]) {
+    for (const entries of [[], null, {}, [null], [[]], [[first]], [{ businessName: ' ' }], [first], [{ ...first, businessIncome: '-1' }], [{ ...first, businessIncome: '1.2' }], [{ ...first, businessIncome: '1' }, { ...second, businessLocation: 'x'.repeat(201) }]]) {
       await expect(pipe.transform({ entries }, { type: 'body', metatype: BusinessDetailsDto })).rejects.toThrow();
     }
-    expect(await pipe.transform({ entries: [first, second] }, { type: 'body', metatype: BusinessDetailsDto })).toMatchObject({ entries: [first, second] });
+    const validFirst = { ...first, businessIncome: '1' };
+    expect(await pipe.transform({ entries: [validFirst, second] }, { type: 'body', metatype: BusinessDetailsDto })).toMatchObject({ entries: [validFirst, second] });
   });
 });
