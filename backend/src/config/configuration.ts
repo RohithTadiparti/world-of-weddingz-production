@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { loadPlatformConfig } from './platform-config.loader';
+
 /**
  * Central configuration loader.
  *
@@ -18,10 +22,24 @@ const toBool = (value: string | undefined, fallback = false): boolean =>
 const toList = (value: string | undefined, fallback: string[] = []): string[] =>
   value ? value.split(',').map((s) => s.trim()).filter(Boolean) : fallback;
 
-export default () => ({
+const resolvePlatformConfigPath = (): string => {
+  if (process.env.PLATFORM_CONFIG_PATH) return resolve(process.env.PLATFORM_CONFIG_PATH);
+  const candidates = [
+    resolve(process.cwd(), 'config/platform.yaml'),
+    resolve(process.cwd(), '../config/platform.yaml'),
+    resolve(__dirname, '../../../config/platform.yaml'),
+  ];
+  const path = candidates.find(existsSync);
+  if (!path) throw new Error('config/platform.yaml was not found; set PLATFORM_CONFIG_PATH');
+  return path;
+};
+
+export default () => {
+  const platform = loadPlatformConfig(resolvePlatformConfigPath(), process.env);
+  return ({
   runtime: {
     env: process.env.NODE_ENV || 'development',
-    deploymentTier: (process.env.DEPLOYMENT_TIER || 'local') as
+    deploymentTier: platform.deployment.tier as
       | 'local'
       | 'staging'
       | 'public-beta'
@@ -71,9 +89,9 @@ export default () => ({
    * on a config change would be a far worse failure than an open door.
    */
   features: {
-    individualUserEnabled: toBool(process.env.INDIVIDUAL_USER_ENABLED, true),
+    individualUserEnabled: toBool(process.env.INDIVIDUAL_USER_ENABLED, platform.features.individualUserEnabled),
     /** Strip contact numbers out of chat messages before they are stored. */
-    chatRedactContacts: toBool(process.env.CHAT_REDACT_CONTACTS, true),
+    chatRedactContacts: toBool(process.env.CHAT_REDACT_CONTACTS, platform.features.chatRedactContacts),
 
     /**
      * Whether vendor and planner services stay locked until a match is fixed.
@@ -87,7 +105,7 @@ export default () => ({
     // match was fixed at home rather than here is still a couple with a
     // wedding to buy. An operator who wants matchmaking to be the front door
     // to the marketplace turns it back on.
-    servicesRequireMatchFixed: toBool(process.env.SERVICES_REQUIRE_MATCH_FIXED, false),
+    servicesRequireMatchFixed: toBool(process.env.SERVICES_REQUIRE_MATCH_FIXED, platform.features.servicesRequireMatchFixed),
     /**
      * How much a live listing's price may move before an administrator looks.
      *
@@ -97,7 +115,7 @@ export default () => ({
      * percentage change that trips it — 50 catches a doubling and ignores a
      * seasonal ten per cent.
      */
-    catalogReviewThresholdPercent: toNumber(process.env.CATALOG_REVIEW_THRESHOLD_PERCENT, 0),
+    catalogReviewThresholdPercent: toNumber(process.env.CATALOG_REVIEW_THRESHOLD_PERCENT, platform.features.catalogReviewThresholdPercent),
   },
 
   auth: {
@@ -142,7 +160,7 @@ export default () => ({
   },
 
   mail: {
-    provider: process.env.MAIL_PROVIDER || 'log', // log | smtp
+    provider: process.env.MAIL_PROVIDER || platform.providers.mail, // log | smtp
     from: process.env.MAIL_FROM || 'WOW <no-reply@wow.local>',
     host: process.env.SMTP_HOST || '',
     port: toNumber(process.env.SMTP_PORT, 587),
@@ -184,7 +202,7 @@ export default () => ({
    * family — an agent can take on a client with no email address at all.
    */
   sms: {
-    provider: process.env.SMS_PROVIDER || 'log', // log | http
+    provider: process.env.SMS_PROVIDER || platform.providers.sms, // log | http
     url: process.env.SMS_URL || '',
     apiKey: process.env.SMS_API_KEY || '',
     senderId: process.env.SMS_SENDER_ID || 'WOWMAT',
@@ -201,7 +219,7 @@ export default () => ({
    * devices, rather than pretending everything worked.
    */
   push: {
-    provider: process.env.PUSH_PROVIDER || 'log', // log | fcm
+    provider: process.env.PUSH_PROVIDER || platform.providers.push, // log | fcm
     url: process.env.PUSH_URL || 'https://fcm.googleapis.com/fcm/send',
     serverKey: process.env.PUSH_SERVER_KEY || '',
     timeoutMs: toNumber(process.env.PUSH_TIMEOUT_MS, 8000),
@@ -214,7 +232,7 @@ export default () => ({
    * something the platform can send by accident.
    */
   whatsapp: {
-    provider: process.env.WHATSAPP_PROVIDER || 'log', // log | cloud
+    provider: process.env.WHATSAPP_PROVIDER || platform.providers.whatsapp, // log | cloud
     baseUrl: process.env.WHATSAPP_BASE_URL || 'https://graph.facebook.com/v19.0',
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
     token: process.env.WHATSAPP_TOKEN || '',
@@ -310,7 +328,7 @@ export default () => ({
     // 'mock' stores uploads on the API's own disk and serves them publicly
     // (local and test stacks); 's3' keeps them in a private bucket and hands
     // out short-lived signed links (see src/platform/storage).
-    storageProvider: process.env.MEDIA_STORAGE_PROVIDER || 'mock',
+    storageProvider: process.env.MEDIA_STORAGE_PROVIDER || platform.providers.media,
     /**
      * Where a shared album link points.
      *
@@ -376,7 +394,7 @@ export default () => ({
 
   payments: {
     // 'mock' simulates escrow without a real gateway; 'razorpay' uses live keys.
-    provider: process.env.PAYMENT_PROVIDER || 'mock',
+    provider: process.env.PAYMENT_PROVIDER || platform.providers.payment,
     currency: process.env.PAYMENT_CURRENCY || 'INR',
     commissionPercent: toNumber(process.env.PAYMENT_COMMISSION_PERCENT, 10),
     /** HMAC secret the gateway signs webhook bodies with. */
@@ -457,7 +475,7 @@ export default () => ({
      * and hands the code back on the response, which is why it must never be
      * the setting in production.
      */
-    aadhaarProvider: process.env.AADHAAR_PROVIDER || 'mock',
+    aadhaarProvider: process.env.AADHAAR_PROVIDER || platform.providers.identity,
 
     /**
      * The licensed provider's endpoint and credentials.
@@ -508,7 +526,7 @@ export default () => ({
 
   ai: {
     // 'mock' uses deterministic, rule-based responses; 'openai' calls an LLM.
-    provider: process.env.AI_PROVIDER || 'mock',
+    provider: process.env.AI_PROVIDER || platform.providers.ai,
     apiKey: process.env.AI_API_KEY || '',
     model: process.env.AI_MODEL || 'gpt-4o-mini',
     baseUrl: process.env.AI_BASE_URL || 'https://api.openai.com/v1',
@@ -532,4 +550,9 @@ export default () => ({
     clientId: process.env.KAFKA_CLIENT_ID || 'wow-backend',
     topic: process.env.KAFKA_TOPIC || 'wow.domain-events',
   },
-});
+  operations: platform.operations,
+  deployment: platform.deployment,
+  providers: platform.providers,
+  migration: platform.migration,
+  });
+};

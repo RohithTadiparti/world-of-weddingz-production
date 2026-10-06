@@ -8,6 +8,7 @@ metadata:
 data:
   NODE_ENV: "production"
   DEPLOYMENT_TIER: "public-beta"
+  PLATFORM_CONFIG_PATH: "/app/config/platform.yaml"
   PORT: "3000"
   API_PREFIX: "api"
   LOG_LEVEL: "info"
@@ -48,6 +49,5 @@ data:
   SMTP_SECURE: "true"
   MAIL_FROM: "WOW <no-reply@your-domain.com>"
   APP_BASE_URL: "https://app.wow.example.com"
-  AI_PROVIDER: "mock"
   NEO4J_ENABLED: "false"
   KAFKA_ENABLED: "false"
