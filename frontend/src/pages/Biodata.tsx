@@ -929,7 +929,7 @@ function BasicInfoForm({
     casteEntries.find((entry) => entry.casteName === caste)?.subCastes ?? []
   ).map((entry) => entry.subCasteName);
 
-  function submit(e: FormEvent) {
+  async function submit(e: FormEvent) {
     e.preventDefault();
     const sections: [string, unknown][] = [
       [
@@ -957,7 +957,7 @@ function BasicInfoForm({
     }
     // The local copies go only once the server has everything: until then
     // they are the only copy, and a refused save must not lose them (EZ1-I73).
-    void submitDraft(onSave(sections), () => {
+    await submitDraft(onSave(sections), () => {
       personal.clear();
       faith.clear();
       marital.clear();
@@ -991,6 +991,8 @@ function BasicInfoForm({
               className="input mt-1"
               type="date"
               value={String(draft.dateOfBirth ?? '')}
+              min={(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 60); return d.toISOString().slice(0, 10); })()}
+              max={(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 21); return d.toISOString().slice(0, 10); })()}
               onChange={set('dateOfBirth')}
               required
             />

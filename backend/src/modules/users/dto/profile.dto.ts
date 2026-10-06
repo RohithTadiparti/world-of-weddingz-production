@@ -1,5 +1,6 @@
 import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
 import { IsAdultDate } from '../../../common/decorators/adult-date.decorator';
+import { IsNotOlderThan } from '../../../common/decorators/maximum-age.decorator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -69,7 +70,8 @@ export class CreateProfileDto {
   @ApiPropertyOptional({ format: 'date' })
   @IsOptional() @IsDateString()
   @IsNotFutureDate({ message: 'A date of birth cannot be in the future' })
-  @IsAdultDate(18, { message: 'You must be at least 18 years old' })
+  @IsAdultDate(21, { message: 'You must be at least 21 years old' })
+  @IsNotOlderThan(60, { message: 'Please enter a date of birth within the last 60 years' })
   dateOfBirth?: string;
 
   @ApiPropertyOptional({ maxLength: 80 })

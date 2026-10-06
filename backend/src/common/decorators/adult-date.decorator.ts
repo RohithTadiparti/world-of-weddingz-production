@@ -14,7 +14,7 @@ import { ValidationOptions, registerDecorator } from 'class-validator';
  * @IsNotFutureDate is: these are dates, and the person is in their own timezone.
  * Exactly `minAge` years old today is allowed — the 18th birthday counts.
  */
-export function IsAdultDate(minAge = 18, options?: ValidationOptions) {
+export function IsAdultDate(minAge = 21, options?: ValidationOptions) {
   return function (object: object, propertyName: string) {
     registerDecorator({
       name: 'isAdultDate',
