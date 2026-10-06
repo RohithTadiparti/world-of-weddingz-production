@@ -459,7 +459,10 @@ services:
         read_only: true
       - ./observability/vector.yaml:/etc/vector/vector.yaml:ro
       - ${WOW_LOG_DIR:-../logs}/services:/logs/services
-      - ${WOW_LOG_DIR:-../logs}/vector:/vector-data
+      # Vector's disk buffer uses file semantics that Windows bind mounts do
+      # not reliably provide. Keep the searchable JSONL archive on the host,
+      # but persist the delivery buffer in Docker-managed storage.
+      - vector_data:/vector-data
     depends_on:
       loki:
         condition: service_healthy
@@ -539,6 +542,7 @@ volumes:
   # because "does the photograph survive a refresh" is the question people
   # actually ask, and a rebuild is a very thorough refresh.
   media_store:
+  vector_data:
   android_gradle:
   android_npm:
   neo4j_data:
