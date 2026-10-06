@@ -1,5 +1,5 @@
 # ---------- Stage 1: build ----------
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 # Install ALL deps (incl. dev) using the lockfile for reproducibility.
@@ -12,7 +12,7 @@ COPY config/platform.yaml ./config/platform.yaml
 RUN npm run build
 
 # ---------- Stage 2: runtime ----------
-FROM node:20-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
