@@ -34,6 +34,6 @@ test('pull-request mirror gate checks out enough history to compare base and hea
 
   assert.match(
     governance,
-    /registers:[\s\S]*?steps:\s*\n\s*- uses:\s*actions\/checkout@v4\s*\n\s*with:\s*\n\s*fetch-depth:\s*0\s*\n\s*- uses:\s*actions\/setup-node@v4/,
+    /registers:[\s\S]*?steps:\s*\n\s*- uses:\s*actions\/checkout@v7\s*\n\s*with:\s*\n\s*fetch-depth:\s*0\s*\n\s*- uses:\s*actions\/setup-node@v7/,
   );
 });
