@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "d3d66eae45ddefc262121f356b36ddfa94516baf",
+  "reviewedCommit": "b373bb48e389a3456a98db12e1c880b901b75e49",
   "snapshotDate": "2026-10-06",
   "historyImported": false,
-  "notes": "Reviewed through WOW-MD PR 52 at d3d66ea. DEP-002 accepts the peer-compatible dependency rollup, Express 5 mock-storage adaptation, patched mobile shell-quote chain and React 19/Zustand selector fix. ioredis 6 and Expo Router 58 remain rejected as peer-incompatible. Uncommitted source changes still require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 53 at b373bb4. DEP-002 accepts the peer-compatible dependency rollup, Express 5 mock-storage adaptation, patched mobile shell-quote chain and React 19/Zustand selector fix. DEP-003 accepts the exact glob 10.5.0 backend lockfile update. ioredis 6 and Expo Router 58 remain rejected as peer-incompatible. Uncommitted source changes still require separate intake review."
 }
