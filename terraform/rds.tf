@@ -2,7 +2,7 @@
 # the cluster writer endpoint; read-heavy paths can use the reader endpoint.
 module "aurora_postgres" {
   source  = "terraform-aws-modules/rds-aurora/aws"
-  version = "~> 9.0"
+  version = "~> 10.4"
 
   name              = "wow-db"
   engine            = "aurora-postgresql"
