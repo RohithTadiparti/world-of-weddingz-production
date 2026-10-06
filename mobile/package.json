@@ -57,5 +57,8 @@
     "submit:ios": "eas submit --platform ios --profile production --latest",
     "typecheck": "tsc --noEmit"
   },
+  "overrides": {
+    "source-map-js": "1.2.2"
+  },
   "private": true
 }
