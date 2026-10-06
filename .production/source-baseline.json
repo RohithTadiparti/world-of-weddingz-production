@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "07218b4ab02a8702a4d8d9fdab7dc26e579ab7b4",
-  "snapshotDate": "2026-10-04",
+  "reviewedCommit": "2ddfaf6b6d55d3e4833f905565d5048f3cd9c010",
+  "snapshotDate": "2026-10-06",
   "historyImported": false,
-  "notes": "Initial production repository uses a clean committed snapshot. Uncommitted source changes require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 50. SYNC-003 accepted 40 frontend UI paths and rejected the source-only preview Compose file and design-preview document. Uncommitted source changes still require separate intake review."
 }
