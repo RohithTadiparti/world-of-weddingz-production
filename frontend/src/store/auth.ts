@@ -33,6 +33,11 @@ interface AuthState {
   clear: () => void;
 }
 
+const EMPTY_PERMISSIONS: PermissionValue[] = [];
+
+const selectPermissions = (state: AuthState): PermissionValue[] =>
+  state.user?.permissions ?? EMPTY_PERMISSIONS;
+
 /**
  * Deliberately NOT persisted.
  *
@@ -55,4 +60,4 @@ export const useAuth = create<AuthState>()((set) => ({
 }));
 
 /** Convenience selector for the capability checks used across the UI. */
-export const usePermissions = (): PermissionValue[] => useAuth((s) => s.user?.permissions ?? []);
+export const usePermissions = (): PermissionValue[] => useAuth(selectPermissions);

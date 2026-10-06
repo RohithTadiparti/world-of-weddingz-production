@@ -10,7 +10,7 @@ import ProfilePreview from '../components/ProfilePreview';
 import MatchCard, { PublicProfile, Suggestion } from '../components/MatchCard';
 import { PersonPhoto } from '../components/ProfileSilhouette';
 import type { MatchView } from '../components/MatchStatTiles';
-import { useAuth } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import {
   MatchFixedState,
   OnboardingStage,
@@ -193,7 +193,7 @@ const PAGE_SIZE = 12;
 export default function Matches() {
   const qc = useQueryClient();
   const userRole = useAuth((s) => s.user?.role);
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isFamily = userRole === 'family';
   const isSteward = can(permissions, Permission.ACT_ON_BEHALF);
   const isAgent = can(permissions, Permission.AGENCY_MANAGE);

@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
 import { Draft, createDraftGuard, loadDraft, saveDraft, submitDraft } from '../lib/biodata-draft';
-import { useAuth } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import {
   ASSET_TYPE_LABEL,
   FAMILY_TYPE_LABEL,
@@ -128,7 +128,7 @@ interface Asset {
 export default function Biodata() {
   const qc = useQueryClient();
   const userRole = useAuth((s) => s.user?.role);
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isFamily = userRole === 'family';
   const isIndividual = userRole === 'bride' || userRole === 'groom';
   const isSteward = can(permissions, Permission.ACT_ON_BEHALF);

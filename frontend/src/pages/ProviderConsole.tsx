@@ -6,7 +6,7 @@ import BusinessSetup, { useCompletion } from '../components/BusinessSetup';
 import GetStarted from '../components/GetStarted';
 import ChoiceField from '../components/ChoiceField';
 import { CITIES, STATES } from '../lib/reference';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { useBusinesses } from '../store/business';
 import { LoadingCards } from '../components/ui/Feedback';
 import CategoryPicker, { useCategoryNames } from '../components/CategoryPicker';
@@ -48,7 +48,7 @@ import {
  * string, so the two personas stay in one screen without special-casing.
  */
 export default function ProviderConsole() {
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isVendor = can(permissions, Permission.VENDOR_LISTING_MANAGE);
 
   const { data: listing, isPending: listingPending } = useQuery({

@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Permission, can } from '../lib/permissions';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { EmptyState, Loading } from '../components/ui/Feedback';
 import { MapPin, Star, Storefront } from '@phosphor-icons/react';
 import RequestDialog from '../components/RequestDialog';
@@ -200,7 +200,7 @@ export function ServiceInformation({ service }: { service: ServiceSummary }) {
 export default function VendorDetail() {
   const { id = '' } = useParams();
   const categoryNames = useCategoryNames();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const canBook = can(permissions, Permission.BOOKING_CREATE);
   /*
    * A planner engaged on a wedding may raise the request for the couple

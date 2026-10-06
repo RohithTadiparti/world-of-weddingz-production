@@ -20,7 +20,7 @@ import { api, apiMessage } from '../lib/api';
 import { listingSocialLinks, socialLinkName } from '../lib/social-links';
 import { SOCIAL_ICONS, ViewInstagramLink } from '../components/SocialLinks';
 import { Permission, can } from '../lib/permissions';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { EmptyState, Loading } from '../components/ui/Feedback';
 import {
   plannerServiceLabel,
@@ -78,7 +78,7 @@ interface ReviewSummary {
 export default function PlannerDetail() {
   const { id = '' } = useParams();
   const [params] = useSearchParams();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const canBook = can(permissions, Permission.BOOKING_CREATE);
   const { data: planner, isLoading } = usePlanner(id);
 

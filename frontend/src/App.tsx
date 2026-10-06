@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from './store/auth';
+import { useAuth, usePermissions } from './store/auth';
 import { api, bootstrapSession } from './lib/api';
 import { Permission, PermissionValue, ROLE_LABEL, UserRole, canAny } from './lib/permissions';
 import { navDenied } from './lib/nav-access';
@@ -921,7 +921,7 @@ function Protected({
   const token = useAuth((s) => s.accessToken);
   const ready = useAuth((s) => s.ready);
   const role = useAuth((s) => s.user?.role);
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const mustResetPassword = useAuth((s) => s.user?.mustResetPassword ?? false);
   const path = useLocation().pathname;
 
