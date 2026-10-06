@@ -7,6 +7,7 @@ import { Permission, can, isProvider, MOBILE_10_PATTERN } from '../lib/permissio
 import { ageFromDateOfBirth, formatDate, adultDobMax } from '../lib/dates';
 import { Loading } from '../components/ui/Feedback';
 import { PersonPhoto } from '../components/ProfileSilhouette';
+import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
 
 const empty = {
   displayName: '',
@@ -88,6 +89,7 @@ export default function Profile() {
   const isAgency = can(permissions, Permission.AGENCY_MANAGE);
   const stewardFields = isSteward && !isAgency;
   const isFamilyMember = role === 'family';
+  const isIndividual = role === 'bride' || role === 'groom';
   // Bride and groom are account roles, not a second question for the person to
   // answer. Keep the profile display and every save aligned with that canonical
   // role even when an older profile row has no gender recorded yet.
@@ -208,7 +210,16 @@ export default function Profile() {
   };
 
   return (
-    <div className="mx-auto max-w-lg space-y-4">
+    <div className="mx-auto max-w-3xl space-y-4">
+      {isIndividual && (
+        <IndividualPageMasthead
+          eyebrow="Your introduction"
+          title="The details that introduce you well"
+          description="Keep the essentials accurate here, then shape the biodata families will see."
+          action={{ to: '/biodata', label: 'Continue your biodata' }}
+          density="quiet"
+        />
+      )}
       <div className="card space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           {/*
@@ -227,7 +238,13 @@ export default function Profile() {
               className="h-16 w-16 shrink-0 rounded-full object-cover ring-1 ring-inset ring-gray-900/10"
             />
             <div>
-            <h1 className="page-title">{isFamilyMember ? 'Family Member Details' : 'Your Profile'}</h1>
+            {isIndividual ? (
+              <h2 className="font-serif text-[1.625rem] font-normal leading-tight text-brand">
+                Your personal details
+              </h2>
+            ) : (
+              <h1 className="page-title">{isFamilyMember ? 'Family Member Details' : 'Your Profile'}</h1>
+            )}
             <p className="page-subtitle">
               {isFamilyMember
                 ? 'Enter your own details. Groom or bride details belong in Biodata.'

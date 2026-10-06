@@ -1,4 +1,5 @@
 import { FormEvent, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 
 interface BudgetRow {
@@ -29,7 +30,7 @@ export default function Genie() {
     <div className="space-y-6">
       <div>
         <h1 className="page-title">WOW Genie</h1>
-        <p className="page-subtitle">A budget split to start from, and answers to planning questions.</p>
+        <p className="page-subtitle">Tell WOW Genie what matters to you in your own words. It can hold the conversation, clarify preferences and guide you toward better introductions.</p>
       </div>
     <div className="grid gap-6 md:grid-cols-2">
       <div className="card space-y-4">
@@ -54,12 +55,12 @@ export default function Genie() {
       </div>
 
       <div className="card space-y-4">
-        <h2 className="section-title">Ask WOW Genie</h2>
+        <h2 className="section-title">Describe the person you hope to meet</h2>
         <form onSubmit={ask} className="space-y-2">
-          <textarea className="input" rows={3} placeholder="e.g. How do I plan a 300-guest wedding in 6 months?" value={question} onChange={(e) => setQuestion(e.target.value)} />
+          <textarea className="input" rows={4} placeholder="e.g. I value a calm family, someone who enjoys travel, and a thoughtful conversation. What kind of profiles should I explore?" value={question} onChange={(e) => setQuestion(e.target.value)} />
           <button className="btn">Ask</button>
         </form>
-        {answer && <p className="rounded-sm bg-brand-light p-3 text-sm text-brand-dark">{answer}</p>}
+        {answer && <div className="space-y-3 rounded-sm bg-brand-light p-3 text-sm text-brand-dark"><p>{answer}</p><Link className="font-semibold underline" to="/matches?minScore=51&sort=score">Explore your recommended introductions →</Link></div>}
       </div>
     </div>
     </div>

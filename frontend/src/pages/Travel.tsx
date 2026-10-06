@@ -2,6 +2,9 @@ import { FormEvent, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../lib/api';
 import { Loading } from '../components/ui/Feedback';
+import { useAuth } from '../store/auth';
+import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
+import FutureWeddingPanel from '../components/individual/FutureWeddingPanel';
 
 interface Destination {
   id: string;
@@ -44,6 +47,8 @@ interface Itinerary {
  */
 export default function Travel() {
   const qc = useQueryClient();
+  const role = useAuth((s) => s.user?.role);
+  const isIndividual = role === 'bride' || role === 'groom';
   const [tag, setTag] = useState('honeymoon');
   const [maxPrice, setMaxPrice] = useState('');
   const [minNights, setMinNights] = useState('');
@@ -111,15 +116,32 @@ export default function Travel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="page-title">Honeymoon</h1>
-        <p className="page-subtitle">
-          Start from your budget and the time you have. Picking a package opens an itinerary with a
-          day for every night.
-        </p>
-      </div>
+      {isIndividual ? (
+        <IndividualPageMasthead
+          eyebrow="Your future together"
+          title="Honeymoon"
+          description="Explore the time away that follows your celebration, then shape it at your own pace."
+        />
+      ) : (
+        <div>
+          <h1 className="page-title">Honeymoon</h1>
+          <p className="page-subtitle">
+            Start from your budget and the time you have. Picking a package opens an itinerary with a
+            day for every night.
+          </p>
+        </div>
+      )}
 
       {error && <p className="alert-critical">{error}</p>}
+
+      {isIndividual && (
+        <FutureWeddingPanel
+          enabled={false}
+          to="/travel"
+          title="Your future wedding"
+          description="Your shared getaway plans can live here when the existing match and travel permissions make them available."
+        />
+      )}
 
       <div className="card space-y-3">
         <div className="flex flex-wrap gap-2">

@@ -295,6 +295,22 @@ export default function Interests() {
         </p>
       </div>
 
+      {ready && (
+        <section
+          aria-label="Interest status"
+          className="rounded-lg border border-brand-light bg-brand-light/40 px-4 py-3 text-sm text-gray-700"
+        >
+          <p className="font-semibold text-brand-dark">Your introductions, clearly stated</p>
+          <p className="mt-1">
+            {tab === 'received'
+              ? 'Review each interest before responding. Only the server-provided actions below are available.'
+              : tab === 'accepted'
+                ? 'Accepted interests can continue privately in Messages when the existing conversation is available.'
+                : 'Every status shows whether you are waiting, deciding, or have chosen not to continue.'}
+          </p>
+        </section>
+      )}
+
       {/*
         A reminder, not a wall. Email verification matters, but it is not what
         this page is for, so it sits in a single caution line the reader can
