@@ -171,8 +171,8 @@ export class CreateManagedProfileDto {
   @IsOptional()
   @IsDateString()
   @IsNotFutureDate({ message: 'A date of birth cannot be in the future' })
-  @IsAdultDate(18, { message: 'The client must be at least 18 years old' })
-  @IsNotOlderThan(75, { message: 'Please enter a date of birth within the last 75 years' })
+  @IsAdultDate(21, { message: 'The client must be at least 21 years old' })
+  @IsNotOlderThan(60, { message: 'Please enter a date of birth within the last 60 years' })
   dateOfBirth?: string;
 
   @ApiPropertyOptional({ maxLength: 80 })
