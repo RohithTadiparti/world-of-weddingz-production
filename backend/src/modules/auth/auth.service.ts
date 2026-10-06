@@ -10,6 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
+import type { SignOptions } from 'jsonwebtoken';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID, randomInt } from 'crypto';
 import { authenticator } from 'otplib';
@@ -1081,7 +1082,10 @@ export class AuthService {
         jti: randomUUID(),
         authMethod,
       },
-      { secret: this.cfg.auth.jwtSecret, expiresIn: this.cfg.auth.jwtExpiresIn },
+      {
+        secret: this.cfg.auth.jwtSecret,
+        expiresIn: this.cfg.auth.jwtExpiresIn as SignOptions['expiresIn'],
+      },
     );
   }
 
@@ -1098,7 +1102,10 @@ export class AuthService {
         jti: randomUUID(),
         authMethod,
       },
-      { secret: this.cfg.auth.jwtRefreshSecret, expiresIn: this.cfg.auth.jwtRefreshExpiresIn },
+      {
+        secret: this.cfg.auth.jwtRefreshSecret,
+        expiresIn: this.cfg.auth.jwtRefreshExpiresIn as SignOptions['expiresIn'],
+      },
     );
     const decoded = this.jwt.decode(token) as { exp?: number } | null;
     const expiresAt = decoded?.exp

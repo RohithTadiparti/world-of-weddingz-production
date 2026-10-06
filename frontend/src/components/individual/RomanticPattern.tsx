@@ -1,3 +1,5 @@
+import type { JSX } from 'react';
+
 type PatternDensity = 'quiet' | 'standard' | 'celebration';
 
 export interface RomanticPatternProps {
