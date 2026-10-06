@@ -3,6 +3,12 @@
 #
 # Secrets come from docker/.env (copy docker/.env.example). The defaults below
 # are development-only; the backend refuses to boot in production with them.
+x-wow-logging: &wow-logging
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,6 +27,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *wow-logging
 
   redis:
     image: redis:7-alpine
@@ -35,6 +42,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *wow-logging
 
   backend:
     build:
@@ -196,6 +204,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    logging: *wow-logging
 
   # One-shot: creates or promotes the bootstrap administrator, then exits.
   # ADMIN is not self-registerable through the API by design, so this is the
@@ -224,6 +233,7 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    logging: *wow-logging
 
   # The starting service catalog: categories, services and the questions each
   # one asks. A deployment without it has an empty catalog, which means no
@@ -255,6 +265,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *wow-logging
 
   # One sign-in per role, for walking the interface locally. Writes nothing
   # unless DEMO_PASSWORD is set in docker/.env; never set it on a stack anyone
@@ -282,6 +293,7 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    logging: *wow-logging
 
   # One-shot Android test build (docker/android-build/build-apk.sh). Publishes
   # wow.apk and version.json into ./downloads, which the frontend serves and
@@ -311,6 +323,7 @@ services:
       - android_gradle:/opt/gradle-home
       - android_npm:/root/.npm
     restart: "no"
+    logging: *wow-logging
 
   frontend:
     build:
@@ -326,6 +339,7 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    logging: *wow-logging
 
   # ---- Optional integrations (start with: docker compose --profile full up) ----
   neo4j:
@@ -340,6 +354,7 @@ services:
     volumes:
       - neo4j_data:/data
     restart: unless-stopped
+    logging: *wow-logging
 
   kafka:
     image: bitnami/kafka:3.7
@@ -359,6 +374,7 @@ services:
     volumes:
       - kafka_data:/bitnami/kafka
     restart: unless-stopped
+    logging: *wow-logging
 
   # An S3-compatible store on this machine, to run the API against a private
   # bucket without an AWS account. Off unless asked for:
@@ -385,6 +401,7 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    logging: *wow-logging
 
   # One-shot: creates the bucket (private: no anonymous policy is set) and lets
   # the web app PUT and GET from the browser.
@@ -406,6 +423,113 @@ services:
       mc anonymous set none local/$$S3_BUCKET
       "
     restart: "no"
+    logging: *wow-logging
+
+  # Local-only durable log platform. It is never exposed by the public nginx
+  # service and adds no SSH daemon to application containers.
+  loki:
+    image: grafana/loki:3.7.0
+    container_name: wow-loki
+    profiles: ["observability"]
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./observability/loki.yaml:/etc/loki/loki.yaml:ro
+      - ${WOW_LOG_DIR:-../logs}/loki:/loki
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-verify-config=true", "-config.file=/etc/loki/loki.yaml"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    logging: *wow-logging
+
+  vector:
+    image: timberio/vector:0.56.0-alpine
+    container_name: wow-vector
+    profiles: ["observability"]
+    environment:
+      DEPLOYMENT_TIER: ${DEPLOYMENT_TIER:-local}
+      LOKI_ENDPOINT: ${LOKI_ENDPOINT:-http://loki:3100}
+      VECTOR_LOG: info
+    volumes:
+      - source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        type: bind
+        read_only: true
+      - ./observability/vector.yaml:/etc/vector/vector.yaml:ro
+      - ${WOW_LOG_DIR:-../logs}/services:/logs/services
+      - ${WOW_LOG_DIR:-../logs}/vector:/vector-data
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "vector", "validate", "/etc/vector/vector.yaml"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+    restart: unless-stopped
+    logging: *wow-logging
+
+  grafana:
+    image: grafana/grafana:12.4.0
+    container_name: wow-grafana
+    profiles: ["observability"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'test -n "$$GF_SECURITY_ADMIN_PASSWORD" || { echo "GRAFANA_ADMIN_PASSWORD is required" >&2; exit 64; }; exec /run.sh'
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_HTTP_ADDR: 0.0.0.0
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3300}:3000"
+    volumes:
+      - ${WOW_LOG_DIR:-../logs}/grafana:/var/lib/grafana
+      - ./observability/grafana/provisioning/datasources/loki.yaml:/etc/grafana/provisioning/datasources/loki.yaml:ro
+      - ./observability/grafana/provisioning/dashboards/provider.yaml:/etc/grafana/provisioning/dashboards/provider.yaml:ro
+      - ./observability/grafana/provisioning/alerting/wow-alerts.yaml:/etc/grafana/provisioning/alerting/wow-alerts.yaml:ro
+      - ./observability/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/api/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *wow-logging
+
+  log-retention:
+    image: alpine:3.20.6
+    container_name: wow-log-retention
+    profiles: ["observability"]
+    environment:
+      LOG_ROOT: /logs/services
+      RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
+    command: ["/bin/sh", "-ec", "while true; do /opt/wow/prune-logs.sh; sleep 86400; done"]
+    volumes:
+      - ${WOW_LOG_DIR:-../logs}/services:/logs/services
+      - ./observability/maintenance/prune-logs.sh:/opt/wow/prune-logs.sh:ro
+    restart: unless-stopped
+    logging: *wow-logging
+
+  log-disk-monitor:
+    image: alpine:3.20.6
+    container_name: wow-log-disk-monitor
+    profiles: ["observability"]
+    environment:
+      LOG_ROOT: /logs
+      DISK_WARNING_PERCENT: ${LOG_DISK_WARNING_PERCENT:-80}
+      DISK_ERROR_PERCENT: ${LOG_DISK_ERROR_PERCENT:-90}
+    command: ["/bin/sh", "-ec", "while true; do /opt/wow/check-disk.sh; sleep 300; done"]
+    volumes:
+      - ${WOW_LOG_DIR:-../logs}:/logs:ro
+      - ./observability/maintenance/check-disk.sh:/opt/wow/check-disk.sh:ro
+    restart: unless-stopped
+    logging: *wow-logging
 
 volumes:
   postgres_data:

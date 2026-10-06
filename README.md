@@ -78,6 +78,17 @@ Once the stack reports healthy:
 - the API documentation is at `http://localhost:3000/api/docs`
 - health is at `http://localhost:3000/api/health`
 
+Start the optional local observability profile to retain searchable logs for
+30 days in host JSONL files and Loki, with Grafana bound to loopback:
+
+```powershell
+docker compose -f docker/docker-compose.yml --profile observability up -d
+```
+
+Set `WOW_LOG_DIR` and `GRAFANA_ADMIN_PASSWORD` first. Operational procedures,
+retention safety, queries, recovery, and remote-Loki migration are documented
+in [the logging runbook](docs/operations/logging-runbook.md).
+
 Migrations run automatically when the backend container starts.
 
 There is also `deploy-local.sh`, which wraps the same steps and waits for health, and `run-local-no-docker.sh` for running the backend directly with Node. The setup guide in the docs folder explains both paths.

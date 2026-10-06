@@ -1,0 +1,24 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    { "id": 1, "title": "Log volume by service and level", "type": "timeseries", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "sum by (service, level) (count_over_time({service=~\".+\"}[5m]))" }], "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 } },
+    { "id": 2, "title": "Backend 5xx", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=\"wow-backend\"} | json | statusCode >= 500" }], "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 } },
+    { "id": 3, "title": "Client errors", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=~\"wow-(frontend|backend)\"} | json | event=\"client_error\"" }], "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 } },
+    { "id": 4, "title": "Audit write failures", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=\"wow-backend\"} | json | event=\"audit_write_failure\"" }], "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 } },
+    { "id": 5, "title": "Job failures", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=\"wow-backend\"} | json | event=\"job_failure\"" }], "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 } },
+    { "id": 6, "title": "Provider failures", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=\"wow-backend\"} | json | event=~\"provider_.*failure\"" }], "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 } },
+    { "id": 7, "title": "Disk health", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=\"wow-log-disk-monitor\"} | json | event=\"log_disk_health\"" }], "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 } },
+    { "id": 8, "title": "Collector and Loki health", "type": "logs", "datasource": { "type": "loki", "uid": "wow-loki" }, "targets": [{ "refId": "A", "expr": "{service=~\"wow-(vector|loki)\"}" }], "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 } }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["wow", "logs", "operations"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "WOW Operational Logs",
+  "uid": "wow-operational-logs",
+  "version": 1
+}

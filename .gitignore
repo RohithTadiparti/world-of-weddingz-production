@@ -15,6 +15,7 @@ frontend/public/ocr/
 
 # Logs
 *.log
+logs/
 
 # OS and editor
 .DS_Store
