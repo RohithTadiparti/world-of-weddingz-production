@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "2ddfaf6b6d55d3e4833f905565d5048f3cd9c010",
+  "reviewedCommit": "51790dfa57126a64e31e5b605ddccca85cd09b85",
   "snapshotDate": "2026-10-06",
   "historyImported": false,
-  "notes": "Reviewed through WOW-MD PR 50. SYNC-003 accepted 40 frontend UI paths and rejected the source-only preview Compose file and design-preview document. Uncommitted source changes still require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 49 at 51790df. SYNC-003 accepted 40 frontend UI paths, rejected the source-only preview artifacts, and production PRs 79 and 81 reconciled the frontend lockfile exactly. Uncommitted source changes still require separate intake review."
 }
