@@ -5,7 +5,6 @@ import { useAuth } from '../store/auth';
 import { useBusinesses } from '../store/business';
 import {
   Permission,
-  ROLE_LABEL,
   VERIFICATION_LABEL,
   canAny,
 } from '../lib/permissions';
@@ -17,7 +16,6 @@ import GetStarted from '../components/GetStarted';
 import VendorDashboard from '../components/VendorDashboard';
 import IndividualDashboard from '../components/IndividualDashboard';
 import { AppDownloadCard } from '../components/AppDownload';
-import { ArrowRight } from '@phosphor-icons/react';
 import { AnimatedCard, AnimatedCounter } from '../components/ui/Motion';
 import {
   Bell,
@@ -174,6 +172,7 @@ export default function Dashboard({
 
   const isProvider = roleOverride === 'vendor' || roleOverride === 'planner' || canAny(permissions, [Permission.BOOKING_READ_INCOMING]);
   const isBuyer = canAny(permissions, [Permission.BOOKING_READ_OWN]);
+  const isConsumerPortal = !isProvider && (isBuyer || ['bride', 'groom', 'family'].includes(user?.role ?? ''));
 
   const { data: profile } = useQuery({
     queryKey: ['me'],
@@ -428,29 +427,21 @@ export default function Dashboard({
         and the one part of it that is actionable, an unfinished profile, gets
         to be a control instead of a sentence.
       */}
-      <header className="relative overflow-hidden rounded-lg border border-brand/35 bg-gradient-to-br from-brand-strong via-brand to-brand-rose px-6 py-6 text-brand-fg shadow-lifted sm:px-8">
+      <header className={`relative overflow-hidden rounded-lg border border-brand/35 px-6 py-6 text-brand-fg shadow-lifted sm:px-8 ${isConsumerPortal ? 'min-h-[15rem] bg-brand-strong' : 'bg-gradient-to-br from-brand-strong via-brand to-brand-rose'}`}>
+        {isConsumerPortal && <><img src="/images/wow-portal-hero.webp" alt="A couple beginning a meaningful journey together" fetchPriority="high" decoding="async" className="absolute inset-0 h-full w-full object-cover" /><span aria-hidden className="absolute inset-0 bg-gradient-to-r from-brand-strong/95 via-brand-strong/65 to-transparent" /></>}
         <span aria-hidden className="absolute -right-8 -top-10 h-32 w-32 rounded-full border border-gold/60" />
         <span aria-hidden className="absolute -bottom-16 right-20 h-28 w-28 rounded-full border border-gold-lit/50" />
-        <p className="relative text-sm text-brand-fg/75">
-          Signed in as {user ? (ROLE_LABEL[user.role] ?? user.role) : ''}
-          {user?.managedByAgentId ? ', represented by an agent' : ''}
+        <p className="relative text-sm text-brand-fg/85">
+          A thoughtful start to a beautiful journey
         </p>
         <h1 className="relative mt-1 border-0 pl-0 font-serif text-[2.25rem] font-normal leading-[1.1] text-brand-fg sm:text-[3rem]">
-          {greeting()}
-          {profileName ? `, ${profileName}` : ''}
+          {delightfulGreeting(profileName)}
         </h1>
-        {profile && !profile.profileCompleted && (
-          <div className="relative mt-5 flex flex-wrap items-center gap-4 rounded-md border border-gold/60 bg-surface-raised/95 p-4 text-gray-900">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-gray-900">Your profile is not finished</p>
-              <p className="mt-0.5 text-sm text-gray-500">
-                Families see a complete profile far more often than an incomplete one.
-              </p>
-            </div>
-            <Link className="btn shrink-0" to="/profile">
-              Finish profile
-              <ArrowRight size={16} aria-hidden />
-            </Link>
+        {isConsumerPortal && (
+          <div className="absolute inset-x-6 bottom-5 z-10 grid max-w-3xl grid-cols-2 gap-x-5 gap-y-2 border-t border-gold/45 pt-3 text-[0.68rem] uppercase tracking-[0.12em] text-brand-fg/90 sm:inset-x-8 sm:grid-cols-4">
+            {['Thoughtful matches', 'A kind community', 'Privacy always', 'A brighter tomorrow'].map((point) => (
+              <span key={point} className="flex items-center gap-1.5"><span className="text-gold-lit">♡</span>{point}</span>
+            ))}
           </div>
         )}
       </header>
@@ -468,11 +459,7 @@ export default function Dashboard({
       <ClaimRequests />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Counter
-          label="Unread notifications"
-          value={unread?.unread ?? 0}
-          to="/notifications"
-        />
+        {!isBuyer && <Counter label="Unread notifications" value={unread?.unread ?? 0} to="/notifications" />}
         {/*
           A provider that is not a planner (there is one persona here now that
           vendors have their own dashboard) keeps the listing-scoped counters.
@@ -572,7 +559,7 @@ export default function Dashboard({
         an honest empty state. It owns its own booking counts, so the buckets
         that used to live here (EZ1-I75) now sit inside it.
       */}
-      {isBuyer && !isProvider && <IndividualDashboard />}
+      {isConsumerPortal && <IndividualDashboard />}
 
       {/*
         The agent's book at a glance (EZ1-I79). Separate row from the account
@@ -869,6 +856,11 @@ function greeting(): string {
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
+}
+
+function delightfulGreeting(name: string): string {
+  const time = greeting().replace('Good ', '').toLowerCase();
+  return `A delightful ${time}${name ? `, ${name}` : ''}`;
 }
 
 /** One of today's scheduled visits on the officer dashboard (EZ1-I200). */

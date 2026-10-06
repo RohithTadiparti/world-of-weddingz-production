@@ -207,6 +207,20 @@ export default function Chat() {
         </p>
       </div>
 
+      <section
+        aria-label="Private conversation status"
+        className="rounded-lg border border-brand-light bg-brand-light/40 px-4 py-3 text-sm text-gray-700"
+      >
+        <p className="font-semibold text-brand-dark">Private conversations, when both sides agree</p>
+        <p className="mt-1">
+          {active?.context
+            ? active.context.standing === 'fixed'
+              ? 'This match is fixed; your existing private conversation remains available here.'
+              : 'This interest has been accepted, so you can continue privately here.'
+            : 'A conversation opens after an interest is accepted. Until then, this page does not create a new access path.'}
+        </p>
+      </section>
+
       {error && <p className="alert-critical">{error}</p>}
 
       {previewId && <ProfilePreview profileId={previewId} onClose={() => setPreviewId('')} />}

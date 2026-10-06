@@ -223,6 +223,18 @@
       color 0.3s ease;
   }
 
+  /* The signed-in bride/groom portal uses a soft stationery field inspired by
+   * the login experience: blush watercolor, rose corners and gold linework.
+   * The center stays quiet so cards and text remain easy to read. */
+  .portal-shell[data-portal='individual'] {
+    background-color: rgb(var(--canvas));
+    background-image: linear-gradient(rgb(var(--canvas) / 0.42), rgb(var(--canvas) / 0.42)), url('/images/wow-portal-floral.webp');
+    background-position: center top;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-attachment: fixed;
+  }
+
   /* Numbers, codes and identifiers. Profile codes are read aloud over the
    * phone and compared down a column; proportional digits make that harder
    * than it needs to be. */
@@ -523,6 +535,90 @@
   .rule {
     @apply h-px w-full border-0;
     background: linear-gradient(90deg, transparent, var(--line) 18%, var(--line) 82%, transparent);
+  }
+
+  /* Reusable rose, foliage and heart ornament. It is deliberately an edge
+   * layer only: hosts clip it inside a decorative wrapper and retain a solid
+   * surface for their content and controls. */
+  .individual-pattern {
+    @apply absolute inset-x-0 bottom-0 h-32 w-full select-none overflow-hidden;
+    color: rgb(var(--gold) / 0.48);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .individual-pattern__foliage {
+    color: rgb(var(--gold) / 0.46);
+  }
+
+  .individual-pattern__roses {
+    color: rgb(var(--brand) / 0.28);
+  }
+
+  .individual-pattern__hearts {
+    color: rgb(var(--gold-deep) / 0.58);
+  }
+
+  .individual-pattern--quiet {
+    height: 4.5rem;
+    opacity: 0.42;
+  }
+
+  .individual-pattern--quiet .individual-pattern__roses { opacity: 0.8; }
+  .individual-pattern--quiet .individual-pattern__hearts { opacity: 0.7; }
+
+  .individual-pattern--standard {
+    height: 7.5rem;
+    opacity: 0.62;
+  }
+
+  .individual-pattern--celebration {
+    height: 10rem;
+    opacity: 0.78;
+  }
+
+  /* Shared individual route components. Their content sits above the
+   * ornament layer, so decoration stays purely decorative and cannot impair
+   * a link, field, or focus ring. */
+  .individual-masthead,
+  .individual-future-wedding {
+    @apply relative isolate overflow-hidden border-y border-gray-200 bg-surface-sunken px-5 py-8 sm:px-8 sm:py-10;
+  }
+
+  .individual-masthead__content,
+  .individual-future-wedding__content {
+    @apply relative z-10 max-w-3xl;
+  }
+
+  .individual-readiness,
+  .individual-relationship {
+    @apply border border-gray-200 bg-surface-raised p-5 shadow-card;
+  }
+
+  .individual-panel__heading {
+    @apply flex items-start justify-between gap-4;
+  }
+
+  .individual-readiness__value {
+    @apply font-mono text-2xl font-semibold leading-none text-brand-strong;
+  }
+
+  .individual-readiness__track {
+    @apply mt-4 block h-2 overflow-hidden bg-gray-100;
+  }
+
+  .individual-readiness__fill {
+    @apply block h-full bg-brand transition-[width] duration-300;
+  }
+
+  @media (max-width: 640px) {
+    .individual-pattern--standard {
+      height: 5.5rem;
+    }
+
+    .individual-pattern--celebration {
+      height: 7rem;
+    }
   }
 }
 

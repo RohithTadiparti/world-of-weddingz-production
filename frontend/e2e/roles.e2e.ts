@@ -49,3 +49,69 @@ for (const role of DEMO_ROLES) {
     expect(issues).toEqual([]);
   });
 }
+
+for (const role of ['bride', 'groom'] as const) {
+  test(`${role}: profile readiness has an understandable next step`, async ({ page }) => {
+    test.skip(!DEMO_PASSWORD, 'DEMO_PASSWORD is not set');
+
+    await signIn(page, demoEmail(role), DEMO_PASSWORD);
+    await page.goto('/');
+    await settle(page);
+
+    const readiness = page.getByRole('region', { name: 'Profile readiness' });
+    await expect(readiness).toBeVisible();
+    await expect(readiness.getByRole('progressbar')).toHaveAttribute('aria-valuenow', /^(?:[0-9]|[1-9][0-9]|100)$/);
+    await expect(readiness.getByRole('link')).toHaveAttribute('href', /\/(?:profile|biodata)$/);
+  });
+
+  test(`${role}: future wedding pages explain their existing planning state`, async ({ page }) => {
+    test.skip(!DEMO_PASSWORD, 'DEMO_PASSWORD is not set');
+
+    await signIn(page, demoEmail(role), DEMO_PASSWORD);
+
+    for (const path of ['/events', '/bookings', '/planner', '/travel']) {
+      await page.goto(path);
+      await settle(page);
+
+      const futureWedding = page.getByRole('region', { name: 'Your future wedding' });
+      await expect(futureWedding).toBeVisible();
+
+      // A locked explanation is deliberately informational. It must not create
+      // a navigation affordance before the host page's existing data exposes
+      // an available milestone.
+      const planningLink = futureWedding.getByRole('link');
+      if ((await planningLink.count()) === 0) {
+        await expect(futureWedding).toContainText('Available after your match is fixed');
+      } else {
+        await expect(planningLink).toHaveAttribute('href', path);
+      }
+    }
+  });
+
+  test(`${role}: matching and connection states stay understandable`, async ({ page }) => {
+    test.skip(!DEMO_PASSWORD, 'DEMO_PASSWORD is not set');
+
+    await signIn(page, demoEmail(role), DEMO_PASSWORD);
+    await page.goto('/matches');
+    await settle(page);
+
+    await expect(page.getByRole('region', { name: 'Matching journey' })).toBeVisible();
+    const firstCard = page.getByTestId('match-card').first();
+    if (await firstCard.count()) {
+      await expect(firstCard).toHaveAccessibleName(/Match introduction for /);
+      await expect(firstCard.getByLabel(/Interaction state:/)).toBeVisible();
+      const compatibility = firstCard.getByLabel('Compatibility context');
+      if (await compatibility.count()) await expect(compatibility).toBeVisible();
+      const fallback = firstCard.getByTestId('profile-silhouette');
+      if (await fallback.count()) await expect(fallback).toBeVisible();
+    }
+
+    await page.goto('/interests');
+    await settle(page);
+    await expect(page.getByRole('region', { name: 'Interest status' })).toBeVisible();
+
+    await page.goto('/chat');
+    await settle(page);
+    await expect(page.getByRole('region', { name: 'Private conversation status' })).toBeVisible();
+  });
+}

@@ -4,6 +4,7 @@ import { MARITAL_LABEL, MaritalStatus, OCCUPATION_LABEL, OccupationStatus } from
 import { CheckCircle } from '@phosphor-icons/react';
 import { ProfileSilhouette } from './ProfileSilhouette';
 import { AnimatedCard, AnimatedHeart } from './ui/Motion';
+import { relationshipPresentation } from '../lib/individual-journey';
 
 /** Server-side privacy view: an age band, not a date of birth. */
 export interface PublicProfile {
@@ -140,6 +141,7 @@ export default function MatchCard({
   onSendInterest,
   onToggleShortlist,
   disabledReason,
+  surface = 'default',
 }: {
   suggestion: Suggestion;
   showScore?: boolean;
@@ -157,11 +159,13 @@ export default function MatchCard({
   onToggleShortlist?: () => void;
   /** Why the committing actions are unavailable, if they are. */
   disabledReason?: string;
+  surface?: 'default' | 'glass';
 }) {
   const p = suggestion.profile;
   const card = p.card;
   const interaction = suggestion.interaction ?? 'none';
   const interactionLabel = INTERACTION_LABEL[interaction];
+  const relationship = relationshipPresentation(interaction);
   // A photo that 404s must fall back to the silhouette rather than the
   // browser's broken-image icon (EZ1-I190).
   const [photoFailed, setPhotoFailed] = useState(false);
@@ -225,10 +229,10 @@ export default function MatchCard({
   const active = activity(p.lastActiveAt);
 
   return (
-    <AnimatedCard
-      className="group/card rounded-lg border border-gray-200 bg-surface p-4
-        transition-[border-color,box-shadow] duration-200 hover:border-gray-300 hover:shadow-card"
-    >
+    <article aria-label={`Match introduction for ${p.displayName}`} data-testid="match-card">
+      <AnimatedCard
+        className={`group/card rounded-lg border p-4 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 ${surface === 'glass' ? 'border-white/75 bg-white/50 shadow-[0_16px_36px_rgba(110,16,38,0.16)] backdrop-blur-xl hover:border-white hover:shadow-[0_20px_42px_rgba(110,16,38,0.22)]' : 'border-gray-200 bg-surface hover:border-gray-300 hover:shadow-card'}`}
+      >
       <div className="flex gap-4">
         {/* The portrait is an equally clear way to ask for this person's
             profile. Keep the photo and its fallback in the same real button
@@ -250,10 +254,12 @@ export default function MatchCard({
           ) : (
             // Never a broken image: no photo, or one that fails to load, shows
             // the groom or bride figure for this profile's gender.
-            <ProfileSilhouette
-              gender={p.gender}
-              className="h-full w-full rounded-md ring-1 ring-inset ring-gray-900/5"
-            />
+            <span data-testid="profile-silhouette">
+              <ProfileSilhouette
+                gender={p.gender}
+                className="h-full w-full rounded-md ring-1 ring-inset ring-gray-900/5"
+              />
+            </span>
           )}
         </button>
 
@@ -312,13 +318,12 @@ export default function MatchCard({
                 {active}
               </span>
             )}
-            {interactionLabel && (
-              <span
-                className={`rounded-sm px-2 py-0.5 text-xs ${INTERACTION_TONE[interaction]}`}
-              >
-                {interactionLabel}
-              </span>
-            )}
+            <span
+              aria-label={`Interaction state: ${relationship.label}`}
+              className={`rounded-sm px-2 py-0.5 text-xs ${INTERACTION_TONE[interaction] || 'bg-brand-light text-brand-dark'}`}
+            >
+              {interactionLabel ?? relationship.label}
+            </span>
           </div>
 
           {/*
@@ -373,7 +378,7 @@ export default function MatchCard({
           ) : null}
 
           {reasons.length > 0 && showScore && (
-            <p className="mt-2 flex items-center gap-1.5 text-xs text-gray-500">
+            <p aria-label="Compatibility context" className="mt-2 flex items-center gap-1.5 text-xs text-gray-500">
               <CheckCircle size={13} className="shrink-0 text-brand" weight="fill" aria-hidden />
               Matches on {reasons.join(', ').toLowerCase()}
             </p>
@@ -414,6 +419,7 @@ export default function MatchCard({
           </span>
         )}
       </div>
-    </AnimatedCard>
+      </AnimatedCard>
+    </article>
   );
 }

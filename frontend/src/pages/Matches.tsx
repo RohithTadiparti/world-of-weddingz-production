@@ -2,18 +2,14 @@ import HeightInput from '../components/HeightInput';
 import { formatHeight, MAX_HEIGHT_CM, MIN_HEIGHT_CM } from '../lib/height';
 import PackageRangeFields from '../components/PackageRangeFields';
 import { useEffect, useState } from 'react';
-import { X } from '@phosphor-icons/react';
+import { CaretLeft, CaretRight, X } from '@phosphor-icons/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
 import ProfilePreview from '../components/ProfilePreview';
 import MatchCard, { PublicProfile, Suggestion } from '../components/MatchCard';
 import { PersonPhoto } from '../components/ProfileSilhouette';
-import MatchStatTiles, {
-  MatchView,
-  MatchViewCounts,
-  VIEW_TILES,
-} from '../components/MatchStatTiles';
+import type { MatchView } from '../components/MatchStatTiles';
 import { useAuth } from '../store/auth';
 import {
   MatchFixedState,
@@ -218,9 +214,9 @@ export default function Matches() {
     commonInterests?: string[];
   }>({});
   const [pages, setPages] = useState(1);
-  const [showShortlist, setShowShortlist] = useState(false);
-  // Which of the four tiles at the top is pressed; 'all' is Total matches.
   const [view, setView] = useState<MatchView>('all');
+  const [recentIndex, setRecentIndex] = useState(0);
+  const [recommendedIndex, setRecommendedIndex] = useState(0);
 
   const openPreview = (
     id: string,
@@ -260,6 +256,13 @@ export default function Matches() {
     urlParams.delete('profile');
     setUrlParams(urlParams, { replace: true });
   }, [urlParams, setUrlParams]);
+
+  useEffect(() => {
+    const requested = urlParams.get('view');
+    if (requested === 'shortlisted' || requested === 'active' || requested === 'high' || requested === 'all') {
+      setView(requested);
+    }
+  }, [urlParams]);
 
   const params = profileId ? { profileId } : {};
   const ready = !isAgent || Boolean(profileId);
@@ -306,13 +309,6 @@ export default function Matches() {
   const { data: accepted } = useQuery({
     queryKey: ['accepted-matches', profileId],
     queryFn: async () => (await api.get('/matches/accepted', { params })).data as AcceptedMatch[],
-    retry: false,
-    enabled: ready,
-  });
-
-  const { data: shortlist } = useQuery({
-    queryKey: ['shortlist', profileId],
-    queryFn: async () => (await api.get('/matches/shortlist', { params })).data as Suggestion[],
     retry: false,
     enabled: ready,
   });
@@ -394,13 +390,21 @@ export default function Matches() {
   const total: number = data?.meta?.total ?? suggestions.length;
   const acceptedMatches: AcceptedMatch[] = accepted ?? [];
   const fixed = status?.matchFixedState === 'confirmed';
-  const shortlistRows: Suggestion[] = shortlist ?? [];
-  const recommendedRows = (recommended?.data as Suggestion[] | undefined) ?? [];
+  const recommendedRows = ((recommended?.data as Suggestion[] | undefined) ?? [])
+    .filter((row) => row.score > 50)
+    .sort((a, b) => b.score - a.score);
+
+  useEffect(() => {
+    setRecentIndex(0);
+  }, [filters, view, profileId]);
+
+  useEffect(() => {
+    setRecommendedIndex(0);
+  }, [profileId]);
 
   // The tiles at the top, counted by the server over the same list the browse
   // column is cut from — so each figure is the number of rows its tile shows.
-  const counts = data?.counts as MatchViewCounts | undefined;
-  const viewLabel = VIEW_TILES.find((t) => t.view === view)?.label;
+  const viewLabel = view === 'shortlisted' ? 'Shortlisted' : view === 'active' ? 'Active today' : view === 'high' ? 'High compatibility' : undefined;
 
   // The search box, sort, quick pills and clear-all live on the compact bar;
   // everything else opens in the "More filters" panel. This counts only the
@@ -455,18 +459,6 @@ export default function Matches() {
           Matchmaking always runs under a client identity. Pick one of your profiles above,
           including people you have built a profile for but not yet invited.
         </p>
-      )}
-
-      {/* At-a-glance counts that are also the way into each list (EZ1-I189). */}
-      {ready && (
-        <MatchStatTiles
-          counts={counts}
-          value={view}
-          onChange={(next) => {
-            setView(next);
-            setPages(1);
-          }}
-        />
       )}
 
       {error && <p className="alert-critical">{error}</p>}
@@ -769,40 +761,7 @@ export default function Matches() {
               )}
             </div>
 
-            <div className="card space-y-2">
-              <button
-                className="flex w-full items-center justify-between text-left"
-                onClick={() => setShowShortlist((s) => !s)}
-              >
-                <span className="font-semibold text-gray-900">Shortlist</span>
-                <span className="rounded-sm bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-                  {shortlistRows.length}
-                </span>
-              </button>
-              {showShortlist && (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {shortlistRows.map((s) => (
-                    <MatchCard
-                      key={s.profile.id}
-                      suggestion={{ ...s, shortlisted: true }}
-                      onOpen={() => openPreview(s.profile.id, s.score, s.profile.lastActiveAt, s.breakdown)}
-                      onSendInterest={
-                        interestHandler ? () => sendInterest(s.profile.id) : undefined
-                      }
-                      onToggleShortlist={() => toggleShortlist({ ...s, shortlisted: true })}
-                      disabledReason={gate}
-                    />
-                  ))}
-                  {shortlistRows.length === 0 && (
-                    <p className="text-sm text-gray-400">
-                      Nothing kept yet. Shortlisting is private. The other family is never told.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+            <div className="grid gap-5">
               <div className="card space-y-3">
                 <div>
                   <h2 className="section-title">
@@ -816,23 +775,17 @@ export default function Matches() {
                     browsing, not recommending.
                   </p>
                 </div>
+                <SuggestionCarousel
+                  items={suggestions}
+                  index={recentIndex}
+                  onIndexChange={setRecentIndex}
+                  onOpen={(s) => openPreview(s.profile.id, s.score, s.profile.lastActiveAt, s.breakdown)}
+                  onSendInterest={interestHandler}
+                  onToggleShortlist={toggleShortlist}
+                  disabledReason={gate}
+                  empty="No introductions match these filters yet."
+                />
                 <div className="space-y-2">
-                  {suggestions.map((s) => (
-                    <MatchCard
-                      key={s.profile.id}
-                      suggestion={s}
-                      // The score families compare across a list, shown on the
-                      // browse cards too (EZ1-I189), not only when sorted by it.
-                      showScore
-                      detail="brief"
-                      onOpen={() => openPreview(s.profile.id, s.score, s.profile.lastActiveAt, s.breakdown)}
-                      onSendInterest={
-                        interestHandler ? () => sendInterest(s.profile.id) : undefined
-                      }
-                      onToggleShortlist={() => toggleShortlist(s)}
-                      disabledReason={gate}
-                    />
-                  ))}
                   {suggestionsError && <p role="alert" className="text-sm text-red-600">{apiMessage(suggestionsError, 'Unable to load matches.')}</p>}
                   {isLoading && <Loading rows={3} />}
                   {!isLoading && !suggestionsError && suggestions.length === 0 && view !== 'all' && (
@@ -860,38 +813,23 @@ export default function Matches() {
               <div className="card space-y-3">
                 <div>
                   <h2 className="section-title">Recommended for you</h2>
-                  <p className="text-sm text-gray-600">
-                    Rated 50% or better by the matching engine, best first. Unaffected by the
-                    filters.
-                  </p>
                 </div>
-                <div className="space-y-2">
-                  {recommendedRows.map((s) => (
-                    <MatchCard
-                      key={s.profile.id}
-                      suggestion={s}
-                      showScore
-                      onOpen={() => openPreview(s.profile.id, s.score, s.profile.lastActiveAt, s.breakdown)}
-                      onSendInterest={
-                        interestHandler ? () => sendInterest(s.profile.id) : undefined
-                      }
-                      onToggleShortlist={() => toggleShortlist(s)}
-                      disabledReason={gate}
-                    />
-                  ))}
-                  {recommendedRows.length === 0 && (
-                    <p className="text-sm text-gray-400">
-                      Nothing over 50% yet. Filling in more of your preferences gives the engine
-                      more to go on.
-                    </p>
-                  )}
-                </div>
+                <SuggestionCarousel
+                  items={recommendedRows}
+                  index={recommendedIndex}
+                  onIndexChange={setRecommendedIndex}
+                  onOpen={(s) => openPreview(s.profile.id, s.score, s.profile.lastActiveAt, s.breakdown)}
+                  onSendInterest={interestHandler}
+                  onToggleShortlist={toggleShortlist}
+                  disabledReason={gate}
+                  empty="Your considered introductions will appear here as the matching engine learns more about your preferences."
+                />
               </div>
             </div>
           </div>
       )}
 
-      {ready && status && (
+      {ready && status && status.stage !== 'matchmaking_active' && (
         <div className="card space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -899,10 +837,6 @@ export default function Matches() {
               <p className="text-sm text-gray-600">
                 {status.stage === 'profile_incomplete' &&
                   'Fill in the basics: name, gender, date of birth and city: before browsing.'}
-                {status.stage === 'matchmaking_active' &&
-                  (status.servicesUnlocked
-                    ? 'Browsing and sending interests. The wedding marketplace is open to you now. You do not have to wait for a match.'
-                    : 'Browsing and sending interests. Wedding services open once a match is fixed.')}
                 {status.stage === 'match_fixed' &&
                   'The match is fixed. Matchmaking is closed and the wedding marketplace is open.'}
               </p>
@@ -1037,6 +971,77 @@ export default function Matches() {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function SuggestionCarousel({
+  items,
+  index,
+  onIndexChange,
+  onOpen,
+  onSendInterest,
+  onToggleShortlist,
+  disabledReason,
+  empty,
+}: {
+  items: Suggestion[];
+  index: number;
+  onIndexChange: (next: number) => void;
+  onOpen: (suggestion: Suggestion) => void;
+  onSendInterest?: (id: string) => void;
+  onToggleShortlist: (suggestion: Suggestion) => void;
+  disabledReason?: string;
+  empty: string;
+}) {
+  const maxIndex = Math.max(0, items.length - 3);
+  const safeIndex = Math.min(index, maxIndex);
+  const visible = items.slice(safeIndex, safeIndex + 3);
+  return (
+    <div className="space-y-3" aria-label="Profile carousel">
+      {visible.length > 0 ? (
+        <>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="grid h-8 w-8 place-items-center rounded-full border border-brand/20 bg-white/75 text-brand shadow-sm disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label="Previous profiles"
+              disabled={safeIndex === 0}
+              onClick={() => onIndexChange(Math.max(0, safeIndex - 1))}
+            >
+              <CaretLeft size={16} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="grid h-8 w-8 place-items-center rounded-full border border-brand/20 bg-white/75 text-brand shadow-sm disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label="Next profiles"
+              disabled={safeIndex >= maxIndex}
+              onClick={() => onIndexChange(Math.min(maxIndex, safeIndex + 1))}
+            >
+              <CaretRight size={16} aria-hidden />
+            </button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {visible.map((suggestion) => (
+              <MatchCard
+                key={suggestion.profile.id}
+                suggestion={suggestion}
+                showScore
+                detail="brief"
+                surface="glass"
+                onOpen={() => onOpen(suggestion)}
+                onSendInterest={onSendInterest ? () => onSendInterest(suggestion.profile.id) : undefined}
+                onToggleShortlist={() => onToggleShortlist(suggestion)}
+                disabledReason={disabledReason}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="border border-dashed border-brand/20 bg-brand-soft/30 p-4 text-sm text-gray-600">
+          {empty}
+        </p>
       )}
     </div>
   );

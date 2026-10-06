@@ -7,3 +7,6 @@ dist
 e2e
 e2e-results
 playwright.config.ts
+!public/
+!public/images/
+!public/images/*.png

@@ -157,10 +157,30 @@ export default function Register() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-10">
-      <form onSubmit={submit} className="card w-full max-w-2xl space-y-6" noValidate>
+    <main className="relative isolate min-h-screen overflow-hidden px-4 py-8 sm:px-8 sm:py-12">
+      <div className="relative mx-auto grid w-full max-w-[100rem] overflow-hidden border border-gray-200 bg-surface shadow-lifted lg:grid-cols-[0.88fr_1.12fr]">
+        <aside className="relative min-h-[28rem] overflow-hidden bg-brand-strong p-8 text-brand-fg sm:p-12">
+          <img src="/images/wow-home-hero.webp" alt="A couple beginning a beautiful life together" fetchPriority="high" decoding="async" className="absolute inset-0 h-full w-full object-cover" />
+          <span aria-hidden className="absolute inset-0 bg-gradient-to-br from-brand-strong/95 via-brand-strong/65 to-brand/45" />
+          <div className="relative flex h-full max-w-sm flex-col">
+            <Link to="/" className="text-xs uppercase tracking-[0.28em] text-gold-lit hover:text-brand-fg">
+              World of Weddingz
+            </Link>
+            <div className="my-auto py-14">
+              <p className="text-xs uppercase tracking-[0.26em] text-gold-lit">Your first chapter</p>
+              <h1 className="mt-5 font-serif text-[3.25rem] leading-[0.94] text-white sm:text-[4.25rem]">
+                Begin with a profile that feels like you.
+              </h1>
+              <p className="mt-7 text-[0.9375rem] leading-[1.75] text-white/90">
+                Start it yourself or with your family. You remain in control of what is shared and when a conversation begins.
+              </p>
+            </div>
+            <p className="text-xs uppercase tracking-[0.2em] text-[rgb(var(--ink-100))]">Private · thoughtful · family-aware</p>
+          </div>
+        </aside>
+        <form onSubmit={submit} className="relative space-y-6 p-6 sm:p-10 lg:p-12" noValidate>
         <div>
-          <h1 className="page-title">Create your WOW account</h1>
+          <h2 className="page-title">Create your WOW account</h2>
           <p className="page-subtitle">
             Pick the kind of account you need. This decides what you can do on the platform, and
             you cannot change it later without contacting support.
@@ -207,23 +227,32 @@ export default function Register() {
         </fieldset>
 
         {roles.length > 0 && (
-          <div>
-            <label className="label" htmlFor="role">
-              Who is this profile for?
-            </label>
-            <select
-              id="role"
-              className="input"
-              value={role}
-              onChange={(e) => setChosenRole(e.target.value)}
-            >
-              {roles.map((r) => (
-                <option key={r} value={r}>
-                  {ROLE_LABELS[r] ?? r}
-                </option>
-              ))}
-            </select>
-          </div>
+          <fieldset>
+            <legend className="label">Who is this profile for?</legend>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {roles.map((r) => {
+                const active = role === r;
+                return (
+                  <button
+                    type="button"
+                    key={r}
+                    aria-pressed={active}
+                    onClick={() => setChosenRole(r)}
+                    className={`min-h-14 border px-3 text-left text-sm transition ${
+                      active
+                        ? 'border-brand bg-brand-soft text-brand-strong ring-1 ring-brand'
+                        : 'border-gray-200 text-gray-700 hover:border-gold'
+                    }`}
+                  >
+                    <span className="block font-serif text-lg leading-tight">{ROLE_LABELS[r] ?? r}</span>
+                    <span className="mt-0.5 block text-xs text-gray-500">
+                      {r === 'family' ? 'For a family member' : `For the ${ROLE_LABELS[r]?.toLowerCase() ?? r}`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
         )}
 
         {isIndividual && (
@@ -379,7 +408,8 @@ export default function Register() {
             Sign in
           </Link>
         </p>
-      </form>
-    </div>
+        </form>
+      </div>
+    </main>
   );
 }

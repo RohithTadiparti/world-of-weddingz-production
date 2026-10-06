@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
 import { useAuth } from '../store/auth';
+import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
+import FutureWeddingPanel from '../components/individual/FutureWeddingPanel';
 import { BOOKING_STATUS_LABEL, MILESTONE_LABEL, Permission, can, canAny } from '../lib/permissions';
 import { formatDate, formatDateTime } from '../lib/dates';
 import {
@@ -211,7 +213,9 @@ const PRIMARY_LABEL: Record<string, string> = {
  */
 export default function Bookings() {
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const user = useAuth((s) => s.user);
+  const permissions = user?.permissions ?? [];
+  const isIndividual = user?.role === 'bride' || user?.role === 'groom';
   const canBuy = can(permissions, Permission.BOOKING_READ_OWN);
   const canPay = can(permissions, Permission.BOOKING_PAY);
   const canRaiseCase = can(permissions, Permission.CASE_RAISE);
@@ -349,14 +353,31 @@ export default function Bookings() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="page-title">Bookings</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Ask for a booking from the <strong>Vendors</strong> or <strong>Hire a Planner</strong>{' '}
-          page. The provider quotes; once you accept, the price is fixed and payable in
-          instalments. Payments and escrow are on the <strong>Accounts</strong> page.
-        </p>
-      </div>
+      {isIndividual ? (
+        <IndividualPageMasthead
+          eyebrow="Your future together"
+          title="Wedding bookings"
+          description="Review the services you have asked for and follow every confirmed commitment with clarity."
+        />
+      ) : (
+        <div>
+          <h1 className="page-title">Bookings</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Ask for a booking from the <strong>Vendors</strong> or <strong>Hire a Planner</strong>{' '}
+            page. The provider quotes; once you accept, the price is fixed and payable in
+            instalments. Payments and escrow are on the <strong>Accounts</strong> page.
+          </p>
+        </div>
+      )}
+
+      {isIndividual && (
+        <FutureWeddingPanel
+          enabled={false}
+          to="/bookings"
+          title="Your future wedding"
+          description="Your service requests and confirmed commitments stay together here. Available actions continue to follow the existing match and booking permissions."
+        />
+      )}
 
       {/*
         Curated status filter with live counts (EZ1-I141, EZ1-I167). Kept on one

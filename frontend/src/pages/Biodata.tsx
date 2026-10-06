@@ -48,6 +48,7 @@ import ProfileCard from '../components/ProfileCard';
 import BiodataImport from '../components/BiodataImport';
 import { formatDate } from '../lib/dates';
 import RequiredMark, { RequiredNote } from '../components/ui/RequiredMark';
+import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
 
 interface Section {
   section: string;
@@ -129,6 +130,7 @@ export default function Biodata() {
   const userRole = useAuth((s) => s.user?.role);
   const permissions = useAuth((s) => s.user?.permissions ?? []);
   const isFamily = userRole === 'family';
+  const isIndividual = userRole === 'bride' || userRole === 'groom';
   const isSteward = can(permissions, Permission.ACT_ON_BEHALF);
   const isAgent = can(permissions, Permission.AGENCY_MANAGE);
 
@@ -288,34 +290,46 @@ export default function Biodata() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="page-title">Biodata</h1>
-          <p className="page-subtitle">
-            Saved section by section. You can stop and come back.
-          </p>
-          <RequiredNote />
-        </div>
-        {/*
-          "Client" is an agency's word for an agency's business. A father
-          filling in his daughter's biodata is not looking at a client, and
-          being told he is reads as the platform having mistaken him for one.
-        */}
-        {isSteward && !isFamily && (
-          <ProfileSelector
-            value={profileId}
-            onChange={setProfileId}
-            label={isAgent ? 'Client' : 'Browsing as'}
+      <div className="space-y-3">
+        {isIndividual ? (
+          <IndividualPageMasthead
+            eyebrow="Your biodata"
+            title="Build an introduction with care"
+            description="Each section saves as you go, so you can return whenever you are ready."
+            action={{ to: '/profile', label: 'Review personal details' }}
+            density="quiet"
           />
+        ) : (
+          <div>
+            <h1 className="page-title">Biodata</h1>
+            <p className="page-subtitle">
+              Saved section by section. You can stop and come back.
+            </p>
+          </div>
         )}
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <RequiredNote />
+          {/*
+            "Client" is an agency's word for an agency's business. A father
+            filling in his daughter's biodata is not looking at a client, and
+            being told he is reads as the platform having mistaken him for one.
+          */}
+          {isSteward && !isFamily && (
+            <ProfileSelector
+              value={profileId}
+              onChange={setProfileId}
+              label={isAgent ? 'Client' : 'Browsing as'}
+            />
+          )}
+        </div>
       </div>
 
       {completion && (
-        <div className="card space-y-2">
+        <section className="card space-y-2" aria-labelledby="biodata-readiness-heading">
           <div className="flex items-center justify-between">
-            <p className="font-semibold text-gray-900">
+            <h2 id="biodata-readiness-heading" className="font-semibold text-gray-900">
               {completion.complete ? 'Complete' : `${completion.percent}% complete`}
-            </p>
+            </h2>
             {!completion.complete && (
               <p className="text-sm text-gray-600">
                 {completion.missing.length} section{completion.missing.length === 1 ? '' : 's'} to go
@@ -345,7 +359,7 @@ export default function Biodata() {
               </button>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {error && <p className="alert-critical">{error}</p>}

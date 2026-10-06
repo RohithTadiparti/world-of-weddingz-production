@@ -23,7 +23,17 @@ test('the home page carries every section of the template', async ({ page }) => 
   for (const name of ['Profiles', 'How it works', 'Stories', 'Sign in', 'Register']) {
     await expect(page.getByRole('banner').getByRole('link', { name, exact: true })).toBeVisible();
   }
-  await expect(page.locator('#profiles article')).toHaveCount(3);
-  await expect(page.locator('#stories')).toContainText('Sample');
-  await expect(page.getByRole('button', { name: 'Find matches' })).toBeVisible();
+  await expect(page.locator('#profiles article')).toHaveCount(4);
+  await expect(page.locator('#stories')).toContainText('consent');
+  await expect(page.locator('#how')).toBeVisible();
+  await expect(page.locator('#how')).toContainText('Create your profile');
+});
+
+test('the home page introduces the private matrimonial journey before registration', async ({ page }) => {
+  await page.goto('/');
+
+  await expect(page.getByRole('region', { name: 'A beautiful future begins here' })).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'A beautiful future begins here' }).getByRole('link', { name: 'Begin your journey' })
+  ).toHaveAttribute('href', '/register');
 });

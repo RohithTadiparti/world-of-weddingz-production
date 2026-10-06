@@ -16,7 +16,11 @@ test('a new member can register and reach the profile', async ({ page }) => {
   expect(await expectTemplate(page, '/register')).toEqual([]);
 
   await page.getByRole('button', { name: /Individual/i }).first().click();
-  await page.locator('#role').selectOption('bride');
+  await expect(page.getByRole('group', { name: 'Who is this profile for?' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bride' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Groom' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Family member For a family member$/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Bride' }).click();
   await page.locator('#firstName').fill('Ananya');
   await page.locator('#lastName').fill('Rao');
   await page.locator('#email').fill(`wow.e2e.${stamp}@gmail.com`);

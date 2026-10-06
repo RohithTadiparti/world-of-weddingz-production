@@ -86,8 +86,9 @@ export default function Login() {
           transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
           className="w-full max-w-[22rem]"
         >
-          <Link to="/" className="mb-10 block font-serif text-[1.35rem] uppercase tracking-[0.2em] text-brand">
-            World of Weddingz
+          <Link to="/" className="mb-10 block font-serif text-[1.7rem] uppercase tracking-[0.2em] text-brand">
+            W<span className="text-gold-deep">O</span>W
+            <span className="mt-1 block text-[0.48rem] tracking-[0.28em] text-gold-deep">World of Weddingz</span>
           </Link>
 
           <h1 className="font-serif text-[2.75rem] font-light leading-[1.05] text-brand">Welcome back</h1>
@@ -219,12 +220,14 @@ export default function Login() {
         placeholder for a brand image nobody had.
       */}
       <div className="relative hidden overflow-hidden border-l border-gray-200 lg:flex lg:items-end">
-        <div className="p-12 xl:p-16">
-          <span aria-hidden className="mb-7 block h-px w-16 bg-gold" />
-          <p className="plate max-w-[20ch] font-serif text-[2.75rem] font-light italic leading-[1.2] text-brand">
+        <img src="/images/wow-home-hero.webp" alt="A couple beginning a life together beside a palace lake" fetchPriority="high" decoding="async" className="absolute inset-0 h-full w-full object-cover" />
+        <div className="absolute inset-0 bg-gradient-to-t from-brand-strong/95 via-brand-strong/35 to-brand-strong/10" />
+        <div className="relative p-12 xl:p-16">
+          <span aria-hidden className="mb-7 block h-px w-16 bg-gold-lit" />
+          <p className="max-w-[20ch] font-serif text-[2.75rem] font-light italic leading-[1.2] text-white">
             Every family deserves to know who they are talking to.
           </p>
-          <p className="plate mt-6 max-w-[40ch] text-[0.9375rem] leading-relaxed text-gray-700">
+          <p className="mt-6 max-w-[40ch] text-[0.9375rem] leading-relaxed text-white/85">
             A conversation opens only once both families agree to it.
           </p>
         </div>

@@ -8,6 +8,8 @@ import RsvpDashboard from '../components/RsvpDashboard';
 import ShareInvitation from '../components/ShareInvitation';
 import WeddingInvitationCard from '../components/WeddingInvitationCard';
 import { formatDate } from '../lib/dates';
+import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
+import FutureWeddingPanel from '../components/individual/FutureWeddingPanel';
 
 interface WEvent {
   id: string;
@@ -95,7 +97,9 @@ export default function Events() {
   // Hiring a planner is a buyer's action. A planner has EVENT_MANAGE_OWN and so
   // reaches this page, but must not be offered a planner to hire (EZ1-I120);
   // BOOKING_CREATE is exactly the buyer capability they lack.
-  const canHirePlanner = can(useAuth((s) => s.user?.permissions ?? []), Permission.BOOKING_CREATE);
+  const user = useAuth((s) => s.user);
+  const canHirePlanner = can(user?.permissions ?? [], Permission.BOOKING_CREATE);
+  const isIndividual = user?.role === 'bride' || user?.role === 'groom';
 
   /*
    * Whose wedding this is.
@@ -310,14 +314,31 @@ export default function Events() {
         </div>
       )}
 
-      <div>
-        <h1 className="page-title">Events</h1>
-        <p className="page-subtitle">
-          Each day of the wedding, with its guests and the vendors booked for it.
-        </p>
-      </div>
+      {isIndividual ? (
+        <IndividualPageMasthead
+          eyebrow="Your future together"
+          title="Wedding days"
+          description="Keep each celebration, its guests, and its chosen partners together in one considered view."
+        />
+      ) : (
+        <div>
+          <h1 className="page-title">Events</h1>
+          <p className="page-subtitle">
+            Each day of the wedding, with its guests and the vendors booked for it.
+          </p>
+        </div>
+      )}
 
       {error && <p className="alert-critical">{error}</p>}
+
+      {isIndividual && (
+        <FutureWeddingPanel
+          enabled={false}
+          to="/events"
+          title="Your future wedding"
+          description="This is your shared celebration workspace. Its access and actions follow the match and planning permissions already enforced below."
+        />
+      )}
 
       <WeddingInvitationCard />
 

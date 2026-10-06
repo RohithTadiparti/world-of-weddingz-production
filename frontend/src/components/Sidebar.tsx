@@ -23,7 +23,7 @@ export default function Sidebar({
   gradient?: boolean;
   rail?: boolean;
 }) {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const reduce = useReducedMotion();
 
   return (
@@ -45,7 +45,9 @@ export default function Sidebar({
             )}
             <ul className="flex flex-col gap-0.5">
               {items.map((entry) => {
-                const active = pathname === entry.to;
+                const active = entry.to.includes('?')
+                  ? `${pathname}${search}` === entry.to
+                  : pathname === entry.to;
                 const Glyph = entry.icon;
 
                 return (
@@ -86,11 +88,16 @@ export default function Sidebar({
                         aria-hidden
                       />
                       <span className="truncate">{entry.label}</span>
-                      {entry.badge !== undefined && entry.badge > 0 && (
-                        <span
-                          className="ml-auto shrink-0 rounded-full bg-brand px-1.5 py-0.5 font-mono text-[0.625rem] font-semibold leading-none text-brand-fg"
-                          aria-label={`${entry.badge} unread`}
-                        >
+                      {entry.badge !== undefined && entry.badge > 0 && entry.to === '/matches' && (
+                        <span className="ml-auto grid h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-brand" aria-label={`${entry.badge} new matches`} />
+                      )}
+                      {entry.badge !== undefined && entry.badge > 0 && entry.to === '/chat' && (
+                        <span className="ml-auto shrink-0 rounded-full bg-brand px-1.5 py-0.5 font-mono text-[0.625rem] font-semibold leading-none text-brand-fg" aria-label={`${entry.badge} unread messages`}>
+                          {entry.badge > 99 ? '99+' : entry.badge}
+                        </span>
+                      )}
+                      {entry.badge !== undefined && entry.badge > 0 && !['/matches', '/chat'].includes(entry.to) && (
+                        <span className="ml-auto shrink-0 rounded-full bg-brand px-1.5 py-0.5 font-mono text-[0.625rem] font-semibold leading-none text-brand-fg" aria-label={`${entry.badge} unread`}>
                           {entry.badge > 99 ? '99+' : entry.badge}
                         </span>
                       )}

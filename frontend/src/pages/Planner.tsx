@@ -4,6 +4,9 @@ import { Link } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
 import { NOT_SET, daysAway, formatDate, hasDate, relativeToToday } from '../lib/dates';
 import WeddingDashboard from '../components/WeddingDashboard';
+import { useAuth } from '../store/auth';
+import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
+import FutureWeddingPanel from '../components/individual/FutureWeddingPanel';
 
 interface Task {
   id: string;
@@ -38,6 +41,8 @@ const STATUS_LABEL: Record<string, string> = {
  */
 export default function Planner() {
   const qc = useQueryClient();
+  const role = useAuth((s) => s.user?.role);
+  const isIndividual = role === 'bride' || role === 'groom';
   const [weddingDate, setWeddingDate] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -91,18 +96,35 @@ export default function Planner() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="page-title">My Wedding Plan</h1>
-        <p className="page-subtitle">
-          Your own timeline, worked backwards from the wedding date. Looking to{' '}
-          <Link className="text-brand underline" to="/wedding-planners">
-            hire a wedding planner
-          </Link>
-          ? That is a different page.
-        </p>
-      </div>
+      {isIndividual ? (
+        <IndividualPageMasthead
+          eyebrow="Your future together"
+          title="Your wedding plan"
+          description="Give the days ahead a gentle structure, one shared milestone at a time."
+        />
+      ) : (
+        <div>
+          <h1 className="page-title">My Wedding Plan</h1>
+          <p className="page-subtitle">
+            Your own timeline, worked backwards from the wedding date. Looking to{' '}
+            <Link className="text-brand underline" to="/wedding-planners">
+              hire a wedding planner
+            </Link>
+            ? That is a different page.
+          </p>
+        </div>
+      )}
 
       {error && <p className="alert-critical">{error}</p>}
+
+      {isIndividual && (
+        <FutureWeddingPanel
+          enabled={false}
+          to="/planner"
+          title="Your future wedding"
+          description="Your wedding timeline lives here. Its actions continue to follow the existing match and planning permissions."
+        />
+      )}
 
       {/*
         Above the form on purpose. Somebody who already has a plan opens this

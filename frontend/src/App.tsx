@@ -22,6 +22,7 @@ import {
   Gauge,
   Graph,
   HandHeart,
+  Heart,
   House,
   IdentificationCard,
   Images,
@@ -46,6 +47,7 @@ import {
   Warning,
 } from '@phosphor-icons/react';
 import Sidebar, { SidebarEntry } from './components/Sidebar';
+import { PersonPhoto } from './components/ProfileSilhouette';
 import ErrorBoundary from './components/ErrorBoundary';
 import { DARK_MODE_ENABLED, useTheme } from './store/theme';
 import { motion, useReducedMotion } from 'motion/react';
@@ -186,7 +188,7 @@ interface NavEntry {
   icon: Icon;
 }
 
-export type NavGroup = 'main' | 'matchmaking' | 'clients' | 'wedding' | 'business' | 'operations' | 'account';
+export type NavGroup = 'main' | 'matchmaking' | 'clients' | 'wedding' | 'quick' | 'business' | 'operations' | 'account';
 
 /** Order is the order they appear. Titles are omitted for `main` on purpose. */
 export const NAV_GROUPS: { key: NavGroup; title: string | null }[] = [
@@ -194,14 +196,16 @@ export const NAV_GROUPS: { key: NavGroup; title: string | null }[] = [
   { key: 'matchmaking', title: 'Matchmaking' },
   { key: 'clients', title: 'Clients' },
   { key: 'wedding', title: 'The wedding' },
+  { key: 'quick', title: 'Quick actions' },
   { key: 'business', title: 'Your business' },
   { key: 'operations', title: 'Operations' },
   { key: 'account', title: 'Account' },
 ];
 
 const NAV: NavEntry[] = [
-  { to: '/', label: 'Dashboard', requires: [], group: 'main', icon: House },
+  { to: '/', label: 'Home', requires: [], group: 'main', icon: House },
   { to: '/matches', label: 'Matches', requires: [Permission.MATCH_BROWSE], group: 'matchmaking', icon: Sparkle },
+  { to: '/matches?view=shortlisted', label: 'Shortlisted', requires: [Permission.MATCH_BROWSE], group: 'matchmaking', icon: Heart },
   {
     to: '/biodata',
     label: 'Biodata',
@@ -390,7 +394,10 @@ const NAV: NavEntry[] = [
   },
   { to: '/travel', label: 'Honeymoon', requires: [Permission.TRAVEL_BOOK], group: 'wedding', icon: AirplaneTilt },
   { to: '/media', label: 'Media', requires: [Permission.MEDIA_MANAGE_OWN], group: 'wedding', icon: Images },
-  { to: '/genie', label: 'WOW Genie', requires: [Permission.AI_ASSIST], group: 'account', icon: MagicWand },
+  { to: '/matches', label: 'Find matches', requires: [Permission.MATCH_BROWSE], group: 'quick', icon: Sparkle },
+  { to: '/profile', label: 'Complete profile', requires: [Permission.PROFILE_MANAGE_OWN], group: 'quick', icon: IdentificationCard },
+  { to: '/support', label: 'Get support', requires: [Permission.CASE_RAISE], group: 'quick', icon: Lifebuoy },
+  { to: '/genie', label: 'WOW Genie', requires: [Permission.AI_ASSIST], group: 'quick', icon: MagicWand },
   {
     to: '/verification',
     label: 'Verification',
@@ -471,6 +478,7 @@ function NotificationPanel({ open, onClose }: { open: boolean; onClose: () => vo
 }
 
 function useNavigationCounts(): Record<string, number> {
+  const user = useAuth((state) => state.user);
   const { data } = useQuery({
     queryKey: ['navigation-counts'],
     queryFn: async () => (await api.get('/users/me/navigation-counts')).data as Record<string, number>,
@@ -478,7 +486,30 @@ function useNavigationCounts(): Record<string, number> {
     refetchOnWindowFocus: true,
     retry: false,
   });
-  return data ?? {};
+  const canMatch = canAny(user?.permissions ?? [], [Permission.MATCH_BROWSE]);
+  const canChat = canAny(user?.permissions ?? [], [Permission.CHAT_INQUIRE, Permission.CHAT_MATCH]);
+  const { data: matchData } = useQuery({
+    queryKey: ['navigation-match-count'],
+    queryFn: async () => (await api.get('/matches/suggestions', { params: { limit: 1 } })).data as { meta?: { total?: number } },
+    enabled: canMatch,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  const { data: conversationData } = useQuery({
+    queryKey: ['navigation-chat-count'],
+    queryFn: async () => (await api.get('/chat/conversations')).data as { unread?: number }[],
+    enabled: canChat,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  const counts = { ...(data ?? {}) };
+  const matches = matchData?.meta?.total ?? 0;
+  const unreadMessages = (conversationData ?? []).reduce((total, row) => total + (row.unread ?? 0), 0);
+  if (matches > 0) counts['/matches'] = matches;
+  if (unreadMessages > 0) counts['/chat'] = unreadMessages;
+  return counts;
 }
 
 
@@ -493,11 +524,15 @@ function AccountMenu({
   email,
   displayName,
   role,
+  photoUrl,
+  gender,
   onSignOut,
 }: {
   email?: string;
   displayName?: string | null;
   role?: UserRole;
+  photoUrl?: string | null;
+  gender?: string | null;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -506,8 +541,6 @@ function AccountMenu({
 
   useEffect(() => setOpen(false), [loc.pathname]);
 
-  const labelText = (displayName && displayName.trim() ? displayName : email ?? '?').trim();
-  const initial = labelText.slice(0, 1).toUpperCase();
 
   return (
     <div className="relative">
@@ -517,13 +550,7 @@ function AccountMenu({
         aria-expanded={open}
         aria-haspopup="menu"
       >
-        <span
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-soft
-            text-[0.8125rem] font-semibold text-brand-strong"
-          aria-hidden
-        >
-          {initial}
-        </span>
+        <PersonPhoto url={photoUrl} gender={gender} className="h-8 w-8 shrink-0 rounded-full object-cover bg-brand-soft" />
         <span className="hidden text-left sm:block">
           <span className="block max-w-[13rem] truncate text-[0.8125rem] font-medium text-gray-800">
             {displayName ?? email}
@@ -628,6 +655,9 @@ function Layout({ children }: { children: ReactNode }) {
     retry: false,
   });
 
+  // Couple-facing wedding services only become part of the journey after a
+  // match is fixed. Before that point the rail stays about introductions.
+
   const isFamily = user?.role === 'family';
   const accountDisplayName = isFamily
     ? (profile?.accountName ?? user?.accountName ?? profile?.displayName)
@@ -688,7 +718,7 @@ function Layout({ children }: { children: ReactNode }) {
           (n.requires.length === 0 || canAny(permissions, n.requires)),
       ).map((n) => ({
         to: n.to,
-        label: (user && n.labelFor?.[user.role]) ?? n.label,
+        label: n.to === '/profile' && profile?.profileCompleted ? 'Edit profile' : ((user && n.labelFor?.[user.role]) ?? n.label),
         icon: n.icon,
         group: n.group,
         badge: navCounts[n.to] ?? undefined,
@@ -756,7 +786,14 @@ function Layout({ children }: { children: ReactNode }) {
               </button>
               <NotificationPanel open={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
               </div>
-              <AccountMenu email={user?.email} displayName={accountDisplayName} role={user?.role} onSignOut={signOut} />
+              <AccountMenu
+                email={user?.email}
+                displayName={accountDisplayName}
+                role={user?.role}
+                photoUrl={profile?.photos?.[0]}
+                gender={profile?.gender}
+                onSignOut={signOut}
+              />
             </div>
           </header>
 

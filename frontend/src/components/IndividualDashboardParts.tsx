@@ -115,6 +115,7 @@ export function Progress({
   return (
     <Link
       to={to}
+      aria-label={`${label}: ${pct}% complete. ${hint}`}
       className={`group rounded-lg border border-t-2 bg-surface-raised p-4 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-gold-deep hover:shadow-lifted ${borderColor}`}
     >
       <div className="flex items-baseline justify-between">
