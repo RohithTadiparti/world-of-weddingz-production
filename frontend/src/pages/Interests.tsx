@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
-import { useAuth } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import { Permission, can } from '../lib/permissions';
 import AgencyInterests from '../components/AgencyInterests';
 import ProfileSelector from '../components/ProfileSelector';
@@ -134,7 +134,7 @@ const DATE_WINDOWS: { value: string; label: string }[] = [
  */
 export default function Interests() {
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const emailVerified = useAuth((s) => s.user?.isVerified);
   const isSteward = can(permissions, Permission.ACT_ON_BEHALF);
   /*

@@ -6,7 +6,7 @@ import { MILESTONE_LABEL, Permission, can } from '../lib/permissions';
 import { paymentStatusLabel } from '../lib/labels';
 import { Loading } from '../components/ui/Feedback';
 import PayoutAccount, { type PayoutAccountView } from '../components/PayoutAccount';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { useBusinesses } from '../store/business';
 
 const maskAccountId = (value: string | null | undefined) => {
@@ -64,7 +64,7 @@ const STATUS_STYLE: Record<string, string> = {
  */
 export default function Accounts() {
   const navigate = useNavigate();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isVendor = can(permissions, Permission.VENDOR_LISTING_MANAGE);
   /*
    * A planner is a provider too, and took bookings, and was shown the figure

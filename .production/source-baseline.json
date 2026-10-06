@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "51790dfa57126a64e31e5b605ddccca85cd09b85",
+  "reviewedCommit": "d3d66eae45ddefc262121f356b36ddfa94516baf",
   "snapshotDate": "2026-10-06",
   "historyImported": false,
-  "notes": "Reviewed through WOW-MD PR 49 at 51790df. SYNC-003 accepted 40 frontend UI paths, rejected the source-only preview artifacts, and production PRs 79 and 81 reconciled the frontend lockfile exactly. Uncommitted source changes still require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 52 at d3d66ea. DEP-002 accepts the peer-compatible dependency rollup, Express 5 mock-storage adaptation, patched mobile shell-quote chain and React 19/Zustand selector fix. ioredis 6 and Expo Router 58 remain rejected as peer-incompatible. Uncommitted source changes still require separate intake review."
 }

@@ -10,7 +10,7 @@ import {
   type Notification,
 } from '../lib/notification-copy';
 import { EmptyState, Loading } from '../components/ui/Feedback';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { Permission, can } from '../lib/permissions';
 import SupportContact from '../components/SupportContact';
 import { BellSlash } from '@phosphor-icons/react';
@@ -358,7 +358,7 @@ function SubjectRow({
   const { latest, earlier, unread } = subject;
   // A support-case notification goes to the verification Cases tab for staff and
   // to Support for the vendor who raised it (EZ1-I49).
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const canVerify =
     can(permissions, Permission.VERIFICATION_ALLOCATE) ||
     can(permissions, Permission.VERIFICATION_FIELDWORK);

@@ -8,7 +8,7 @@ import BookingConsole from './BookingConsole';
 import BookingDetail from './BookingDetail';
 import { Permission, can } from '../lib/permissions';
 import { SELLER_STATUS_LABEL } from '../lib/labels';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { FieldSpec, formatAnswer } from './DynamicForm';
 import { canMarkCompleted, canMarkDelivered } from '../lib/booking-progress';
 
@@ -88,7 +88,7 @@ export default function ProviderBookings({ canQuote }: { canQuote: boolean }) {
   const [quoting, setQuoting] = useState<string | null>(null);
   // A planner reviews the couple's whole wedding before quoting (EZ1-I162); a
   // vendor quotes on their one service and does not see the brief.
-  const isPlanner = can(useAuth((s) => s.user?.permissions ?? []), Permission.PLANNER_LISTING_MANAGE);
+  const isPlanner = can(usePermissions(), Permission.PLANNER_LISTING_MANAGE);
 
 
   const act = useMutation({
@@ -756,7 +756,7 @@ function VendorAddOns({ bookingId }: { bookingId: string }) {
 }
 
 export function QuotationForm({ bookingId, onDone }: { bookingId: string; onDone: () => void }) {
-  const isPlanner = can(useAuth((s) => s.user?.permissions ?? []), Permission.PLANNER_LISTING_MANAGE);
+  const isPlanner = can(usePermissions(), Permission.PLANNER_LISTING_MANAGE);
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [terms, setTerms] = useState('');

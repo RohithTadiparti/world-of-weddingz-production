@@ -5,7 +5,7 @@ import { formatDate, formatDateTime } from '../lib/dates';
 import { Link } from 'react-router-dom';
 import { Permission, can } from '../lib/permissions';
 import { SELLER_STATUS_LABEL, humanize } from '../lib/labels';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { PlacedBookingFacts, usePlacedForClients } from './PlacedForClients';
 import { ReferenceThumbs, RequestEstimate } from './RequestExtras';
 import type { QuotationSummary } from '../lib/booking-progress';
@@ -80,7 +80,7 @@ export default function BookingDetail({
   // A planner books vendors for the couples who hired them, and those are the
   // couple's bookings rather than rows in this queue — so they are named on the
   // couple's booking with the planner, where the planner looks for them.
-  const isPlanner = can(useAuth((s) => s.user?.permissions ?? []), Permission.BOOKING_REQUEST_FOR_CLIENT);
+  const isPlanner = can(usePermissions(), Permission.BOOKING_REQUEST_FOR_CLIENT);
   const placed = usePlacedForClients(isPlanner);
   const vendorsForClient = (placed.data ?? []).filter((v) => v.clientUserId === booking.userId);
 

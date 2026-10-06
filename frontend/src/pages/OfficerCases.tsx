@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../lib/api';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { CaseStatus, Permission, can } from '../lib/permissions';
 import { CASE_FILTERS, CaseRow, type Officer, type SupportCase } from './Verification';
 
@@ -20,7 +20,7 @@ import { CASE_FILTERS, CaseRow, type Officer, type SupportCase } from './Verific
  */
 export default function OfficerCases() {
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const canAllocate = can(permissions, Permission.VERIFICATION_ALLOCATE);
 
   const [caseFilter, setCaseFilter] = useState<CaseStatus | null>(null);

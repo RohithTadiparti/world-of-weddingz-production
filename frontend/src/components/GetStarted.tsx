@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Storefront } from '@phosphor-icons/react';
 import { api } from '../lib/api';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { useBusinesses } from '../store/business';
 import { Permission, can } from '../lib/permissions';
 import BusinessSetup from './BusinessSetup';
@@ -27,7 +27,7 @@ import BusinessSetup from './BusinessSetup';
  * account is the reason people stop reading banners.
  */
 export default function GetStarted() {
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isVendor = can(permissions, Permission.VENDOR_LISTING_MANAGE);
   const isPlanner = can(permissions, Permission.PLANNER_LISTING_MANAGE);
 

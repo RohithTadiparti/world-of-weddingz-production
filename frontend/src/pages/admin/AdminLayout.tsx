@@ -17,7 +17,7 @@ import {
   Gear,
 } from '@phosphor-icons/react';
 import { Permission, PermissionValue, canAny } from '../../lib/permissions';
-import { useAuth } from '../../store/auth';
+import { useAuth, usePermissions } from '../../store/auth';
 
 /**
  * The Admin Portal is a page per module, not one console with tabs (EZ1-I153).
@@ -63,7 +63,7 @@ export const ADMIN_NAV: AdminNavEntry[] = [
 
 export default function AdminLayout() {
   const role = useAuth((s) => s.user?.role);
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const entries = ADMIN_NAV.filter((e) => canAny(permissions, e.requires));
 
   /*

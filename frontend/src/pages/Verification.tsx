@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
 import { todayIso } from '../lib/dates';
-import { useAuth } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import { Loading } from '../components/ui/Feedback';
 import { useCategoryNames } from '../components/CategoryPicker';
 import {
@@ -357,7 +357,7 @@ export default function Verification({
   void readOnly;
   void adminView;
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const role = useAuth((s) => s.user?.role);
   /*
     Cases have their own page now (EZ1-I219).

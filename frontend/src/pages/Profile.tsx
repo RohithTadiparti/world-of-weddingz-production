@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
-import { useAuth } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import { Permission, can, isProvider, MOBILE_10_PATTERN } from '../lib/permissions';
 import { ageFromDateOfBirth, formatDate, adultDobMax } from '../lib/dates';
 import { Loading } from '../components/ui/Feedback';
@@ -55,7 +55,7 @@ const MANAGING_FOR_LABEL: Record<string, string> = { bride: 'Bride', groom: 'Gro
  */
 export default function Profile() {
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const role = useAuth((s) => s.user?.role);
   const accountEmail = useAuth((s) => s.user?.email ?? '');
   const hasBiodata = can(permissions, Permission.MATCH_BROWSE);

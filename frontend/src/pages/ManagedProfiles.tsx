@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../lib/api';
 import { adultDobMax } from '../lib/dates';
-import { useAuth } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import {
   CLAIM_STATUS_LABEL,
   LIFECYCLE_LABEL,
@@ -238,7 +238,7 @@ export default function ManagedProfiles({
   signupLinkContainer,
 }: ManagedProfilesProps = {}) {
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   // A family member holds the same stewardship capability an agency does, so
   // the permission cannot tell them apart — only the role can.
   const isFamily = useAuth((s) => s.user?.role) === 'family';

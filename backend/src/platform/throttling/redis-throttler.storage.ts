@@ -18,8 +18,14 @@ import { RedisService } from '../redis/redis.service';
 export class RedisThrottlerStorage implements ThrottlerStorage {
   constructor(private readonly redis: RedisService) {}
 
-  async increment(key: string, ttl: number): Promise<ThrottlerStorageRecord> {
-    const redisKey = `throttle:${key}`;
+  async increment(
+    key: string,
+    ttl: number,
+    limit: number,
+    blockDuration: number,
+    throttlerName: string,
+  ): Promise<ThrottlerStorageRecord> {
+    const redisKey = `throttle:${throttlerName}:${key}`;
     // @nestjs/throttler v5 passes the TTL in milliseconds.
     const ttlSeconds = Math.max(1, Math.ceil(ttl / 1000));
 
@@ -32,12 +38,21 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
 
     const totalHits = Number(results?.[0]?.[1] ?? 1);
     const pttl = Number(results?.[2]?.[1] ?? ttl);
+    const isBlocked = totalHits > limit;
+
+    if (isBlocked && blockDuration > pttl) {
+      await this.redis.raw.pexpire(redisKey, blockDuration);
+    }
 
     return {
       totalHits,
       // A -1/-2 pttl means the key lost its TTL or vanished between commands;
       // fall back to the configured window rather than reporting "expired".
       timeToExpire: pttl > 0 ? Math.ceil(pttl / 1000) : ttlSeconds,
+      isBlocked,
+      timeToBlockExpire: isBlocked
+        ? Math.max(1, Math.ceil((blockDuration > 0 ? blockDuration : pttl) / 1000))
+        : 0,
     };
   }
 }

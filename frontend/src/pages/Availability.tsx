@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../lib/api';
 import { useBusinesses } from '../store/business';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import { Permission, can } from '../lib/permissions';
 import { DAY_STATE_LABEL, SLOT_STATE_LABEL, SlotState } from '../lib/permissions';
 
@@ -113,7 +113,7 @@ export default function Availability() {
    * planner's week and a caterer's Saturday are the same object, published the
    * same way, blocked for the same reasons.
    */
-  const permissions = useAuth((state) => state.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isPlanner =
     can(permissions, Permission.PLANNER_LISTING_MANAGE) &&
     !can(permissions, Permission.VENDOR_LISTING_MANAGE);

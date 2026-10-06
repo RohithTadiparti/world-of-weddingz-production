@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useAuth } from './auth';
+import { usePermissions } from './auth';
 import { Permission, can } from '../lib/permissions';
 
 /**
@@ -72,7 +72,7 @@ export function useBusinesses() {
    * `enabled` rather than a role test, because the capability is what the
    * endpoint actually checks.
    */
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const isVendor = can(permissions, Permission.VENDOR_LISTING_MANAGE);
 
   const { data: businesses = [], isLoading } = useQuery<BusinessSummary[]>({

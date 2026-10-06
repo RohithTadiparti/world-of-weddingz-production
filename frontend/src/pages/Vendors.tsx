@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Permission, can } from '../lib/permissions';
 import { CategoryNames, useCatalogCategories } from '../components/CategoryPicker';
-import { useAuth } from '../store/auth';
+import { usePermissions } from '../store/auth';
 import RequestDialog from '../components/RequestDialog';
 import { ViewInstagramLink } from '../components/SocialLinks';
 import type { SocialLink } from '../lib/social-links';
@@ -85,7 +85,7 @@ export default function Vendors() {
   // recommend vendors for the weddings they run, but the couple (or their
   // agent) is who actually books — so a planner sees the listings without the
   // "Check availability" booking action (EZ1-I29).
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const canBook = can(permissions, Permission.BOOKING_CREATE);
   /*
    * A planner engaged on a wedding may raise the request for the couple

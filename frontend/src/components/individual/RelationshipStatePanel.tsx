@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { Link } from 'react-router-dom';
 import { relationshipPresentation, type RelationshipState } from '../../lib/individual-journey';
 

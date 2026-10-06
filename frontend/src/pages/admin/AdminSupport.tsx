@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../../lib/api';
-import { useAuth } from '../../store/auth';
+import { usePermissions } from '../../store/auth';
 import { CaseStatus, Permission, can } from '../../lib/permissions';
 import { formatDate } from '../../lib/dates';
 import { DISPUTE_STATUS_LABEL, formatMoney, humanize, labelFrom, roleLabel } from '../../lib/labels';
@@ -26,7 +26,7 @@ import {
  */
 export default function AdminSupport() {
   const qc = useQueryClient();
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
+  const permissions = usePermissions();
   const canAllocate = can(permissions, Permission.VERIFICATION_ALLOCATE);
   const canManageOfficers = can(permissions, Permission.ADMIN_OFFICER_MANAGE);
 
