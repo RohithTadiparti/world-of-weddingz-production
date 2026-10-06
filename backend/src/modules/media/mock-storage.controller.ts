@@ -43,23 +43,28 @@ import { resolveLocalPath } from '../../platform/storage/local-storage.driver';
 export class MockStorageController {
   constructor(private readonly cfg: AppConfigService) {}
 
+  /** Express 5 returns a named wildcard as an array of path segments. */
+  private objectKey(req: Request): string {
+    const value = (req.params as Record<string, string | string[]>).key;
+    return Array.isArray(value) ? value.join('/') : (value ?? '');
+  }
+
   private pathFor(key: string): string {
     return resolveLocalPath(this.cfg.media.mockStorageDir, key);
   }
 
   @Public()
-  // Express 4's wildcard, which is what Nest 10 is running. The named form
-  // (`*key`) is Express 5 syntax and matches nothing here — it registered a
-  // route that could never fire, so the PUT 404'd exactly as it did when there
-  // was no route at all.
-  @Put('*')
+  // Nest 11 uses Express 5. Its wildcard must be named; the old `*` route left
+  // no object key in req.params and made every upload resolve to the store
+  // root. Express 5 supplies `key` as the matched path segments.
+  @Put('*key')
   put(@Req() req: Request & { rawBody?: Buffer }) {
     // Nothing may be written here once the bucket is the store: a file put
     // here would be public, and invisible to everything that reads the bucket.
     if (this.cfg.media.storageProvider !== 'mock') {
       throw new ForbiddenException('Uploads go to the configured storage, not here');
     }
-    const objectKey = req.params[0] ?? '';
+    const objectKey = this.objectKey(req);
     const body = req.rawBody ?? (Buffer.isBuffer(req.body) ? req.body : null);
     if (!body || body.length === 0) {
       throw new BadRequestException('Nothing to store');
@@ -94,10 +99,10 @@ export class MockStorageController {
   }
 
   @Public()
-  @Get('*')
+  @Get('*key')
   @Header('Cache-Control', 'public, max-age=3600')
   get(@Req() req: Request, @Res() res: Response) {
-    const objectKey = req.params[0] ?? '';
+    const objectKey = this.objectKey(req);
     const target = this.pathFor(objectKey);
     if (!existsSync(target) || !statSync(target).isFile()) {
       throw new NotFoundException('No such object');
