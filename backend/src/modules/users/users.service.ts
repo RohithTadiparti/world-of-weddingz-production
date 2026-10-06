@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Profile } from './entities/profile.entity';
@@ -21,6 +21,7 @@ import { User } from '../auth/entities/user.entity';
 import { ProfileDetails } from '../profile-details/entities/profile-details.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { ModerationService } from '../../platform/moderation/moderation.service';
+import { normaliseMobile } from '../../common/util/identity-fields';
 
 /**
  * The account holder's own profile.
@@ -77,6 +78,21 @@ export class UsersService {
     const roleGender = role ? this.genderForRole(role) : null;
     const fields = roleGender ? { ...dto, gender: roleGender } : dto;
     let profile = await this.profiles.findOne({ where: { userId } });
+
+    if (dto.contactPhone !== undefined && dto.contactPhone !== null) {
+      const phone = String(normaliseMobile({ value: dto.contactPhone }));
+      const accountUsingPhone = await this.users.findOne({ where: { phone } });
+      if (accountUsingPhone && accountUsingPhone.id !== userId) {
+        throw new ConflictException('That mobile number already has an account');
+      }
+      const profileUsingPhone = await this.profiles.findOne({ where: { contactPhone: phone } });
+      if (profileUsingPhone && profileUsingPhone.id !== profile?.id && profileUsingPhone.userId !== userId) {
+        throw new ConflictException('That mobile number is already used by another profile');
+      }
+      // DTO validation normally performs this transform; keeping the service
+      // defensive prevents a direct caller from storing a differently formatted number.
+      (dto as { contactPhone?: string }).contactPhone = phone;
+    }
 
     // The profile form can carry the whole photo list, so this is an attach
     // point like the biodata gallery: a photograph that is new to this profile

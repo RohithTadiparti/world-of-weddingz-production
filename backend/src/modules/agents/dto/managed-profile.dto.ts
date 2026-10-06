@@ -1,6 +1,7 @@
 import { IntakeBiodataDto } from './intake-biodata.dto';
 import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
 import { IsAdultDate } from '../../../common/decorators/adult-date.decorator';
+import { IsNotOlderThan } from '../../../common/decorators/maximum-age.decorator';
 import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -171,6 +172,7 @@ export class CreateManagedProfileDto {
   @IsDateString()
   @IsNotFutureDate({ message: 'A date of birth cannot be in the future' })
   @IsAdultDate(18, { message: 'The client must be at least 18 years old' })
+  @IsNotOlderThan(75, { message: 'Please enter a date of birth within the last 75 years' })
   dateOfBirth?: string;
 
   @ApiPropertyOptional({ maxLength: 80 })

@@ -26,6 +26,7 @@ import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator
 import { StrictBoolean } from '../../../common/decorators/strict-boolean.decorator';
 import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
 import { IsAdultDate } from '../../../common/decorators/adult-date.decorator';
+import { IsNotOlderThan } from '../../../common/decorators/maximum-age.decorator';
 import {
   Complexion,
   FamilyAssetType,
@@ -109,6 +110,7 @@ export class PersonalDetailsDto {
   @IsDateString()
   @IsNotFutureDate({ message: 'A date of birth cannot be in the future' })
   @IsAdultDate(18, { message: 'The bride/groom must be at least 18 years old' })
+  @IsNotOlderThan(75, { message: 'Please enter a date of birth within the last 75 years' })
   dateOfBirth?: string;
 
   /**
