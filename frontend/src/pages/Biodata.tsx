@@ -11,7 +11,6 @@ import { useAuth, usePermissions } from '../store/auth';
 import {
   ASSET_TYPE_LABEL,
   FAMILY_TYPE_LABEL,
-  LIFE_STATUS_LABEL,
   MARITAL_LABEL,
   SELF_MARITAL_STATUSES,
   MaritalStatus,
@@ -1225,7 +1224,7 @@ function HoroscopeForm({
 
   return (
     <form
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
         /*
          * Where and when somebody was born is true either way.
@@ -1259,7 +1258,7 @@ function HoroscopeForm({
               }
             : { horoscopeAvailable: false, ...always },
         );
-        void submitDraft(sent, () => guard.clear(storageKey));
+        await submitDraft(sent, () => guard.clear(storageKey));
       }}
       className="space-y-3"
     >
@@ -1479,7 +1478,7 @@ function MaritalForm({
 
   return (
     <form
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
         const body: Draft = { maritalStatus: status };
         if (status !== 'never_married') {
@@ -1492,7 +1491,7 @@ function MaritalForm({
           if (values.childrenLivingWith) body.childrenLivingWith = values.childrenLivingWith;
           if (values.reason) body.reason = values.reason;
         }
-        void submitDraft(onSave(body), () => guard.clear(storageKey));
+        await submitDraft(onSave(body), () => guard.clear(storageKey));
       }}
       className="space-y-3"
     >
@@ -1621,10 +1620,10 @@ function FamilyForm({
       fatherProfession: father.profession ?? '',
       // Accepted by the API from the beginning and never asked for here, so
       // every profile on the platform carries an empty one.
-      fatherLifeStatus: father.lifeStatus ?? '',
+      fatherCourtesyTitle: father.courtesyTitle ?? '',
       motherName: mother.name ?? '',
       motherProfession: mother.profession ?? '',
-      motherLifeStatus: mother.lifeStatus ?? '',
+      motherCourtesyTitle: mother.courtesyTitle ?? '',
       familyType: initial?.familyType ?? 'nuclear',
       familyStatus: initial?.familyStatus ?? '',
       nativePlace: initial?.nativePlace ?? '',
@@ -1657,18 +1656,18 @@ function FamilyForm({
   return (
     <div className="space-y-6">
       <form
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
           const sent = onSave({
             father: {
               name: values.fatherName,
               profession: values.fatherProfession || undefined,
-              lifeStatus: values.fatherLifeStatus || undefined,
+              courtesyTitle: values.fatherCourtesyTitle || undefined,
             },
             mother: {
               name: values.motherName,
               profession: values.motherProfession || undefined,
-              lifeStatus: values.motherLifeStatus || undefined,
+              courtesyTitle: values.motherCourtesyTitle || undefined,
             },
             familyType: values.familyType,
             familyStatus: values.familyStatus,
@@ -1691,7 +1690,7 @@ function FamilyForm({
                 }
               : {}),
           });
-          void submitDraft(sent, () => guard.clear(storageKey));
+          await submitDraft(sent, () => guard.clear(storageKey));
         }}
         className="space-y-3"
       >
@@ -1707,20 +1706,13 @@ function FamilyForm({
               options={PROFESSIONS}
             />
           </Field>
-          {/*
-            Living status sits directly under each parent rather than as a pair
-            of fields further down, so it reads as a fact about that person and
-            not as a separate question about the family.
-          */}
-          <Field label="Father's living status">
+          <Field label="Father's courtesy title">
             <select
               className="input mt-1"
-              value={String(values.fatherLifeStatus ?? '')}
-              onChange={set('fatherLifeStatus')}
+              value={String(values.fatherCourtesyTitle ?? '')}
+              onChange={set('fatherCourtesyTitle')}
             >
-              <option value="">Not said</option>
-              <option value="alive">{LIFE_STATUS_LABEL.alive}</option>
-              <option value="deceased">{LIFE_STATUS_LABEL.deceased}</option>
+              <option value="">Select…</option><option>Mr</option><option>Late</option>
             </select>
           </Field>
           <Field label="Mother's name" required>
@@ -1734,15 +1726,13 @@ function FamilyForm({
               options={PROFESSIONS}
             />
           </Field>
-          <Field label="Mother's living status">
+          <Field label="Mother's courtesy title">
             <select
               className="input mt-1"
-              value={String(values.motherLifeStatus ?? '')}
-              onChange={set('motherLifeStatus')}
+              value={String(values.motherCourtesyTitle ?? '')}
+              onChange={set('motherCourtesyTitle')}
             >
-              <option value="">Not said</option>
-              <option value="alive">{LIFE_STATUS_LABEL.alive}</option>
-              <option value="deceased">{LIFE_STATUS_LABEL.deceased}</option>
+              <option value="">Select…</option><option>Mrs</option><option>Ms</option><option>Late</option>
             </select>
           </Field>
           <Field label="Family type">
@@ -1869,7 +1859,7 @@ function FamilyForm({
             </>
           )}
         </div>
-        <button className="btn">Save family details</button>
+      <button className="btn">Save and continue</button>
       </form>
 
       <div className="border-t pt-4">
@@ -2127,7 +2117,6 @@ function EducationForm({
       highestQualification: initial?.highestQualification ?? '',
       course: initial?.course ?? '',
       institution: initial?.institution ?? '',
-      collegePlace: initial?.collegePlace ?? '',
       company: employment.company ?? '',
       designation: employment.designation ?? '',
       workLocation: employment.workLocation ?? '',
@@ -2164,7 +2153,7 @@ function EducationForm({
 
   return (
     <form
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
         const businessEntries = (values.businessEntries as BusinessEntry[] | undefined) ?? [];
         // The fields say so already; there is nothing to send without one.
@@ -2174,7 +2163,6 @@ function EducationForm({
           course: values.course,
           // null clears; undefined would leave the stored value in place.
           institution: values.institution || null,
-          collegePlace: values.collegePlace || null,
           occupationStatus: status,
           // Rows left without a source are ones somebody added and abandoned.
           otherIncome: otherIncome
@@ -2208,7 +2196,7 @@ function EducationForm({
             })),
           };
         }
-        void submitDraft(onSave(body), () => guard.clear(storageKey));
+        await submitDraft(onSave(body), () => guard.clear(storageKey));
       }}
       className="space-y-3"
     >
@@ -2227,9 +2215,6 @@ function EducationForm({
         </Field>
         <Field label="Institution">
           <input className="input mt-1" value={String(values.institution ?? '')} onChange={set('institution')} />
-        </Field>
-        <Field label="College place">
-          <input className="input mt-1" value={String(values.collegePlace ?? '')} onChange={set('collegePlace')} />
         </Field>
       </div>
 
@@ -2277,6 +2262,7 @@ function EducationForm({
             <input
               className="input mt-1"
               inputMode="numeric"
+              pattern="^(?=.*[1-9])\d+$"
               placeholder="e.g. 1200000"
               value={String(values.salary ?? '')}
               onChange={(e) =>
@@ -2334,6 +2320,7 @@ function EducationForm({
               <input
                 className="input mt-1"
                 inputMode="numeric"
+                pattern="^(?=.*[1-9])\d+$"
                 placeholder="e.g. 600000"
                 value={row.annualIncome ?? ''}
                 onChange={(e) => editIncome(i, { annualIncome: e.target.value.replace(/\D/g, '') })}
@@ -2368,7 +2355,7 @@ function EducationForm({
         <span>Show income on the biodata</span>
       </label>
 
-      <button className="btn">Save education and occupation</button>
+      <button className="btn">Save and continue</button>
     </form>
   );
 }
@@ -2444,7 +2431,7 @@ function PreferencesForm({
 
   return (
     <form
-      onSubmit={(e) => {
+        onSubmit={async (e) => {
         e.preventDefault();
         // A blank bound is sent as null, which clears it.
         const bound = (value: unknown) => (value === '' || value == null ? null : Number(value));
@@ -2476,7 +2463,7 @@ function PreferencesForm({
           preferredNriCountry:
             values.nriPreference === 'yes' ? values.preferredNriCountry || undefined : undefined,
         });
-        void submitDraft(sent, () => guard.clear(storageKey));
+        await submitDraft(sent, () => guard.clear(storageKey));
       }}
       className="space-y-3"
     >

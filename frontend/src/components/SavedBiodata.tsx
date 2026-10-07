@@ -2,16 +2,16 @@ import { formatHeight } from '../lib/height';
 import { readBusinessEntries } from '../lib/business-entries';
 import { ReactNode } from 'react';
 import { ageFromDateOfBirth, formatDate } from '../lib/dates';
-import { LIFE_STATUS_LABEL, OTHER_INCOME_LABEL } from '../lib/permissions';
+import { OTHER_INCOME_LABEL } from '../lib/permissions';
 
 /**
- * "Late Ramesh Rao · Teacher" for a parent who has passed, the way a biodata
- * writes it, rather than the stored value ("deceased") tacked on the end.
+ * Courtesy titles keep the family introduction respectful without asking
+ * whether somebody is alive. Legacy lifeStatus values still read correctly.
  */
 function parentLine(parent: Record<string, unknown>): string | null {
   const name = parent.name ? String(parent.name) : '';
-  const late = parent.lifeStatus === 'deceased';
-  const who = late ? [LIFE_STATUS_LABEL.deceased, name].filter(Boolean).join(' ') : name;
+  const title = parent.courtesyTitle ?? (parent.lifeStatus === 'deceased' ? 'Late' : '');
+  const who = [title, name].filter(Boolean).join(' ');
   return [who, parent.profession ? String(parent.profession) : ''].filter(Boolean).join(' · ') || null;
 }
 
@@ -235,7 +235,6 @@ export default function SavedBiodata({
         <Row label="Qualification">{str('highestQualification')}</Row>
         <Row label="Course">{str('course')}</Row>
         <Row label="Institution">{str('institution')}</Row>
-        <Row label="College Place">{str('collegePlace')}</Row>
       </Group>
 
       <Group title="Occupation">

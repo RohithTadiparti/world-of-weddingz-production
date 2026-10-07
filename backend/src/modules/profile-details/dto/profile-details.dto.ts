@@ -338,17 +338,14 @@ export class ParentDto {
   @MaxLength(120)
   name: string;
 
-  /**
-   * Alive or deceased, and only those two.
-   *
-   * It was already accepted here as free text and simply never asked for on
-   * the form, so every profile carried an empty one. Two options rather than a
-   * text box because this is read at a glance beside a name, and "Late",
-   * "late", "expired" and "no more" are the same fact written four ways.
-   */
-  @ApiPropertyOptional({ enum: LifeStatus })
+  @ApiPropertyOptional({ enum: ['Mr', 'Mrs', 'Ms', 'Miss', 'Late'] })
   @IsOptional()
-  @IsEnum(LifeStatus)
+  @IsIn(['Mr', 'Mrs', 'Ms', 'Miss', 'Late'])
+  courtesyTitle?: 'Mr' | 'Mrs' | 'Ms' | 'Miss' | 'Late';
+
+  /** Accepted for rolling compatibility; new forms use courtesyTitle. */
+  @ApiPropertyOptional({ deprecated: true, enum: LifeStatus })
+  @IsOptional() @IsEnum(LifeStatus)
   lifeStatus?: LifeStatus;
 
   @ApiPropertyOptional({ minimum: 18, maximum: 120 })
@@ -542,7 +539,7 @@ export class BusinessEntryDto {
   @ApiPropertyOptional({ description: 'Annual income in whole rupees' })
   @IsOptional()
   @Transform(({ value }) => value == null ? value : String(value))
-  @IsString() @Matches(/^\d{1,15}$/, { message: 'Business income must be non-negative whole rupees (up to 15 digits)' })
+  @IsString() @Matches(/^(?=.*[1-9])\d{1,15}$/, { message: 'Business income must be a positive whole-rupee amount' })
   businessIncome?: string;
 }
 
@@ -582,7 +579,7 @@ export class OtherIncomeDto {
   /** Annual, in rupees; digits only, like salary. Hidden unless income is shown. */
   @ApiPropertyOptional({ example: '600000' })
   @IsOptional()
-  @Matches(/^\d{1,12}$/, { message: 'Other income must be a whole number of rupees' })
+  @Matches(/^(?=.*[1-9])\d{1,12}$/, { message: 'Other income must be a positive whole-rupee amount' })
   annualIncome?: string;
 }
 

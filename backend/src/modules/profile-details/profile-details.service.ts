@@ -358,6 +358,12 @@ export class ProfileDetailsService {
 
   async saveEducation(actor: AuthUser, profileId: string, dto: EducationDetailsDto) {
     const row = await this.editable(actor, profileId);
+    const salary = dto.employment && typeof dto.employment === 'object'
+      ? (dto.employment as Record<string, unknown>).salary
+      : undefined;
+    if (typeof salary === 'string' && /^\d+$/.test(salary) && !/[1-9]/.test(salary)) {
+      throw new BadRequestException('Salary must be greater than zero');
+    }
     Object.assign(row, {
       ...(dto.highestQualification !== undefined ? { highestQualification: dto.highestQualification } : {}),
       ...(dto.course !== undefined ? { course: dto.course } : {}),
@@ -381,6 +387,12 @@ export class ProfileDetailsService {
 
   async saveOccupation(actor: AuthUser, profileId: string, dto: OccupationDetailsDto) {
     const row = await this.editable(actor, profileId);
+    const salary = dto.employment && typeof dto.employment === 'object'
+      ? (dto.employment as Record<string, unknown>).salary
+      : undefined;
+    if (typeof salary === 'string' && /^\d+$/.test(salary) && !/[1-9]/.test(salary)) {
+      throw new BadRequestException('Salary must be greater than zero');
+    }
     Object.assign(row, {
       ...occupationFields(row, dto),
       ...(dto.highestQualification !== undefined ? { highestQualification: dto.highestQualification } : {}),

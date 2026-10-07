@@ -31,7 +31,7 @@ export default function BusinessEntriesFields({ entries, onChange }: {
                   value={String(entry[String(key)] ?? '')}
                   maxLength={Number(length)}
                   required={key === 'businessName'}
-                  pattern={key === 'businessIncome' ? '[0-9]+' : key === 'businessName' ? '.*\\S.*' : undefined}
+                  pattern={key === 'businessIncome' ? '^(?=.*[1-9])\\d+$' : key === 'businessName' ? '.*\\S.*' : undefined}
                   inputMode={key === 'businessIncome' ? 'numeric' : undefined}
                   onChange={(event) => update(entry.id, String(key), event.target.value)}
                 />
