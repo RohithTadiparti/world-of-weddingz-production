@@ -24,6 +24,7 @@ import {
   ProfileVisibility,
   UserRole,
   isIndividual,
+  isMatchable,
 } from '../../common/enums';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
@@ -130,6 +131,10 @@ export function annualPackage(
   return Number.isSafeInteger(total) ? total : null;
 }
 
+/** Why a family account is asked to name the relative it is acting for. */
+export const FAMILY_SUBJECT_MESSAGE =
+  'Family members act for the relatives they manage: choose one of your family profiles (see GET /agents/profiles/actable).';
+
 /**
  * Matchmaking operates on PROFILES, not accounts.
  *
@@ -178,6 +183,11 @@ export class MatchmakingService {
       if (!owns && !stewards && actor.role !== UserRole.ADMIN) {
         throw new ForbiddenException('That profile is not yours to act for');
       }
+      // A family account's own profile holds the parent's or guardian's
+      // details, not a bride's or groom's, so it never matches as itself.
+      if (actor.role === UserRole.FAMILY && owns && !stewards) {
+        throw new BadRequestException(FAMILY_SUBJECT_MESSAGE);
+      }
       return profile;
     }
 
@@ -192,6 +202,11 @@ export class MatchmakingService {
       throw new BadRequestException(
         'Agents act under a client profile — pass profileId (see GET /agents/profiles/actable).',
       );
+    }
+    // The same holds for a family account: it matches only through the
+    // relatives it manages, never as the parent or guardian it describes.
+    if (actor.role === UserRole.FAMILY) {
+      throw new BadRequestException(FAMILY_SUBJECT_MESSAGE);
     }
     if (!isIndividual(actor.role) && actor.role !== UserRole.ADMIN) {
       throw new ForbiddenException('This account type does not take part in matchmaking');
@@ -285,7 +300,9 @@ export class MatchmakingService {
   /**
    * Profiles eligible to appear as candidates. Unclaimed profiles ARE eligible
    * (that is the whole point of an agency building them); what gets excluded is
-   * anything attached to a non-individual account, or to a suspended one.
+   * anything attached to an account that is not a bride or groom, or to a
+   * suspended one. A family account's own profile describes the parent, so it
+   * is left out; the relatives that family manages are eligible like any other.
    */
   private async eligibleProfileIds(candidates: Profile[]): Promise<Set<string>> {
     const withAccounts = candidates.filter((c) => c.userId).map((c) => c.userId as string);
@@ -297,7 +314,7 @@ export class MatchmakingService {
       select: ['id', 'role', 'isActive'],
     });
     const allowedUserIds = new Set(
-      owners.filter((u) => u.isActive && isIndividual(u.role)).map((u) => u.id),
+      owners.filter((u) => u.isActive && isMatchable(u.role)).map((u) => u.id),
     );
     return new Set(
       candidates
@@ -1056,7 +1073,7 @@ export class MatchmakingService {
     if (target.userId) {
       const owner = await this.users.findOne({ where: { id: target.userId } });
       if (!owner || !owner.isActive) throw new NotFoundException('That profile is unavailable');
-      if (!isIndividual(owner.role)) {
+      if (!isMatchable(owner.role)) {
         throw new BadRequestException('Interests can only be sent to individual profiles');
       }
     }

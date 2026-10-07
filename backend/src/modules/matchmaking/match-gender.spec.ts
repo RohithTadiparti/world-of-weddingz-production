@@ -76,20 +76,32 @@ describe('MatchmakingService gender rule for a family steward', () => {
     role: UserRole.FAMILY,
     managedByAgentId: null,
   };
-  // The mother's own profile row, which is the groom's profile.
+  // The son's profile the mother manages. It was saved with her own gender,
+  // "Female", while managingFor says whose match it actually is.
   const son = profile('son', {
-    userId: family.userId,
+    userId: null,
+    managedByUserId: family.userId,
     gender: 'Female',
     managingFor: 'groom',
   });
+  // The mother's own account profile: her details, not a bride's or groom's.
+  const mother = profile('mother', { userId: family.userId, gender: 'Female' });
+  const forSon = { page: 1, limit: 10, profileId: son.id } as never;
 
   const profilesRepo = {
     findOne: jest.fn(async (opts: { where: { id?: string; userId?: string } }) =>
-      opts.where.id ? (byId.get(opts.where.id) ?? null) : son,
+      opts.where.id ? (byId.get(opts.where.id) ?? null) : mother,
     ),
     find: jest.fn(async () => pool),
   };
   const empty = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
+  let owners: Pick<User, 'id' | 'role' | 'isActive'>[] = [];
+  const usersRepo = {
+    find: jest.fn(async () => owners),
+    findOne: jest.fn(
+      async (opts: { where: { id: string } }) => owners.find((u) => u.id === opts.where.id) ?? null,
+    ),
+  };
   const interestsRepo = {
     ...empty,
     count: jest.fn(async () => 0),
@@ -99,8 +111,12 @@ describe('MatchmakingService gender rule for a family steward', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    byId = new Map([[son.id, son]]);
+    byId = new Map([
+      [son.id, son],
+      [mother.id, mother],
+    ]);
     pool = [];
+    owners = [];
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -110,7 +126,7 @@ describe('MatchmakingService gender rule for a family steward', () => {
         { provide: getRepositoryToken(ProfileDetails), useValue: empty },
         { provide: getRepositoryToken(ProfileShortlist), useValue: empty },
         { provide: getRepositoryToken(ProfileShare), useValue: empty },
-        { provide: getRepositoryToken(User), useValue: empty },
+        { provide: getRepositoryToken(User), useValue: usersRepo },
         { provide: getRepositoryToken(AgentProfile), useValue: empty },
         {
           provide: CompatibilityEngine,
@@ -141,7 +157,7 @@ describe('MatchmakingService gender rule for a family steward', () => {
     const candidate = profile('candidate', { userId: null, gender: 'female', visibility });
     pool = [candidate];
     byId.set(candidate.id, candidate);
-    const result = await service.suggestions(family, { page: 1, limit: 10 } as never);
+    const result = await service.suggestions(family, forSon);
     const [{ where }] = profilesRepo.find.mock.calls[0] as unknown as [{ where: object[] }];
     for (const branch of where) {
       expect(branch).toMatchObject({
@@ -175,7 +191,7 @@ describe('MatchmakingService gender rule for a family steward', () => {
       profile('brother', { ...unclaimed, gender: 'female', managingFor: 'groom' }),
     ];
 
-    const result = await service.suggestions(family, { page: 1, limit: 10 } as never);
+    const result = await service.suggestions(family, forSon);
 
     expect(result.data.map((s) => s.profile.id).sort()).toEqual(['bride', 'daughter']);
     expect(result.counts?.total).toBe(2);
@@ -204,5 +220,44 @@ describe('MatchmakingService gender rule for a family steward', () => {
       fromProfileId: son.id,
       toProfileId: daughter.id,
     });
+  });
+
+  // The family account is the parent, not the person being matched.
+  it('asks a family account to choose the relative it is acting for', async () => {
+    await expect(
+      service.suggestions(family, { page: 1, limit: 10 } as never),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.suggestions(family, { page: 1, limit: 10, profileId: mother.id } as never),
+    ).rejects.toThrow('relatives they manage');
+    await expect(service.sendInterest(family, son.id, mother.id)).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('never suggests a family account’s own profile to anybody', async () => {
+    pool = [
+      profile('bride', { userId: 'bride-user', gender: 'female' }),
+      profile('another-mother', { userId: 'other-family-user', gender: 'female' }),
+      profile('relative', { userId: null, managedByUserId: 'other-family-user', gender: 'female' }),
+    ];
+    owners = [
+      { id: 'bride-user', role: UserRole.BRIDE, isActive: true },
+      { id: 'other-family-user', role: UserRole.FAMILY, isActive: true },
+    ];
+
+    const result = await service.suggestions(family, forSon);
+
+    expect(result.data.map((s) => s.profile.id).sort()).toEqual(['bride', 'relative']);
+  });
+
+  it('refuses an interest addressed to a family account’s own profile', async () => {
+    const otherMother = profile('another-mother', { userId: 'other-family-user', gender: 'female' });
+    byId.set(otherMother.id, otherMother);
+    owners = [{ id: 'other-family-user', role: UserRole.FAMILY, isActive: true }];
+
+    await expect(service.sendInterest(family, otherMother.id, son.id)).rejects.toThrow(
+      'individual profiles',
+    );
   });
 });

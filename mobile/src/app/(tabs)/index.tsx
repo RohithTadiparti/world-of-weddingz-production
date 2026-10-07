@@ -60,6 +60,7 @@ export default function Home() {
     canAny(permissions, [Permission.MATCH_BROWSE]) &&
     !canAny(permissions, [Permission.AGENCY_MANAGE]);
   const isAgent = canAny(permissions, [Permission.AGENCY_MANAGE]);
+  const isFamily = user?.role === 'family';
 
   const { data: profile, isPending } = useQuery({
     queryKey: ['me'],
@@ -135,7 +136,10 @@ export default function Home() {
         <View style={{ gap: space(4) }}>
           {isProvider ? <ProviderHome /> : null}
           {isOfficer ? <OfficerHome canFieldwork={canFieldwork} /> : null}
-          {isIndividual ? <IndividualHome profileId={profile?.id ?? null} /> : null}
+          {/* A family account's own profile is the parent's: no biodata of its own. */}
+          {isIndividual ? (
+            <IndividualHome profileId={isFamily ? null : (profile?.id ?? null)} />
+          ) : null}
 
           {/* The counters this screen has always carried, for the accounts that
               are neither selling nor verifying. */}

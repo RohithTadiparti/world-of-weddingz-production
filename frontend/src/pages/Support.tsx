@@ -1,4 +1,4 @@
-import { ComponentType, FormEvent, useState } from 'react';
+import { ComponentType, FormEvent, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IconProps } from '@phosphor-icons/react';
@@ -88,9 +88,22 @@ export default function Support() {
   const qc = useQueryClient();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [raising, setRaising] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // "Raise an issue" elsewhere links to /support?new=1, which opens the form
+  // straight away rather than leaving the reader on the list to find the button.
+  const [raising, setRaising] = useState(() => searchParams.get('new') === '1');
   const [open, setOpen] = useState<string | null>(null);
-  const [searchParams] = useSearchParams();
+  const formRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return;
+    setRaising(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('new');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+  useEffect(() => {
+    if (raising) formRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [raising]);
   const [filter, setFilter] = useState<Bucket | null>(() => {
     const value = searchParams.get('status');
     return value === 'raised' || value === 'open' || value === 'pending' || value === 'resolved' || value === 'escalated'
@@ -133,18 +146,20 @@ export default function Support() {
       {notice && <p className="alert-positive">{notice}</p>}
 
       {raising && (
-        <RaiseCase
-          onDone={async (message) => {
-            setError('');
-            setNotice(message);
-            setRaising(false);
-            await qc.invalidateQueries({ queryKey: ['support-cases'] });
-          }}
-          onError={(message) => {
-            setNotice('');
-            setError(message);
-          }}
-        />
+        <div ref={formRef} className="scroll-mt-6">
+          <RaiseCase
+            onDone={async (message) => {
+              setError('');
+              setNotice(message);
+              setRaising(false);
+              await qc.invalidateQueries({ queryKey: ['support-cases'] });
+            }}
+            onError={(message) => {
+              setNotice('');
+              setError(message);
+            }}
+          />
+        </div>
       )}
 
       {isLoading && <Loading rows={3} />}

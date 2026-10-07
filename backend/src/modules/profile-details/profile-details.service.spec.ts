@@ -304,6 +304,39 @@ describe('ProfileDetailsService section saves', () => {
     });
   });
 
+  describe('a family member', () => {
+    const family: AuthUser = { ...owner, userId: 'family1', role: UserRole.FAMILY };
+    const religion = { religion: 'Hindu', caste: 'Kamma', subCaste: '', motherTongue: 'Telugu' } as ReligionDetailsDto;
+
+    // The family account's own profile describes the parent, not a bride or groom.
+    it('cannot fill in a biodata for their own account profile', async () => {
+      profile = { ...profile, userId: 'family1', managedByUserId: null } as Profile;
+      await expect(service.saveReligion(family, 'p1', religion)).rejects.toThrow(
+        /belongs to the person you are finding a match for/,
+      );
+      expect(stored).toBeNull();
+    });
+
+    it('fills in the biodata of the relative they manage, with that relative’s own date of birth', async () => {
+      profile = {
+        ...profile,
+        userId: null,
+        managedByUserId: 'family1',
+        displayName: 'Bhavana Rao',
+        gender: 'female',
+        city: 'Hyderabad',
+        dateOfBirth: null,
+        profileCompleted: false,
+        lifecycle: ProfileLifecycle.ACTIVE,
+      } as unknown as Profile;
+
+      await service.savePersonal(family, 'p1', personal({ dateOfBirth: '1998-02-14' }));
+
+      expect(profile).toMatchObject({ dateOfBirth: '1998-02-14', profileCompleted: true });
+      expect(stored).toMatchObject({ firstName: 'Bhavana', lastName: 'Rao' });
+    });
+  });
+
   it('leaves an unsent residence and alternate mobile alone on a personal save', async () => {
     stored = { profileId: 'p1', ...PERSONAL };
 
@@ -512,6 +545,68 @@ describe('ProfileDetailsService section saves', () => {
     stored.incomeVisible = true;
     const shown = await sharing.findShareable('p1');
     expect(shown.details?.otherIncome).toEqual([{ source: 'rental', annualIncome: '300000' }]);
+  });
+
+  describe('completion', () => {
+    const reporting = new ProfileDetailsService(
+      details,
+      { find: jest.fn(async () => []) } as unknown as Repository<ProfileSibling>,
+      {} as Repository<ProfileAsset>,
+      profiles,
+      users,
+      redis,
+      {} as ModerationService,
+      {} as Repository<Interest>,
+      {} as AiService,
+      {} as StorageService,
+    );
+    const section = (report: Awaited<ReturnType<typeof reporting.completion>>, name: string) =>
+      report.sections.find((s) => s.section === name)!;
+
+    it('names every required field of an unstarted biodata, photographs first', async () => {
+      profile.photos = ['a.jpg'];
+      const report = await reporting.completion(owner, 'p1');
+
+      expect(section(report, 'personal').missingFields.map((f) => f.key)).toEqual([
+        'photos',
+        'firstName',
+        'lastName',
+        'gender',
+        'dateOfBirth',
+        'heightCm',
+        'complexion',
+        'communicationAddress',
+      ]);
+      expect(section(report, 'religion').missingFields.map((f) => f.label)).toEqual([
+        'Religion',
+        'Caste',
+        'Mother tongue',
+      ]);
+      expect(report.complete).toBe(false);
+      expect(report.sections.every((s) => s.complete === (s.missingFields.length === 0))).toBe(true);
+    });
+
+    it('lists nothing for a section once its required fields are saved', async () => {
+      profile.gender = 'Female';
+      profile.dateOfBirth = '1998-01-01' as unknown as Profile['dateOfBirth'];
+      await reporting.savePersonal(owner, 'p1', personal());
+      await reporting.saveReligion(owner, 'p1', {
+        religion: 'Hindu',
+        caste: 'Kamma',
+        subCaste: '',
+        motherTongue: 'Telugu',
+      } as ReligionDetailsDto);
+      await reporting.saveEducation(owner, 'p1', {
+        highestQualification: 'Masters',
+      } as EducationDetailsDto);
+
+      const report = await reporting.completion(owner, 'p1');
+      expect(section(report, 'personal')).toMatchObject({ complete: true, missingFields: [] });
+      expect(section(report, 'religion')).toMatchObject({ complete: true, missingFields: [] });
+      expect(section(report, 'education').missingFields).toEqual([{ key: 'course', label: 'Course' }]);
+      expect(report.missing).toContain('education');
+      expect(report.missing).not.toContain('personal');
+    });
   });
 });
 

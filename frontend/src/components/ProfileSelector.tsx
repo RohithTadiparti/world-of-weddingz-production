@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { ProfileClaimStatus } from '../lib/permissions';
@@ -23,11 +24,18 @@ export default function ProfileSelector({
   onChange,
   label = 'Acting as',
   includeOwn = true,
+  autoSelectSingle = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   label?: string;
   includeOwn?: boolean;
+  /**
+   * Chooses the only profile there is. A family usually looks after one son
+   * or daughter, and asking them to pick from a list of one is a step that
+   * only gets in the way.
+   */
+  autoSelectSingle?: boolean;
 }) {
   const { data } = useQuery({
     queryKey: ['actable-profiles'],
@@ -36,6 +44,11 @@ export default function ProfileSelector({
   });
 
   const profiles = (data ?? []).filter((p) => includeOwn || p.userId === null || p.claimStatus !== 'self');
+  const only = autoSelectSingle && !value && profiles.length === 1 ? profiles[0].id : '';
+
+  useEffect(() => {
+    if (only) onChange(only);
+  }, [only, onChange]);
 
   return (
     <div>

@@ -136,7 +136,9 @@ export default function HirePlanner() {
             router.push({ pathname: '/planners/[id]', params: { id: planner.id } });
           return (
             <Card key={planner.id} style={{ gap: space(2), padding: space(2), borderRadius: radius.md }}>
-              <Pressable onPress={openPlanner}>
+              {/* The photo and the details both open the planner; only the details
+                  are announced, so a screen reader hears one link per card. */}
+              <Pressable onPress={openPlanner} accessible={false}>
                 {photo ? (
                   <Image
                     source={{ uri: photo }}
@@ -154,7 +156,12 @@ export default function HirePlanner() {
                 )}
               </Pressable>
               <View style={{ flexDirection: 'row', gap: space(2), paddingHorizontal: space(1) }}>
-                <Pressable onPress={openPlanner} style={{ flex: 1, gap: 3 }}>
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel={`${planner.agencyName}: view profile and availability`}
+                  onPress={openPlanner}
+                  style={{ flex: 1, gap: 3 }}
+                >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                     <Body style={{ fontWeight: '700' }}>{planner.agencyName}</Body>
                   </View>

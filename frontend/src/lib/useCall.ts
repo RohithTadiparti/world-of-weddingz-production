@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../store/auth';
+import { socketOrigin } from './socket-origin';
 
 export type CallState = 'idle' | 'ringing' | 'incoming' | 'connecting' | 'active' | 'ended';
 
@@ -17,10 +18,25 @@ interface Signal {
   reason?: string;
 }
 
-const API_ORIGIN = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api').replace(
-  /\/api\/?$/,
-  '',
-);
+/**
+ * How long a signalling request may go unanswered. Without a limit, a request
+ * made while the socket is down is buffered indefinitely, and the caller sits
+ * on "Ringing…" for a call that never left the browser.
+ */
+export const SIGNAL_TIMEOUT_MS = 10_000;
+
+/** Public STUN, used when the server's own ICE configuration cannot be had. */
+export const FALLBACK_ICE_SERVERS: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }];
+
+/** The ICE servers in a signalling reply, or the public fallback. */
+export function iceServersFrom(reply: unknown): RTCIceServer[] {
+  const servers = (reply as { iceServers?: unknown } | null | undefined)?.iceServers;
+  return Array.isArray(servers) && servers.length > 0
+    ? (servers as RTCIceServer[])
+    : FALLBACK_ICE_SERVERS;
+}
+
+const OFFLINE = 'Calling is not connected right now. Check your connection and try again.';
 
 /**
  * Voice and video between two people who have matched.
@@ -37,8 +53,14 @@ const API_ORIGIN = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api')
  * a deployment change and nothing here has to move. Until then, `failed` is
  * reported plainly rather than leaving somebody staring at a connecting screen.
  */
-export function useCall() {
+export function useCall(enabled = true) {
   const token = useAuth((s) => s.accessToken);
+  const userId = useAuth((s) => s.user?.id ?? null);
+  const signedIn = Boolean(token);
+  // Read at every (re)connect, so a refreshed access token is used without
+  // tearing the socket — and any call on it — down.
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
 
   const [state, setState] = useState<CallState>('idle');
   const [peerId, setPeerId] = useState<string | null>(null);
@@ -50,7 +72,9 @@ export function useCall() {
   const connection = useRef<RTCPeerConnection | null>(null);
   const localStream = useRef<MediaStream | null>(null);
   const remoteStream = useRef<MediaStream | null>(null);
-  const iceServers = useRef<RTCIceServer[]>([]);
+  // Fetched before each peer connection is built. A connection created with an
+  // empty list gathers only host candidates and cannot leave the local network.
+  const iceServers = useRef<RTCIceServer[]>(FALLBACK_ICE_SERVERS);
   // Candidates can arrive before the remote description is set, and adding one
   // then throws. They are queued and flushed once there is something to add
   // them to.
@@ -67,13 +91,15 @@ export function useCall() {
     setIncoming(null);
   }, []);
 
-  // One socket for the session. Reconnecting per call would mean the first
-  // ring arriving before the listener exists.
+  // One socket for the session, owned by the app shell rather than by the chat
+  // page: a ring has to reach somebody wherever they are in the app, and
+  // reconnecting per call would mean the first ring arriving before the
+  // listener exists.
   useEffect(() => {
-    if (!token) return undefined;
+    if (!enabled || !signedIn || !userId) return undefined;
 
-    const client = io(`${API_ORIGIN}/chat`, {
-      auth: { token },
+    const client = io(`${socketOrigin()}/chat`, {
+      auth: (cb) => cb({ token: tokenRef.current }),
       transports: ['websocket'],
     });
     socket.current = client;
@@ -118,7 +144,27 @@ export function useCall() {
       socket.current = null;
       teardown();
     };
-  }, [token, teardown]);
+  }, [enabled, signedIn, userId, teardown]);
+
+  // The server drops a socket whose token has expired and does not ask it back.
+  // A refreshed token is the moment to reconnect.
+  useEffect(() => {
+    if (token && socket.current && !socket.current.connected && !socket.current.active) {
+      socket.current.connect();
+    }
+  }, [token]);
+
+  /** The relay configuration for a call with this person. */
+  async function loadIceServers(toUserId: string) {
+    try {
+      const reply = await socket.current
+        ?.timeout(SIGNAL_TIMEOUT_MS)
+        .emitWithAck('call:ice-servers', { toUserId });
+      iceServers.current = iceServersFrom(reply);
+    } catch {
+      iceServers.current = FALLBACK_ICE_SERVERS;
+    }
+  }
 
   async function flushCandidates() {
     const queued = pendingCandidates.current;
@@ -179,7 +225,15 @@ export function useCall() {
       setPeerId(toUserId);
       setState('ringing');
 
+      if (!socket.current?.connected) {
+        setError(OFFLINE);
+        teardown();
+        setState('ended');
+        return;
+      }
+
       try {
+        await loadIceServers(toUserId);
         const stream = await capture(kind);
         const pc = createConnection(toUserId);
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -187,7 +241,7 @@ export function useCall() {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        const reply = await socket.current?.emitWithAck('call:offer', {
+        const reply = await socket.current?.timeout(SIGNAL_TIMEOUT_MS).emitWithAck('call:offer', {
           toUserId,
           sdp: offer.sdp,
           media: kind,
@@ -199,14 +253,15 @@ export function useCall() {
           setState('ended');
           return;
         }
-        if (reply?.iceServers) iceServers.current = reply.iceServers;
       } catch (err) {
         // Overwhelmingly a declined microphone permission, which is worth
         // naming rather than reporting as a failed call.
         setError(
           (err as Error).name === 'NotAllowedError'
             ? 'Your browser blocked access to the microphone.'
-            : 'That call could not be started.',
+            : socket.current?.connected
+              ? 'That call could not be started.'
+              : OFFLINE,
         );
         teardown();
         setState('ended');
@@ -222,6 +277,7 @@ export function useCall() {
     setState('connecting');
 
     try {
+      await loadIceServers(incoming.fromUserId);
       const stream = await capture(incoming.media);
       const pc = createConnection(incoming.fromUserId);
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -232,11 +288,11 @@ export function useCall() {
       const answerSdp = await pc.createAnswer();
       await pc.setLocalDescription(answerSdp);
 
-      const reply = await socket.current?.emitWithAck('call:answer', {
+      const reply = await socket.current?.timeout(SIGNAL_TIMEOUT_MS).emitWithAck('call:answer', {
         toUserId: incoming.fromUserId,
         sdp: answerSdp.sdp,
       });
-      if (reply?.iceServers) iceServers.current = reply.iceServers;
+      if (reply?.error) throw new Error(reply.error);
 
       setIncoming(null);
     } catch (err) {

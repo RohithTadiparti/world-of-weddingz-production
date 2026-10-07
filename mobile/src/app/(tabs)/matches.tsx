@@ -335,8 +335,10 @@ export default function Matches() {
         }
         ListEmptyComponent={
           loadError ? null : !acting.ready ? (
-            <EmptyState title="Choose a client">
-              Pick a client to browse their matches.
+            <EmptyState title={acting.isFamily ? "Choose a profile" : "Choose a client"}>
+              {acting.isFamily
+                ? "Pick the son, daughter or relative whose matches you want to see."
+                : "Pick a client to browse their matches."}
             </EmptyState>
           ) : gate ? (
             <EmptyState title="Matchmaking is closed">

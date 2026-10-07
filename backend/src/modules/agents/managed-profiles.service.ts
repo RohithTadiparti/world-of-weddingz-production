@@ -178,6 +178,14 @@ export class ManagedProfilesService {
       );
     }
 
+    // Intake consent is the agency's auditable record of a stranger's family
+    // agreeing to be represented. A family member adding their own son,
+    // daughter or relative is that agreement, so it is asked only of agents.
+    const isFamily = actor.role === UserRole.FAMILY;
+    if (!isFamily && !dto.consent) {
+      throw new BadRequestException('Record how the family gave consent before saving the profile');
+    }
+
     await this.assertNotDuplicate(actor, dto.contactPhone, dto.contactEmail);
 
     // Photographs handed over at intake are attached here rather than through
@@ -208,10 +216,14 @@ export class ManagedProfilesService {
           userId: null,
           managedByUserId: actor.userId,
           claimStatus: ProfileClaimStatus.UNCLAIMED,
-          // An imported biodata often arrives in stages. Keep the new profile
-          // out of Matches until its details have been reviewed and the agent
-          // deliberately makes it matchable.
-          visibility: ProfileVisibility.PRIVATE,
+          // An imported biodata often arrives in stages. Keep an agency's new
+          // client out of Matches until its details have been reviewed and the
+          // agent deliberately makes it matchable. A family's relative is
+          // matchable from the start, exactly as a bride or groom who signs up
+          // is: the family is the one who decided to look.
+          visibility: isFamily
+            ? (fields.visibility ?? ProfileVisibility.MATCHES_ONLY)
+            : ProfileVisibility.PRIVATE,
           profileCompleted: this.isComplete(fields),
         }),
       );
@@ -308,20 +320,23 @@ export class ManagedProfilesService {
       return profile;
     });
 
-    // Consent is recorded with the profile, in the same request, so a profile
-    // can never exist without a record of who agreed to it.
-    await this.consent.record(actor, profile.id, {
-      scope: ConsentScope.INTAKE,
-      method: consent.method,
-      givenByRelation: consent.givenByRelation,
-      givenByName: consent.givenByName,
-      givenByPhone: consent.givenByPhone,
-      givenAt: consent.givenAt,
-      notes: consent.notes,
-    });
+    // Consent is recorded with the profile, in the same request, so an agency's
+    // profile can never exist without a record of who agreed to it. A family
+    // member is not asked, but one sent by an older client is still kept.
+    if (consent) {
+      await this.consent.record(actor, profile.id, {
+        scope: ConsentScope.INTAKE,
+        method: consent.method,
+        givenByRelation: consent.givenByRelation,
+        givenByName: consent.givenByName,
+        givenByPhone: consent.givenByPhone,
+        givenAt: consent.givenAt,
+        notes: consent.notes,
+      });
+    }
     // Compared rather than truthy-tested: agreeing to circulation is consent,
     // and the string "false" must not become one. See `StrictBoolean`.
-    if (consent.allowsCirculation === true) {
+    if (consent?.allowsCirculation === true) {
       await this.consent.record(actor, profile.id, {
         scope: ConsentScope.CIRCULATION,
         method: consent.method,
@@ -416,7 +431,10 @@ export class ManagedProfilesService {
     return {
       ...profile,
       actions: this.agencyActions(profile),
-      circulation: await this.consent.stateForProfile(profile.id),
+      // A family keeps no consent record for its own relative (see create),
+      // so there is no consent state to report.
+      circulation:
+        actor.role === UserRole.FAMILY ? null : await this.consent.stateForProfile(profile.id),
     };
   }
 
@@ -549,7 +567,11 @@ export class ManagedProfilesService {
     // Whether each one may actually be circulated, in one query rather than
     // forty. Without it the client shows a Circulate button that refuses, and
     // the agent has no way of telling which profiles are ready.
-    const consent = await this.consent.stateForMany(data.map((p) => p.id));
+    // A family keeps no consent record for its own relatives (see create).
+    const consent =
+      actor.role === UserRole.FAMILY
+        ? new Map<string, never>()
+        : await this.consent.stateForMany(data.map((p) => p.id));
 
     // Each row carries what the agency may still do to it, so the client
     // renders the same rule the server enforces.
@@ -775,16 +797,17 @@ export class ManagedProfilesService {
    * and every screen that read the list had to know to skip it.
    *
    * Decided on the role rather than by hiding a name, which is the difference
-   * between a fix and a patch. A family member stewarding a relative's profile
-   * *is* a client as well as a steward — they have their own profile and it
-   * belongs in the list — so the exclusion is for agencies specifically.
+   * between a fix and a patch. The same holds for a family account: its own
+   * profile describes the parent or guardian, who is not being matched, so a
+   * family acts only as the relatives it manages. Listing the account as one
+   * of its own profiles offered it a biodata and a match list of its own.
    */
   async actableProfiles(actor: AuthUser): Promise<Profile[]> {
     const managed = await this.profiles.find({
       where: { managedByUserId: actor.userId },
       order: { createdAt: 'DESC' },
     });
-    if (actor.role === UserRole.AGENT) return managed;
+    if (actor.role === UserRole.AGENT || actor.role === UserRole.FAMILY) return managed;
 
     const own = await this.profiles.find({ where: { userId: actor.userId } });
     const seen = new Set(own.map((p) => p.id));

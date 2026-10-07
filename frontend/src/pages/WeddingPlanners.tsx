@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   ArrowClockwise,
   CalendarBlank,
@@ -68,6 +68,11 @@ type Sort = (typeof SORTS)[number]['value'];
 const SHORTLIST_KEY = 'wow:planner-shortlist';
 
 /** The lowest package price, or null when the planner quotes per job. */
+/** The planner's profile page, carrying the chosen date for its availability check. */
+export function plannerHref(id: string, weddingDate: string): string {
+  return `/wedding-planners/${id}${weddingDate ? `?date=${encodeURIComponent(weddingDate)}` : ''}`;
+}
+
 function startingPrice(p: Planner): number | null {
   const prices = (p.packages ?? []).map((k) => k.price).filter((n) => Number.isFinite(n));
   return prices.length ? Math.min(...prices) : null;
@@ -94,8 +99,6 @@ function readShortlist(): Set<string> {
  * who they are hiring.
  */
 export default function WeddingPlanners() {
-  const navigate = useNavigate();
-
   // City and rating are the two filters the server understands; everything
   // else below refines the loaded set on the client (the search endpoint takes
   // neither a budget nor an experience floor).
@@ -375,13 +378,6 @@ export default function WeddingPlanners() {
                 weddingDate={weddingDate}
                 shortlisted={shortlist.has(p.id)}
                 onToggleShortlist={() => toggleShortlist(p.id)}
-                // A page rather than a dialog: it has an address, and the
-                // date picked here comes along for the availability check.
-                onOpen={() =>
-                  navigate(
-                    `/wedding-planners/${p.id}${weddingDate ? `?date=${encodeURIComponent(weddingDate)}` : ''}`,
-                  )
-                }
               />
             ))}
           </div>
@@ -492,19 +488,20 @@ export default function WeddingPlanners() {
  * One planner in the grid. Self-contained so it can check its own availability
  * for the chosen date without the parent firing one query per card up front.
  */
-function PlannerCard({
+export function PlannerCard({
   planner: p,
   weddingDate,
   shortlisted,
   onToggleShortlist,
-  onOpen,
 }: {
   planner: Planner;
   weddingDate: string;
   shortlisted: boolean;
   onToggleShortlist: () => void;
-  onOpen: () => void;
 }) {
+  // A page rather than a dialog: it has an address, and the date picked here
+  // comes along for the availability check.
+  const href = plannerHref(p.id, weddingDate);
   const fromPrice = startingPrice(p);
   const tags = (p.packages ?? []).map((k) => k.name).filter(Boolean);
   const shownTags = tags.slice(0, 3);
@@ -527,9 +524,13 @@ function PlannerCard({
     .filter((s) => s.date === weddingDate)
     .reduce((n, s) => n + s.remaining, 0);
 
+  // The whole card opens the planner: the name is a real link whose ::after
+  // stretches over the card, so a click anywhere (photo, price, tags) follows
+  // it, while the shortlist heart and Instagram link sit above it and keep
+  // their own behaviour. Keyboard users reach it as one ordinary link.
   return (
     <article
-      className="group flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-surface
+      className="group relative flex cursor-pointer flex-col overflow-hidden rounded-lg border border-gray-200 bg-surface
         transition-[border-color,box-shadow] duration-200 hover:border-gray-300 hover:shadow-card"
     >
       <div className="relative aspect-[16/9] overflow-hidden bg-surface-sunken">
@@ -551,7 +552,7 @@ function PlannerCard({
           Verified
         </span>
         <button
-          className="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full bg-surface/90
+          className="absolute right-2 top-2 z-10 grid h-8 w-8 place-items-center rounded-full bg-surface/90
             text-gray-500 shadow-btn backdrop-blur transition-colors hover:text-brand"
           onClick={onToggleShortlist}
           aria-pressed={shortlisted}
@@ -569,7 +570,16 @@ function PlannerCard({
 
       <div className="flex flex-1 flex-col p-4">
         <div className="flex items-start justify-between gap-2">
-          <h2 className="section-title truncate">{p.agencyName}</h2>
+          <h2 className="section-title truncate">
+            <Link
+              to={href}
+              aria-label={`${p.agencyName}: view profile and availability`}
+              className="rounded-sm after:absolute after:inset-0 after:rounded-lg after:content-['']
+                focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-brand"
+            >
+              {p.agencyName}
+            </Link>
+          </h2>
           {p.ratingCount > 0 && (
             <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-sm text-gray-600">
               <Star size={13} weight="fill" className="text-caution-fg" aria-hidden />
@@ -625,14 +635,18 @@ function PlannerCard({
         </p>
 
         <div className="mt-3 flex flex-col gap-2">
-          <ViewInstagramLink listing={p} className="w-full" />
-          <button
-            className="btn-outline btn-sm w-full transition-colors
+          <div className="relative z-10">
+            <ViewInstagramLink listing={p} className="w-full" />
+          </div>
+          {/* Visual call to action only: the card-wide link above already
+              takes the click and is the single keyboard stop for the card. */}
+          <span
+            aria-hidden
+            className="btn-outline btn-sm w-full text-center transition-colors
               group-hover:border-brand group-hover:text-brand-strong"
-            onClick={onOpen}
           >
             View Profile &amp; Availability
-          </button>
+          </span>
         </div>
       </div>
     </article>

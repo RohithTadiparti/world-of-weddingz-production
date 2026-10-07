@@ -1,7 +1,7 @@
 import HeightInput from '../components/HeightInput';
 import { formatHeight, MAX_HEIGHT_CM, MIN_HEIGHT_CM } from '../lib/height';
 import PackageRangeFields from '../components/PackageRangeFields';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CaretLeft, CaretRight, X } from '@phosphor-icons/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -10,6 +10,7 @@ import ProfilePreview from '../components/ProfilePreview';
 import MatchCard, { PublicProfile, Suggestion } from '../components/MatchCard';
 import { PersonPhoto } from '../components/ProfileSilhouette';
 import type { MatchView } from '../components/MatchStatTiles';
+import { matchesNavState } from '../lib/matches-nav';
 import { useAuth, usePermissions } from '../store/auth';
 import {
   MatchFixedState,
@@ -257,15 +258,34 @@ export default function Matches() {
     setUrlParams(urlParams, { replace: true });
   }, [urlParams, setUrlParams]);
 
+  // The URL describes the whole list it wants, so the state is derived from it
+  // on every navigation: a plain /matches resets to the normal browse list
+  // rather than keeping the Shortlisted tile pressed on the previous visit, and
+  // each home collection lands on its own section or filter.
+  const navParams = new URLSearchParams(urlParams);
+  navParams.delete('profile');
+  const navKey = navParams.toString();
+  // Only "Near you" needs the viewer's own city; it is read once it arrives.
+  const wantsNear = navParams.get('view') === 'near';
+  const { data: me } = useQuery({
+    queryKey: ['me'],
+    queryFn: async () => (await api.get('/users/me')).data as { city?: string | null },
+    retry: false,
+    enabled: wantsNear,
+  });
+  const ownCity = wantsNear ? (me?.city ?? '') : '';
+  const [focusSection, setFocusSection] = useState<'recommended' | undefined>();
   useEffect(() => {
-    const requested = urlParams.get('view');
-    if (requested === 'shortlisted' || requested === 'active' || requested === 'high' || requested === 'all') {
-      setView(requested);
-    }
-  }, [urlParams]);
+    const next = matchesNavState(new URLSearchParams(navKey), ownCity);
+    setView(next.view);
+    setFilters({ ...NO_FILTERS, ...next.filters });
+    setPages(1);
+    setFocusSection(next.focus);
+  }, [navKey, ownCity]);
 
   const params = profileId ? { profileId } : {};
-  const ready = !isAgent || Boolean(profileId);
+  // Agents and family members always act for somebody they manage.
+  const ready = !(isAgent || isFamily) || Boolean(profileId);
 
   // Blank fields are omitted rather than sent as empty strings, so an untouched
   // filter genuinely does nothing on the server.
@@ -402,6 +422,17 @@ export default function Matches() {
     setRecommendedIndex(0);
   }, [profileId]);
 
+  // "Same values" on home lands on the recommended section; it only renders
+  // once the status has loaded, so wait for it before scrolling.
+  const recommendedRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const target = recommendedRef.current;
+    if (focusSection !== 'recommended' || !target) return;
+    target.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    target.focus({ preventScroll: true });
+    setFocusSection(undefined);
+  }, [focusSection, canBrowse, status]);
+
   // The tiles at the top, counted by the server over the same list the browse
   // column is cut from — so each figure is the number of rows its tile shows.
   const viewLabel = view === 'shortlisted' ? 'Shortlisted' : view === 'active' ? 'Active today' : view === 'high' ? 'High compatibility' : undefined;
@@ -445,11 +476,12 @@ export default function Matches() {
             .
           </p>
         </div>
-        {isSteward && !isFamily && (
+        {isSteward && (
           <ProfileSelector
             value={profileId}
             onChange={setProfileId}
-            label={isAgent ? 'Browsing as client' : 'Browsing as'}
+            label={isAgent ? 'Browsing as client' : isFamily ? 'Finding matches for' : 'Browsing as'}
+            autoSelectSingle={isFamily}
           />
         )}
       </div>
@@ -458,6 +490,20 @@ export default function Matches() {
         <p className="card text-sm text-gray-600">
           Matchmaking always runs under a client identity. Pick one of your profiles above,
           including people you have built a profile for but not yet invited.
+        </p>
+      )}
+
+      {/*
+        A family account is the parent, not the bride or groom, so it never
+        browses as itself: matches are found for a relative it manages.
+      */}
+      {isFamily && !profileId && (
+        <p className="card text-sm text-gray-600">
+          Choose whose matches to see: your son, daughter or relative above. Add them under{' '}
+          <Link className="text-brand-dark underline" to="/client-profiles">
+            Family Profiles
+          </Link>{' '}
+          if they are not listed yet.
         </p>
       )}
 
@@ -791,7 +837,7 @@ export default function Matches() {
                   {!isLoading && !suggestionsError && suggestions.length === 0 && view !== 'all' && (
                     <div className="rounded-sm border border-dashed border-gray-300 p-4 text-sm">
                       <p className="font-medium text-gray-700">Nobody under {viewLabel} right now.</p>
-                      <button className="btn-outline mt-3 text-xs" onClick={() => setView('all')}>
+                      <button className="btn-outline mt-3 text-xs" onClick={() => setUrlParams({})}>
                         Show all matches
                       </button>
                     </div>
@@ -810,7 +856,7 @@ export default function Matches() {
                 </div>
               </div>
 
-              <div className="card space-y-3">
+              <div id="recommended" ref={recommendedRef} tabIndex={-1} className="card scroll-mt-6 space-y-3 focus:outline-none">
                 <div>
                   <h2 className="section-title">Recommended for you</h2>
                 </div>

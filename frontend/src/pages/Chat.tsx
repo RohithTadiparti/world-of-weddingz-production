@@ -2,8 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
-import { useCall } from '../lib/useCall';
-import CallPanel from '../components/CallPanel';
+import { useCallSession } from '../components/CallProvider';
 import ChatMenu from '../components/ChatMenu';
 import ProfilePreview from '../components/ProfilePreview';
 import { Loading } from '../components/ui/Feedback';
@@ -150,7 +149,9 @@ export default function Chat() {
     refetchInterval: 30_000,
   });
 
-  const call = useCall();
+  // The call lives in the app shell, so it keeps ringing (and keeps going)
+  // when somebody leaves this page; the overlay is rendered there too.
+  const call = useCallSession();
   const messages: Message[] = [...(history?.data ?? [])].reverse();
   const active = conversations.find((c) => c.withUserId === withUserId);
   // Locked by default (EZ1-I155). The composer opens only for a thread we can
@@ -590,20 +591,6 @@ export default function Chat() {
           )}
         </div>
       </div>
-
-      <CallPanel
-        state={call.state}
-        media={call.media}
-        error={call.error}
-        withName={
-          conversations.find((c) => c.withUserId === (call.peerId ?? withUserId))?.displayName ??
-          'them'
-        }
-        localStream={call.localStream}
-        remoteStream={call.remoteStream}
-        onAnswer={call.answer}
-        onHangUp={call.hangUp}
-      />
     </div>
   );
 }

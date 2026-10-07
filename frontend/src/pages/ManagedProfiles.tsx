@@ -294,7 +294,10 @@ export default function ManagedProfiles({
       const payload: Record<string, unknown> = {
         displayName: [values.firstName.trim(), values.lastName.trim()].filter(Boolean).join(' '),
         gender: values.gender,
-        consent: consentPayload(consent),
+        // An agency records how a stranger's family agreed to be represented.
+        // A parent adding their own son or daughter is that agreement, so a
+        // family member is not asked (and the server does not require it).
+        ...(isFamily ? {} : { consent: consentPayload(consent) }),
         inviteNow,
       };
       const rawBiodata: Record<string, unknown> = {
@@ -336,7 +339,9 @@ export default function ManagedProfiles({
           ? profile.contactEmail
             ? `Profile created and an invitation sent to ${profile.contactEmail}.`
             : 'Profile created and an invitation sent by SMS to their mobile. They can claim it without an email.'
-          : 'Profile saved. It is matchable now: circulate it, or invite them to claim it later.',
+          : isFamily
+            ? 'Profile saved. It is visible in matches now. Complete the biodata so families can see who they are.'
+            : 'Profile saved. It stays private until the biodata is complete and you make it matchable.',
       );
       qc.invalidateQueries({ queryKey: ['managed-profiles'] });
       // My Clients includes these profiles as well as claimed accounts.
@@ -742,7 +747,7 @@ export default function ManagedProfiles({
           </div>
         )}
 
-        <ConsentFields value={consent} onChange={setConsent} />
+        {!isFamily && <ConsentFields value={consent} onChange={setConsent} />}
 
         {error && <p className="alert-critical">{error}</p>}
 
@@ -843,6 +848,7 @@ export default function ManagedProfiles({
                   <CompletionStatus
                     profileId={p.id}
                     visibility={p.visibility}
+                    family={isFamily}
                     canPublish={Boolean(p.actions?.canEdit) && p.claimStatus !== 'claimed'}
                     onPublished={() => void qc.invalidateQueries({ queryKey: ['managed-profiles'] })}
                   />
@@ -1052,11 +1058,17 @@ interface Completion {
 function CompletionStatus({
   profileId,
   visibility,
+  family = false,
   canPublish,
   onPublished,
 }: {
   profileId: string;
   visibility: ManagedProfile['visibility'];
+  /**
+   * A family's relative is matchable without an agent's review step, so the
+   * family can make a private one visible at any time, not only once complete.
+   */
+  family?: boolean;
   canPublish: boolean;
   onPublished: () => void;
 }) {
@@ -1072,6 +1084,33 @@ function CompletionStatus({
   });
 
   if (!data) return null;
+  if (family) {
+    const progress = data.complete
+      ? 'Biodata complete.'
+      : `${data.percent}% biodata complete. Still needed: ${data.missing.join(', ')}.`;
+    if (visibility !== 'private') {
+      return (
+        <p className={`mt-1 text-xs ${data.complete ? 'font-medium text-emerald-700' : 'text-amber-800'}`}>
+          Visible in matches. {progress}
+        </p>
+      );
+    }
+    return (
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-medium text-amber-800">Private: not shown in matches. {progress}</span>
+        {canPublish && (
+          <button
+            type="button"
+            className="text-brand underline underline-offset-2"
+            disabled={publish.isPending}
+            onClick={() => publish.mutate()}
+          >
+            {publish.isPending ? 'Making matchable…' : 'Make matchable'}
+          </button>
+        )}
+      </div>
+    );
+  }
   if (data.complete) {
     if (visibility !== 'private') {
       return <p className="mt-1 text-xs font-medium text-emerald-700">Biodata complete</p>;

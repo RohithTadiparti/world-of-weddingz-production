@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { ProfileConsent } from './entities/profile-consent.entity';
 import { Profile } from '../users/entities/profile.entity';
+import { User } from '../auth/entities/user.entity';
 import { RecordConsentDto, RevokeConsentDto } from './dto/consent.dto';
 import { AppConfigService } from '../../config/app-config.service';
 import { AuditAction, AuditService } from '../../platform/audit/audit.service';
@@ -41,6 +42,7 @@ export class ConsentService {
   constructor(
     @InjectRepository(ProfileConsent) private readonly consents: Repository<ProfileConsent>,
     @InjectRepository(Profile) private readonly profiles: Repository<Profile>,
+    @InjectRepository(User) private readonly users: Repository<User>,
     private readonly cfg: AppConfigService,
     private readonly audit: AuditService,
   ) {}
@@ -164,12 +166,26 @@ export class ConsentService {
     ) {
       return;
     }
+    // Nor does a relative's profile a family member keeps: the family is the
+    // one passing it around, so there is no third party whose agreement an
+    // agency would have to record.
+    if (await this.isFamilyStewarded(profile)) return;
     const state = await this.stateForProfile(profile.id);
     if (!state.mayCirculate) {
       throw new ForbiddenException(
         state.reason ?? 'This profile cannot be circulated without recorded consent.',
       );
     }
+  }
+
+  /** Whether the profile is kept by a family member rather than an agency. */
+  async isFamilyStewarded(profile: Pick<Profile, 'managedByUserId'>): Promise<boolean> {
+    if (!profile.managedByUserId) return false;
+    const steward = await this.users.findOne({
+      where: { id: profile.managedByUserId },
+      select: ['id', 'role'],
+    });
+    return steward?.role === UserRole.FAMILY;
   }
 
   /** Intake consent is required before an agency-built profile can be saved. */

@@ -10,7 +10,6 @@ import {
   IsBoolean,
   IsDateString,
   IsEmail,
-  IsDefined,
   IsEnum,
   IsOptional,
   IsString,
@@ -40,9 +39,10 @@ import {
 /**
  * How the family gave permission, captured at intake.
  *
- * Required, not optional. A walk-in family hands over their details verbally;
+ * Required of an agent. A walk-in family hands over their details verbally;
  * without a record of who agreed to what and when, the platform is holding a
- * real person's name, photograph and phone number on nothing but trust.
+ * real person's name, photograph and phone number on nothing but trust. A
+ * family member adding their own son, daughter or relative is not asked.
  */
 export class IntakeConsentDto {
   @ApiProperty({ enum: ConsentMethod, example: ConsentMethod.IN_PERSON })
@@ -151,15 +151,18 @@ export class CreateManagedProfileDto {
   contactEmail?: string;
 
   /**
-   * @IsDefined is load-bearing: @ValidateNested on its own passes when the
-   * property is absent entirely, so a request with no consent block reached the
-   * service and crashed rather than being refused.
+   * Required of an agent, not of a family member adding their own relative.
+   * The role is not known here, so the service refuses an agent's request that
+   * arrives without it; when a block is sent it is validated in full.
    */
-  @ApiProperty({ type: IntakeConsentDto })
-  @IsDefined({ message: 'Record how the family gave consent before saving the profile' })
+  @ApiPropertyOptional({
+    type: IntakeConsentDto,
+    description: 'Required for agents. Not asked of a family member managing a relative.',
+  })
+  @IsOptional()
   @ValidateNested()
   @Type(() => IntakeConsentDto)
-  consent: IntakeConsentDto;
+  consent?: IntakeConsentDto;
 
   @ApiPropertyOptional({ maxLength: 30 })
   @IsOptional()

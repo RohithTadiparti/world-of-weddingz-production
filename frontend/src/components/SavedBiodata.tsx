@@ -2,6 +2,7 @@ import { formatHeight } from '../lib/height';
 import { readBusinessEntries } from '../lib/business-entries';
 import { ReactNode } from 'react';
 import { ageFromDateOfBirth, formatDate } from '../lib/dates';
+import { formatPlace } from '../lib/locations';
 import { OTHER_INCOME_LABEL } from '../lib/permissions';
 
 /**
@@ -178,6 +179,7 @@ export default function SavedBiodata({
             <Row label="Rashi">{inBag('horoscope', 'rashi')}</Row>
             <Row label="Star">{inBag('horoscope', 'star')}</Row>
             <Row label="Kuja dosham">{inBag('horoscope', 'kujaDosham')}</Row>
+            <Row label="Place of birth">{formatPlace(bag('horoscope').birthPlace) || null}</Row>
             <Row label="Time of birth">{inBag('horoscope', 'timeOfBirth')}</Row>
           </>
         ) : null}

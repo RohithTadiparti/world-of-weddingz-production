@@ -127,6 +127,32 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // `call:failed` says so rather than leaving a ringing screen forever.
 
   /**
+   * The ICE servers for a call with somebody, asked for before either side
+   * builds its peer connection. They used to arrive only in the reply to the
+   * offer or answer — after the connection already existed, so neither browser
+   * ever used STUN or TURN and calls connected only on a shared network.
+   *
+   * Authorized like every other call event: relay credentials are handed only
+   * to somebody who may ring this person.
+   */
+  @SubscribeMessage('call:ice-servers')
+  async onCallIceServers(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { toUserId: string },
+  ) {
+    const userId = client.data.userId as string;
+    if (!userId || typeof payload?.toUserId !== 'string') return { error: 'unauthenticated' };
+
+    try {
+      await this.chat.assertCanChat(userId, payload.toUserId);
+    } catch {
+      return { error: 'Call rejected' };
+    }
+
+    return { iceServers: buildIceServers(process.env) };
+  }
+
+  /**
    * Offer a call. Reuses the chat authorization rule exactly: if you may not
    * message somebody, you may not ring them either.
    */

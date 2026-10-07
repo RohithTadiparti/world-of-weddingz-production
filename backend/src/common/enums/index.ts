@@ -40,6 +40,15 @@ export const INDIVIDUAL_ROLES: readonly UserRole[] = [
   UserRole.FAMILY,
 ] as const;
 
+/**
+ * Roles whose own profile is somebody to be matched: the bride or groom.
+ *
+ * A family account takes part in matchmaking only through the relatives it
+ * manages. Its own profile holds the parent's or guardian's details, so it is
+ * never a candidate, never an interest target and never a matchmaking subject.
+ */
+export const MATCHABLE_ROLES: readonly UserRole[] = [UserRole.BRIDE, UserRole.GROOM] as const;
+
 /** Roles that sell bookable services. */
 export const PROVIDER_ROLES: readonly UserRole[] = [UserRole.VENDOR, UserRole.PLANNER] as const;
 
@@ -56,7 +65,9 @@ export const SELF_REGISTERABLE_ROLES: readonly UserRole[] = [
 
 export const isIndividual = (role: UserRole | string): boolean =>
   INDIVIDUAL_ROLES.includes(role as UserRole);
-export const isProvider = (role: UserRole | string): boolean =>
+export const isMatchable = (role: UserRole | string): boolean =>
+  MATCHABLE_ROLES.includes(role as UserRole);
+export const isProvider =(role: UserRole | string): boolean =>
   PROVIDER_ROLES.includes(role as UserRole);
 export const isConsumer = (role: UserRole | string): boolean =>
   CONSUMER_ROLES.includes(role as UserRole);

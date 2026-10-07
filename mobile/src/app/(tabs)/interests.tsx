@@ -147,8 +147,14 @@ export default function Interests() {
         loading={acting.ready && isPending}
         refreshing={isFetching && !isPending}
         onRefresh={() => void refetch()}
-        emptyTitle={acting.ready ? 'Nothing here' : 'Choose a client'}
-        emptyBody={acting.ready ? active?.empty : 'Pick which client’s interests you are looking at.'}
+        emptyTitle={acting.ready ? 'Nothing here' : acting.isFamily ? 'Choose a profile' : 'Choose a client'}
+        emptyBody={
+          acting.ready
+            ? active?.empty
+            : acting.isFamily
+              ? 'Pick whose interests you are looking at.'
+              : 'Pick which client’s interests you are looking at.'
+        }
         renderItem={(row) => (
           <InterestRow
             interest={row}
