@@ -482,7 +482,7 @@ export default function Matches() {
         filters, and what the engine recommends.
       */}
       {ready && (
-        <div className="space-y-4">
+        <section className="space-y-4" aria-label="Matching journey">
           <div className="card space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               {/*
@@ -826,7 +826,7 @@ export default function Matches() {
                 />
               </div>
             </div>
-          </div>
+        </section>
       )}
 
       {ready && status && status.stage !== 'matchmaking_active' && (
