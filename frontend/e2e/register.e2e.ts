@@ -24,11 +24,15 @@ test('a new member can register and reach the profile', async ({ page }) => {
   await page.locator('#firstName').fill('Ananya');
   await page.locator('#lastName').fill('Rao');
   await page.locator('#email').fill(`wow.e2e.${stamp}@gmail.com`);
+  await page.locator('#username').fill(`wow.e2e.${stamp}`);
   await page.locator('#phone').fill(`9${String(stamp).slice(-9)}`);
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByLabel('Confirm password').fill(password);
 
-  const response = page.waitForResponse((r) => r.url().includes('/api/auth/register'));
+  const response = page.waitForResponse(
+    (r) => r.url().includes('/api/auth/register'),
+    { timeout: 30_000 },
+  );
   await page.getByRole('button', { name: /^Create .*account$/ }).click();
   expect((await response).status()).toBeLessThan(300);
 

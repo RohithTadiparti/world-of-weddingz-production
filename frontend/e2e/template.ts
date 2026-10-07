@@ -61,6 +61,9 @@ export async function templateIssues(page: Page, theme: 'light' | 'dark' = 'ligh
         .filter((l) => l.offsetParent !== null && !l.classList.contains('sr-only'))
         .filter((l) => l.querySelector('.input') || document.getElementById(l.htmlFor)?.classList.contains('input'))
         .map((l) => (l.classList.contains('label') ? l : (l.querySelector(':scope > span:first-child') ?? l)))
+        // A label may be only the accessible wrapper for an icon and an input.
+        // With no visible caption there is no typography for this audit to test.
+        .filter((c) => Boolean(c.textContent?.trim()))
         .filter((c) => getComputedStyle(c).textTransform !== 'uppercase')
         .map((c) => `"${c.textContent?.trim().slice(0, 30)}"`);
       if (plain.length) issues.push(`field captions not in template capitals: ${plain.slice(0, 5).join(', ')}`);
