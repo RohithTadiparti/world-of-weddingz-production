@@ -458,7 +458,7 @@ describe('WOW API (e2e)', () => {
         .expect(403);
     });
 
-    it('requires a consent record, but neither a mobile number nor an email at intake', async () => {
+    it('allows missing contact details but keeps all intake behind agency vetting', async () => {
       await http()
         .put('/api/agents/agency')
         .set('Authorization', `Bearer ${agentToken}`)
@@ -487,7 +487,10 @@ describe('WOW API (e2e)', () => {
           displayName: 'No consent',
           contactPhone: '+919876500009',
         })
-        .expect(400);
+        // The agency gate deliberately runs before field-level intake
+        // validation so an unvetted account cannot probe the managed-profile
+        // workflow or learn which payloads would otherwise be accepted.
+        .expect(403);
     });
 
     it('keeps stewardship away from ordinary individuals and providers', async () => {

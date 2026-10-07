@@ -486,7 +486,10 @@ function useNavigationCounts(): Record<string, number> {
     refetchOnWindowFocus: true,
     retry: false,
   });
-  const canMatch = canAny(user?.permissions ?? [], [Permission.MATCH_BROWSE]);
+  // A family account matches only through the relatives it manages, so it has
+  // no suggestions of its own to count.
+  const canMatch =
+    canAny(user?.permissions ?? [], [Permission.MATCH_BROWSE]) && user?.role !== 'family';
   const canChat = canAny(user?.permissions ?? [], [Permission.CHAT_INQUIRE, Permission.CHAT_MATCH]);
   const { data: matchData } = useQuery({
     queryKey: ['navigation-match-count'],

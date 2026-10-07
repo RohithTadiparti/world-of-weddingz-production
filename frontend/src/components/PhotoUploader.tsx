@@ -1,5 +1,6 @@
 import { ChangeEvent, useRef, useState } from 'react';
 import { api, apiMessage } from '../lib/api';
+import { StorageUploadError, putToStorage } from '../lib/storage-upload';
 
 /** Kept in step with `UPLOAD_IMAGE_EXTENSIONS` on the API. */
 const IMAGE_EXTENSIONS = [
@@ -9,8 +10,6 @@ const IMAGE_EXTENSIONS = [
 
 /** A type worth passing on: an image, a video or a PDF, never a blank. */
 const REPORTED_TYPE = /^(image|video)\/[a-z0-9.+-]+$|^application\/pdf$/i;
-
-class StorageUnavailableError extends Error {}
 
 /**
  * Picks a file, uploads it, and hands back the URL it now lives at.
@@ -97,19 +96,9 @@ export default function PhotoUploader({
         },
       );
 
-      let response: Response;
-      try {
-        response = await fetch(data.uploadUrl, {
-          method: 'PUT',
-          body: file,
-          headers: { 'Content-Type': file.type, ...(data.headers ?? {}) },
-        });
-      } catch {
-        throw new StorageUnavailableError(
-          `Could not reach storage at ${new URL(data.uploadUrl).origin}. Check your connection and try again.`,
-        );
-      }
-      if (!response.ok) throw new Error(`Storage refused the file (${response.status}). Try again.`);
+      // A refusal from storage is reported as a refusal, never as a lost
+      // connection: see StorageUploadError.
+      await putToStorage(data.uploadUrl, file, data.headers ?? {});
 
       // The server reads the file back and refuses one that is not what it
       // claimed to be — or, for a profile photograph, one that is AI-generated
@@ -119,7 +108,7 @@ export default function PhotoUploader({
       await onUploaded(data.publicUrl);
     } catch (err) {
       setError(
-        err instanceof StorageUnavailableError
+        err instanceof StorageUploadError
           ? err.message
           : apiMessage(err, 'That file could not be uploaded.'),
       );

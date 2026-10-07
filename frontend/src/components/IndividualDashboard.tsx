@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { usePermissions } from '../store/auth';
+import { useAuth, usePermissions } from '../store/auth';
 import { Permission, PermissionValue, canAny } from '../lib/permissions';
 import { QuickAction } from './IndividualDashboardParts';
 import MatchCard, { type Suggestion } from './MatchCard';
@@ -27,8 +27,16 @@ export default function IndividualDashboard() {
   const permissions = usePermissions();
   const has = (...p: PermissionValue[]) => canAny(permissions, p);
 
-  const canMatch = has(Permission.MATCH_BROWSE);
-  const canProfile = has(Permission.PROFILE_MANAGE_OWN);
+  /*
+   * A family account is the parent or guardian, not the bride or groom. Its
+   * own profile has no biodata and is never matched, so the readiness, match
+   * status and suggestions below, which all read the account's own profile,
+   * are not asked for. The family's relatives are reached from Family
+   * Profiles, Matches and Biodata, where the family chooses whose they mean.
+   */
+  const isFamily = useAuth((s) => s.user?.role) === 'family';
+  const canMatch = has(Permission.MATCH_BROWSE) && !isFamily;
+  const canProfile = has(Permission.PROFILE_MANAGE_OWN) && !isFamily;
   const { data: matchStatus } = useQuery({
     queryKey: ['match-status', 'self'],
     queryFn: async () => (await api.get('/matches/status')).data as { matchFixedState?: string },
@@ -78,6 +86,7 @@ export default function IndividualDashboard() {
   const profilePercent = completion?.percent ?? (profile?.profileCompleted ? 100 : 0);
   const profileMissing = completion?.missing ?? [];
   const profileReadinessTo = profileComplete ? '/profile' : '/biodata';
+  const introductionTo = isFamily ? '/client-profiles' : '/biodata';
   const [previewId, setPreviewId] = useState<string>('');
   const [recommendedIndex, setRecommendedIndex] = useState(0);
   const [recentIndex, setRecentIndex] = useState(0);
@@ -140,7 +149,11 @@ export default function IndividualDashboard() {
         </div>
       )}
 
-      <JourneyStageTracker profileComplete={profileComplete} matchFixed={weddingUnlocked} />
+      <JourneyStageTracker
+        profileComplete={profileComplete}
+        matchFixed={weddingUnlocked}
+        introductionTo={introductionTo}
+      />
 
       {!profileComplete && canProfile && (
         <ProfileReadinessPanel percent={profilePercent} missing={profileMissing} to={profileReadinessTo} />
@@ -152,7 +165,7 @@ export default function IndividualDashboard() {
       <section>
         <h2 className="mb-3 text-sm font-medium text-gray-500">Quick actions</h2>
         <div className="flex flex-wrap gap-2">
-          {canMatch && <QuickAction to="/matches" label="Find matches" />}
+          {has(Permission.MATCH_BROWSE) && <QuickAction to="/matches" label="Find matches" />}
           {has(Permission.MEDIA_MANAGE_OWN) && <QuickAction to="/media" label="Upload media" />}
           {has(Permission.AI_ASSIST) && <QuickAction to="/genie" label="Ask WOW Genie" />}
           {has(Permission.CASE_RAISE) && <QuickAction to="/support" label="Get support" />}
@@ -169,7 +182,7 @@ export default function IndividualDashboard() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Link className="btn" to="/support">
+            <Link className="btn" to="/support?new=1">
               Raise an issue
             </Link>
             <Link className="btn-outline" to="/support">
@@ -228,9 +241,18 @@ function MatchCarousel({
   );
 }
 
-function JourneyStageTracker({ profileComplete, matchFixed }: { profileComplete: boolean; matchFixed: boolean }) {
+function JourneyStageTracker({
+  profileComplete,
+  matchFixed,
+  introductionTo,
+}: {
+  profileComplete: boolean;
+  matchFixed: boolean;
+  /** Where the introduction is written: the biodata, or a family's relatives. */
+  introductionTo: string;
+}) {
   const stages = [
-    ['Create your introduction', 'Share the details that help the right people understand you.', profileComplete, '/biodata'],
+    ['Create your introduction', 'Share the details that help the right people understand you.', profileComplete, introductionTo],
     ['Discover compatible matches', 'Explore profiles aligned with your values and hopes.', matchFixed, '/matches'],
     ['Have a meaningful conversation', 'Take your time getting to know someone privately.', matchFixed, '/chat'],
     ['Fix your match', 'Confirm the person and families you want to move forward with.', matchFixed, '/matches'],

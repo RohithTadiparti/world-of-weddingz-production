@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { isChartImage } from '../lib/horoscope';
 import { api, apiMessage } from '../lib/api';
 import { formatDate } from '../lib/dates';
+import { formatPlace } from '../lib/locations';
 import { COMPLEXION_LABEL, LIFE_STATUS_LABEL } from '../lib/permissions';
 import { Loading } from './ui/Feedback';
 import { PersonPhoto } from './ProfileSilhouette';
@@ -396,7 +397,7 @@ export default function ProfilePreview({
                     {String(bag('horoscope').kujaDosham ?? '') || null}
                   </Row>
                   <Row label="Place of birth">
-                    {String(bag('horoscope').birthPlace ?? '') || null}
+                    {formatPlace(bag('horoscope').birthPlace) || null}
                   </Row>
                   <Row label="Time of birth">
                     {String(bag('horoscope').timeOfBirth ?? '') || null}

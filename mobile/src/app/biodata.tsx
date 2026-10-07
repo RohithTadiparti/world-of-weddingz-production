@@ -26,6 +26,7 @@ import {
 } from '@/components/ui';
 import { radius, space } from '@/theme';
 import { ageFrom, genderForIndividualRole, GENDER_LABEL } from '@/lib/labels';
+import { formatPlace } from '@/lib/format';
 import { useAuth } from '@/store/auth';
 
 interface BiodataResponse {
@@ -60,7 +61,20 @@ export default function BiodataWizard() {
   // fall back to the family account after a profile was explicitly selected:
   // that is how one relative's fields leaked into another one's form.
   const selectedProfileId = Array.isArray(params.profileId) ? params.profileId[0] : params.profileId;
-  const profileId = selectedProfileId ?? me?.id ?? null;
+  // A family account's own profile holds the parent's details. The biodata is
+  // the son's, daughter's or relative's, so it never falls back to the account.
+  const isFamily = user?.role === 'family';
+  const { data: relatives, isPending: loadingRelatives } = useQuery({
+    queryKey: ['actable-profiles'],
+    enabled: isFamily && !selectedProfileId,
+    queryFn: async () => {
+      const data = (await api.get('/agents/profiles/actable')).data;
+      return (Array.isArray(data) ? data : (data?.data ?? [])) as { id: string; displayName: string }[];
+    },
+    retry: false,
+  });
+  const onlyRelative = relatives?.length === 1 ? relatives[0].id : null;
+  const profileId = selectedProfileId ?? (isFamily ? onlyRelative : (me?.id ?? null));
   const isOwnProfile = profileId !== null && profileId === me?.id;
 
   const { data: full, isPending } = useQuery({
@@ -109,10 +123,38 @@ export default function BiodataWizard() {
     setAutofilledKeys(new Set());
   }, [profileId]);
 
-  if (loadingMe || (profileId && isPending)) {
+  if (loadingMe || (profileId && isPending) || (isFamily && !selectedProfileId && loadingRelatives)) {
     return (
       <Screen>
         <Loading rows={4} />
+      </Screen>
+    );
+  }
+
+  if (!profileId && isFamily) {
+    return (
+      <Screen>
+        <Card style={{ gap: space(3) }}>
+          <SectionTitle>Whose biodata?</SectionTitle>
+          <Body tone="muted">
+            A biodata is for the person you are finding a match for, not for you.
+          </Body>
+          {(relatives ?? []).length === 0 ? (
+            <Caption tone="faint">
+              No family profiles yet. Add your son, daughter or relative on the website under
+              Family Profiles.
+            </Caption>
+          ) : (
+            (relatives ?? []).map((relative) => (
+              <Button
+                key={relative.id}
+                variant="outline"
+                label={relative.displayName}
+                onPress={() => router.setParams({ profileId: relative.id })}
+              />
+            ))
+          )}
+        </Card>
       </Screen>
     );
   }
@@ -439,7 +481,7 @@ export default function BiodataWizard() {
             <View style={{ marginTop: space(2) }}>
               <DetailGrid>
                 <DetailRow label="Time of Birth">{String(d.timeOfBirth ?? '—')}</DetailRow>
-                <DetailRow label="Place of Birth">{[d.cityOfBirth, d.stateOfBirth, d.countryOfBirth].filter(Boolean).join(', ') || '—'}</DetailRow>
+                <DetailRow label="Place of Birth">{formatPlace((d.horoscope as Record<string, unknown> | undefined)?.birthPlace) || '—'}</DetailRow>
                 {d.rasi ? <DetailRow label="Rasi">{String(d.rasi)}</DetailRow> : null}
                 {d.star ? <DetailRow label="Star">{String(d.star)}</DetailRow> : null}
                 {d.padam ? <DetailRow label="Padam">{String(d.padam)}</DetailRow> : null}

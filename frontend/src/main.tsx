@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+import CallProvider from './components/CallProvider';
 import HeartField from './components/HeartField';
 import './index.css';
 import { initTheme } from './store/theme';
@@ -22,7 +23,13 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
         {/* The template's gold hearts, behind every page and as tall as it. */}
         <div className="relative isolate min-h-[100dvh]">
           <HeartField />
-          <App />
+          {/*
+            Above every route: a call has to ring wherever the person is, and
+            navigating must not drop the socket it arrives on.
+          */}
+          <CallProvider>
+            <App />
+          </CallProvider>
         </div>
       </BrowserRouter>
     </QueryClientProvider>

@@ -164,3 +164,25 @@ export function districtsForState(state: string | null | undefined): string[] {
   if (!state) return [];
   return DISTRICTS_BY_STATE[state] ?? [];
 }
+
+/**
+ * A stored place, as one line a person reads: "Hanumakonda, Telangana".
+ *
+ * The birthplace is saved as the location object the dependent dropdowns
+ * produce, while older rows and imported biodata hold a plain string. Putting
+ * the object straight into the page printed "[object Object]" where the place
+ * of birth should be. The most specific place comes first, then the state;
+ * India is left off, since it is the default rather than information, and any
+ * other country is named.
+ */
+export function formatPlace(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value !== 'object' || Array.isArray(value)) return '';
+  const place = value as Record<string, unknown>;
+  const text = (key: string) => (typeof place[key] === 'string' ? (place[key] as string).trim() : '');
+  const locality = text('city') || text('village') || text('mandal') || text('district');
+  const country = text('country');
+  const parts = [locality, text('state'), /^india$/i.test(country) ? '' : country].filter(Boolean);
+  return parts.filter((part, i) => parts.findIndex((p) => p.toLowerCase() === part.toLowerCase()) === i).join(', ');
+}

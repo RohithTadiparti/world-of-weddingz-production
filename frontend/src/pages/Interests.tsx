@@ -336,7 +336,14 @@ export default function Interests() {
       )}
 
       {isSteward && (
-        <ProfileSelector value={profileId} onChange={setProfileId} label="For which client" />
+        <ProfileSelector
+          value={profileId}
+          onChange={setProfileId}
+          // A family lists only the relatives it manages, so they are not
+          // "clients", and the only one there is chosen for them.
+          label={isAgency ? 'For which client' : 'For whom'}
+          autoSelectSingle={!isAgency}
+        />
       )}
 
       {isAgency && !profileId && (
@@ -354,7 +361,7 @@ export default function Interests() {
 
       {!ready && !isAgency && (
         <div className="card">
-          <EmptyState icon={UsersThree} title="Pick a client">
+          <EmptyState icon={UsersThree} title="Choose a profile">
             Interests belong to a profile, not to your account. Choose whose you want to see.
           </EmptyState>
         </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { io } from 'socket.io-client';
 import { api } from './api';
+import { socketOrigin } from './socket-origin';
 import { useAuth } from '../store/auth';
 
 export interface AdminPendingCounts {
@@ -31,11 +32,6 @@ const EMPTY_COUNTS: AdminPendingCounts = {
   reports: 0,
   notifications: 0,
 };
-
-function socketOrigin(): string | undefined {
-  const configured = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api') as string;
-  return configured.replace(/\/api\/?$/, '');
-}
 
 export function useAdminPendingCounts(enabled: boolean) {
   const token = useAuth((state) => state.accessToken);

@@ -78,3 +78,22 @@ export function capitalizeWords(str: string | null | undefined): string {
     return part.charAt(0).toUpperCase() + part.slice(1);
   }).join('');
 }
+
+/**
+ * A stored place as one line: "Hanumakonda, Telangana". The same rule as the
+ * web client's `formatPlace`. The birthplace is saved as a location object
+ * ({ city, state, country, ... }) while older rows hold plain text, and an
+ * object put straight into a row reads "[object Object]". India is left off as
+ * the default; any other country is named.
+ */
+export function formatPlace(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value !== 'object' || Array.isArray(value)) return '';
+  const place = value as Record<string, unknown>;
+  const text = (key: string) => (typeof place[key] === 'string' ? (place[key] as string).trim() : '');
+  const locality = text('city') || text('village') || text('mandal') || text('district');
+  const country = text('country');
+  const parts = [locality, text('state'), /^india$/i.test(country) ? '' : country].filter(Boolean);
+  return parts.filter((part, i) => parts.findIndex((p) => p.toLowerCase() === part.toLowerCase()) === i).join(', ');
+}

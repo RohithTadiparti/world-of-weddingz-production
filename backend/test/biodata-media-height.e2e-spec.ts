@@ -57,7 +57,14 @@ describe('Family Photo and centimeter height end to end', () => {
       const users = db.getRepository(User);
       const user = await users.save(users.create({ email: `biodata-${role}-${Date.now()}@example.com`, passwordHash, role, isActive: true, isVerified: true }));
       const profiles = db.getRepository(Profile);
-      const profile = await profiles.save(profiles.create({ userId: managed ? null : user.id, managedByUserId: managed ? user.id : null, displayName: 'Biodata Test', gender: role === UserRole.GROOM ? 'male' : 'female', photos: [] }));
+      const profile = await profiles.save(profiles.create({
+        userId: managed ? null : user.id,
+        managedByUserId: managed ? user.id : null,
+        displayName: 'Biodata Test',
+        gender: role === UserRole.GROOM ? 'male' : 'female',
+        dateOfBirth: '1996-04-02',
+        photos: [],
+      }));
       actors.push({ user, profile, token: (await login(user)).accessToken });
     }
   }, 90000);

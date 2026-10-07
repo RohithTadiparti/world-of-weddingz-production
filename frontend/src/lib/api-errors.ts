@@ -29,8 +29,22 @@ export function apiMessage(err: unknown, fallback = 'Something went wrong.'): st
 
   // No envelope at all: the request never reached the API, or something in
   // front of it answered. Saying which is more use than a shrug.
-  if (!res) return 'Could not reach the server. Check your connection and try again.';
+  //
+  // Only a request that was actually sent and got nothing back is a lost
+  // connection. Any other error with no response -- a refusal from storage
+  // thrown as a plain Error, a bug in the caller -- used to be reported here as
+  // "Could not reach the server", which is how an nginx 404 on every photo
+  // upload reached QA as a connectivity problem.
+  if (!res) return isNetworkFailure(err) ? NETWORK_MESSAGE : fallback;
   return fallback;
+}
+
+const NETWORK_MESSAGE = 'Could not reach the server. Check your connection and try again.';
+
+/** An HTTP client's error for a request that went out and got no answer. */
+function isNetworkFailure(err: unknown): boolean {
+  const e = err as ErrorWithResponse | null | undefined;
+  return !!e && typeof e === 'object' && (e.isAxiosError === true || e.request !== undefined);
 }
 
 interface ApiErrorBody {
@@ -52,4 +66,8 @@ interface ApiErrorBody {
  */
 interface ErrorWithResponse {
   response?: { data?: ApiErrorBody };
+  /** Set by axios on every error it raises. */
+  isAxiosError?: boolean;
+  /** The request that was sent, present when it went out but got no answer. */
+  request?: unknown;
 }

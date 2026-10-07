@@ -4,9 +4,18 @@ import PackageRangeFields from '../components/PackageRangeFields';
 import { BusinessEntry, readBusinessEntries } from '../lib/business-entries';
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
 import { Draft, createDraftGuard, loadDraft, saveDraft, submitDraft } from '../lib/biodata-draft';
+import {
+  ALL_STEPS,
+  STEP_TITLE,
+  StepName,
+  blockedMessage,
+  blockingStep,
+  stepDone,
+  stepsFor,
+} from '../lib/biodata-steps';
 import { useAuth, usePermissions } from '../store/auth';
 import {
   ASSET_TYPE_LABEL,
@@ -53,6 +62,7 @@ interface Section {
   section: string;
   complete: boolean;
   label: string;
+  missingFields?: { key: string; label: string }[];
 }
 
 interface Completion {
@@ -90,6 +100,7 @@ interface SharedProfile {
   bio: string | null;
   visibility: 'public' | 'matches_only' | 'private' | null;
   managingFor?: 'bride' | 'groom' | null;
+  photos?: string[];
 }
 
 /** One caste in the reference catalogue, with the sub-castes filed under it. */
@@ -139,19 +150,31 @@ export default function Biodata() {
   const [notice, setNotice] = useState('');
   const [step, setStep] = useState<StepName>('photos');
   const [direction, setDirection] = useState<'next' | 'prev'>('next');
+  // Why the wizard stayed where it is, when a later step was asked for.
+  const [held, setHeld] = useState('');
   const [savedOpen, setSavedOpen] = useState(false);
   const [identityOpen, setIdentityOpen] = useState(false);
   const [importedFields, setImportedFields] = useState<Record<string, string> | null>(null);
   const [importRevision, setImportRevision] = useState(0);
 
-  // Individuals edit their own profile and never pick one.
+  /*
+   * Whose biodata this is.
+   *
+   * Individuals edit their own profile and never pick one. An agent and a
+   * family member always pick: a family account's own profile holds the
+   * parent's or guardian's details, and the biodata belongs to the son,
+   * daughter or relative they are finding a match for. Falling back to the
+   * account's own profile offered the parent a biodata of their own and filled
+   * the card with their age, date of birth and city.
+   */
+  const choosesProfile = isAgent || isFamily;
   const { data: me } = useQuery({
     queryKey: ['me'],
     queryFn: async () => (await api.get('/users/me')).data,
     retry: false,
-    enabled: !isAgent,
+    enabled: !choosesProfile,
   });
-  const targetId = profileId || (me?.id ?? '');
+  const targetId = profileId || (choosesProfile ? '' : (me?.id ?? ''));
 
   useEffect(() => {
     if (profileId) setParams({ profileId }, { replace: true });
@@ -186,19 +209,36 @@ export default function Biodata() {
   const steps = stepsFor(details.maritalStatus);
   // A step that has dropped out (marital, after changing back to never
   // married) falls back to the one before it.
-  const current: StepName = steps.includes(step)
+  const wanted: StepName = steps.includes(step)
     ? step
     : steps[Math.max(0, ALL_STEPS.indexOf(step) - 1)] ?? steps[0];
+  // And never further than the first step whose required fields are not saved
+  // yet, however the later one was asked for.
+  const current: StepName = blockingStep(wanted, steps, completion) ?? wanted;
 
-  /** Swap the card, sliding forward or back depending on where it lands. */
-  function goTo(next: StepName, list: StepName[] = steps) {
-    setDirection(list.indexOf(next) >= list.indexOf(current) ? 'next' : 'prev');
-    setStep(next);
+  /**
+   * Swap the card, sliding forward or back depending on where it lands.
+   *
+   * A step past one that is still incomplete is not opened: the incomplete one
+   * is shown instead, with the fields it is waiting on. `report` is passed
+   * after a save, when the completion this render was drawn from is stale.
+   */
+  function goTo(
+    next: StepName,
+    list: StepName[] = steps,
+    report: Completion | undefined = completion,
+  ): StepName {
+    const blocker = blockingStep(next, list, report);
+    const landing = blocker ?? next;
+    setHeld(blocker ? blockedMessage(blocker, report) : '');
+    setDirection(list.indexOf(landing) >= list.indexOf(current) ? 'next' : 'prev');
+    setStep(landing);
     requestAnimationFrame(() => {
       document
         .getElementById('biodata-steps')
         ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+    return landing;
   }
 
   /** The step a biodata section is filled in on. */
@@ -251,9 +291,11 @@ export default function Biodata() {
         | undefined;
       const list = stepsFor(saved?.maritalStatus ?? details.maritalStatus);
       const next = list[list.indexOf(from) + 1];
+      // Judged on the completion just fetched, not the one this render saw.
+      const fresh = qc.getQueryData<{ completion?: Completion }>(['biodata', targetId])?.completion;
       if (next) {
-        goTo(next, list);
-        setNotice(`Saved. Next: ${STEP_TITLE[next]}.`);
+        const landed = goTo(next, list, fresh);
+        setNotice(landed === next ? `Saved. Next: ${STEP_TITLE[next]}.` : 'Saved.');
       } else {
         setNotice('Saved. That is the last section.');
       }
@@ -287,6 +329,28 @@ export default function Biodata() {
     );
   }
 
+  if (isFamily && !profileId) {
+    return (
+      <div className="space-y-4">
+        <h1 className="page-title">Biodata</h1>
+        <ProfileSelector
+          value={profileId}
+          onChange={setProfileId}
+          label="Whose biodata"
+          autoSelectSingle
+        />
+        <p className="card text-sm text-gray-600">
+          A biodata is for the person you are finding a match for, not for you. Choose your son,
+          daughter or relative above, or{' '}
+          <Link className="text-brand underline" to="/client-profiles">
+            add them under Family Profiles
+          </Link>{' '}
+          first.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="space-y-3">
@@ -313,11 +377,11 @@ export default function Biodata() {
             filling in his daughter's biodata is not looking at a client, and
             being told he is reads as the platform having mistaken him for one.
           */}
-          {isSteward && !isFamily && (
+          {isSteward && (
             <ProfileSelector
               value={profileId}
               onChange={setProfileId}
-              label={isAgent ? 'Client' : 'Browsing as'}
+              label={isAgent ? 'Client' : isFamily ? 'Whose biodata' : 'Browsing as'}
             />
           )}
         </div>
@@ -386,7 +450,8 @@ export default function Biodata() {
       {targetId && Object.keys(details).length > 0 && (
         <ProfileCard
           profileId={targetId}
-          profile={me ?? null}
+          // The profile being filled in, never the signed-in account's own.
+          profile={sharedProfile ? { ...sharedProfile, id: targetId } : null}
           details={details}
           complete={completion?.complete ?? false}
           percent={completion?.percent ?? 0}
@@ -423,12 +488,13 @@ export default function Biodata() {
         direction={direction}
         onGo={goTo}
         completion={completion}
+        held={held}
         missingFields={importedFields ? importedMissing(current, importedFields, details) : []}
       >
         {current === 'photos' &&
           (targetId ? (
             <div className="space-y-6">
-              <ProfilePhotos profileId={targetId} gender={me?.gender ?? data?.gender} />
+              <ProfilePhotos profileId={targetId} gender={profileGender ?? data?.gender} />
               {/* One group photograph of the family, kept apart from the profile photos. */}
               <section id="family-photo" key={targetId} className="space-y-3 border-t pt-4">
                 <h3 className="font-semibold text-gray-800">Family photo</h3>
@@ -556,37 +622,6 @@ export default function Biodata() {
   );
 }
 
-/**
- * The order the form is filled in, matching the mobile app's steps.
- *
- * Saving a section moves to the next one rather than leaving somebody scrolling
- * back up to find where they were — which is the reported complaint, and the
- * reason people stopped halfway. Photographs come first here (last on mobile)
- * because the server will not save the personal details without three of them.
- */
-const ALL_STEPS = [
-  'photos',
-  'basic',
-  'marital',
-  'education',
-  'family',
-  'horoscope',
-  'preferences',
-] as const;
-
-type StepName = (typeof ALL_STEPS)[number];
-
-/** What each step is called, in the header and the "next" line after a save. */
-const STEP_TITLE: Record<StepName, string> = {
-  photos: 'Photographs',
-  basic: 'Basic Information',
-  marital: 'Marital History',
-  education: 'Education & Career',
-  family: 'Family Background',
-  horoscope: 'Horoscope',
-  preferences: 'Partner Preferences',
-};
-
 const IMPORT_REQUIRED: Record<StepName, { key: string; label: string }[]> = {
   photos: [{ key: 'photos', label: 'Three profile photographs' }],
   basic: [
@@ -679,12 +714,6 @@ function seedImportedDrafts(profileId: string, fields: Record<string, string>) {
   saveDraft(`${prefix}:horoscope`, { available: Boolean(Object.keys(horoscope).length), values: horoscope });
 }
 
-/** Marital history is a step only for somebody who has been married. */
-function stepsFor(maritalStatus: unknown): StepName[] {
-  const married = Boolean(maritalStatus) && maritalStatus !== 'never_married';
-  return ALL_STEPS.filter((s) => s !== 'marital' || married);
-}
-
 function Accordion({
   id,
   title,
@@ -715,9 +744,10 @@ function Accordion({
 /**
  * The biodata as a deck of cards, one step showing at a time, as on mobile.
  *
- * Saving a form swaps in the next card on its own; Back and Skip are here for
- * the photographs (nothing to save) and for somebody who wants to come back
- * to a step later.
+ * Saving a form swaps in the next card on its own; Back and Continue are here
+ * for the photographs (nothing to save) and for moving between steps already
+ * filled in. Continue does not skip: past a step whose required fields are not
+ * saved it stays put, and `held` names what is missing.
  */
 function StepCard({
   current,
@@ -725,6 +755,7 @@ function StepCard({
   direction,
   onGo,
   completion,
+  held = '',
   missingFields = [],
   children,
 }: {
@@ -733,27 +764,16 @@ function StepCard({
   direction: 'next' | 'prev';
   onGo: (step: StepName) => void;
   completion?: Completion;
+  /** Why a later step was not opened, naming the fields still needed. */
+  held?: string;
   missingFields?: string[];
   children: ReactNode;
 }) {
   const index = steps.indexOf(current);
   const prev = index > 0 ? steps[index - 1] : null;
   const next = index < steps.length - 1 ? steps[index + 1] : null;
-  // Basic information is two server sections; it is done when both are.
-  const sectionsOf: Record<StepName, string[]> = {
-    photos: [],
-    basic: ['personal', 'religion'],
-    marital: ['marital'],
-    education: ['education', 'occupation'],
-    family: ['family'],
-    horoscope: ['horoscope'],
-    preferences: ['preferences'],
-  };
-  const done = (name: StepName) =>
-    sectionsOf[name].length > 0 &&
-    sectionsOf[name].every(
-      (s) => completion?.sections.find((sec) => sec.section === s)?.complete ?? false,
-    );
+  // The photographs have nothing to save, so they are never marked saved.
+  const saved = current !== 'photos' && stepDone(current, completion);
 
   return (
     <section id="biodata-steps" className="scroll-mt-4" aria-label="Biodata steps">
@@ -767,7 +787,7 @@ function StepCard({
           <header className="mb-4 flex items-baseline justify-between gap-3 border-b pb-3">
             <h2 className="font-serif text-[1.375rem] font-normal text-brand">
               {STEP_TITLE[current]}
-              {done(current) && (
+              {saved && (
                 <span className="ml-3 whitespace-nowrap font-sans text-[0.6875rem] uppercase tracking-[0.18em] text-emerald-700">
                   ✓ Saved
                 </span>
@@ -787,6 +807,12 @@ function StepCard({
 
           {children}
 
+          {held && (
+            <p className="alert-critical mt-6" role="alert">
+              {held}
+            </p>
+          )}
+
           <footer className="mt-6 flex items-center justify-between gap-3 border-t pt-4">
             <button
               type="button"
@@ -798,7 +824,7 @@ function StepCard({
             </button>
             {next ? (
               <button type="button" className="btn-outline btn-sm" onClick={() => onGo(next)}>
-                {current === 'photos' || done(current) ? 'Continue' : 'Skip'} →
+                Continue →
               </button>
             ) : (
               <span className="text-xs text-gray-500">Last step</span>

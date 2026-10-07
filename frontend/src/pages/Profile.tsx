@@ -522,7 +522,20 @@ export default function Profile() {
         )}
       </div>
 
-      {hasBiodata && (
+      {/*
+        A family member has no biodata of their own: it belongs to the son,
+        daughter or relative they manage, so this points at those profiles.
+      */}
+      {hasBiodata && isFamilyMember && (
+        <p className="card text-sm text-gray-600">
+          The biodata other families read is for the person you are finding a match for.{' '}
+          <Link className="text-brand underline" to="/client-profiles">
+            Open Family Profiles
+          </Link>{' '}
+          to add them and complete their biodata.
+        </p>
+      )}
+      {hasBiodata && !isFamilyMember && (
         <p className="card text-sm text-gray-600">
           Ready to be seen by other families?{' '}
           <Link className="text-brand underline" to="/biodata">

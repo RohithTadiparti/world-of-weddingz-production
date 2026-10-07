@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConsentService } from './consent.service';
 import { ProfileConsent } from './entities/profile-consent.entity';
 import { Profile } from '../users/entities/profile.entity';
+import { User } from '../auth/entities/user.entity';
 import { AppConfigService } from '../../config/app-config.service';
 import { AuditService } from '../../platform/audit/audit.service';
 import {
@@ -70,6 +71,11 @@ describe('ConsentService', () => {
     findOne: jest.fn(async () => managedProfile()),
     save: jest.fn(async (x) => x),
   };
+  const userRepo = {
+    findOne: jest.fn(
+      async (): Promise<Pick<User, 'id' | 'role'> | null> => ({ id: 'agent-1', role: UserRole.AGENT }),
+    ),
+  };
   const cfg = {
     stewardship: { circulationConsentValidityDays: 365 },
   } as unknown as AppConfigService;
@@ -83,6 +89,7 @@ describe('ConsentService', () => {
         ConsentService,
         { provide: getRepositoryToken(ProfileConsent), useValue: consentRepo },
         { provide: getRepositoryToken(Profile), useValue: profileRepo },
+        { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: AppConfigService, useValue: cfg },
         { provide: AuditService, useValue: audit },
       ],
@@ -202,6 +209,15 @@ describe('ConsentService', () => {
       ).resolves.toBeUndefined();
       await expect(
         service.assertMayCirculate(managedProfile({ claimStatus: ProfileClaimStatus.CLAIMED })),
+      ).resolves.toBeUndefined();
+    });
+
+    // A family member circulating their own relative is the one agreeing to it.
+    it('never blocks a relative kept by a family member', async () => {
+      rows = [];
+      userRepo.findOne.mockResolvedValueOnce({ id: 'family-1', role: UserRole.FAMILY });
+      await expect(
+        service.assertMayCirculate(managedProfile({ managedByUserId: 'family-1' })),
       ).resolves.toBeUndefined();
     });
   });

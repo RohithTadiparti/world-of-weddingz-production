@@ -135,6 +135,55 @@ describe('managed profile biodata intake', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('still requires intake consent from an agent', async () => {
+    const { service, transaction } = await setup();
+    const { consent: _omitted, ...withoutConsent } = dto;
+    await expect(service.create(actor, withoutConsent))
+      .rejects.toThrow('Record how the family gave consent before saving the profile');
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps an agency client private until the agent makes it matchable', async () => {
+    const { service, profileRepo } = await setup();
+    await service.create(actor, dto);
+    expect(profileRepo.create).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'private' }));
+  });
+
+  // A parent adding their own son or daughter is the consent, and the profile
+  // is matchable straight away, as a bride or groom who signs up is.
+  it('asks no consent of a family member and makes the relative matchable', async () => {
+    const { service, profileRepo, consent } = await setup();
+    const familyActor: AuthUser = { ...actor, userId: 'family-1', role: UserRole.FAMILY };
+    const { consent: _omitted, ...withoutConsent } = dto;
+
+    const profile = await service.create(familyActor, {
+      ...withoutConsent,
+      contactPhone: '9876543214',
+      stewardRelation: 'Mother',
+    });
+
+    expect(profile).toMatchObject({ managedByUserId: 'family-1', visibility: 'matches_only' });
+    expect(profileRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ visibility: 'matches_only' }),
+    );
+    expect(consent.record).not.toHaveBeenCalled();
+  });
+
+  // The family account is the parent, not one of the profiles it looks after.
+  it('lists only the relatives a family member manages, never the family member', async () => {
+    const { service, profileRepo } = await setup();
+    const familyActor: AuthUser = { ...actor, userId: 'family-1', role: UserRole.FAMILY };
+    const daughter = { id: 'daughter', managedByUserId: 'family-1' } as Profile;
+    const own = { id: 'own', userId: 'family-1' } as Profile;
+    profileRepo.find.mockImplementation((async (opts: { where: { userId?: string } }) =>
+      opts.where.userId ? [own] : [daughter]) as never);
+
+    await expect(service.actableProfiles(familyActor)).resolves.toEqual([daughter]);
+    // A bride or groom keeps their own profile in the list.
+    const bride: AuthUser = { ...actor, userId: 'family-1', role: UserRole.BRIDE };
+    await expect(service.actableProfiles(bride)).resolves.toEqual([own, daughter]);
+  });
+
   describe('editing a client who has claimed their profile', () => {
     const claimedProfile = () => ({
       id: 'profile-1', userId: 'client-1', managedByUserId: 'agent-1',

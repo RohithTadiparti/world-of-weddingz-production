@@ -42,6 +42,10 @@ import { BIODATA_DOCUMENT_EXTENSIONS, BIODATA_IMAGE_EXTENSIONS } from '../media/
 import { matchGender } from '../matchmaking/match-gender';
 import { CLOSED_ENGAGEMENT_MESSAGE, stewardMayEditBiodata } from '../users/stewardship';
 
+/** Why a family account cannot write a biodata on its own profile. */
+export const FAMILY_OWN_BIODATA_MESSAGE =
+  'A biodata belongs to the person you are finding a match for. Open it from Family Profiles for your son, daughter or relative.';
+
 /** The most brothers and sisters a profile may list (EZ1-I102). */
 export const SIBLING_LIMIT = 10;
 
@@ -69,8 +73,20 @@ export interface CompletionReport {
   complete: boolean;
   /** Fraction complete, for the progress bar. */
   percent: number;
-  sections: { section: ProfileSection; complete: boolean; label: string }[];
+  sections: {
+    section: ProfileSection;
+    complete: boolean;
+    label: string;
+    /** The required fields still empty, so a client can name them. */
+    missingFields: MissingField[];
+  }[];
   missing: ProfileSection[];
+}
+
+/** A required biodata field that has not been filled in yet. */
+export interface MissingField {
+  key: string;
+  label: string;
 }
 
 const SECTION_LABEL: Record<ProfileSection, string> = {
@@ -224,6 +240,14 @@ export class ProfileDetailsService {
      */
     if (dto.dateOfBirth && profile.dateOfBirth !== dto.dateOfBirth) {
       profile.dateOfBirth = dto.dateOfBirth;
+      // A managed profile's basics are only ever completed here, so this is
+      // where it becomes ready to browse matches. Same rule as the steward's
+      // own edit (ManagedProfilesService.isComplete).
+      if (profile.managedByUserId) {
+        profile.profileCompleted = Boolean(
+          profile.displayName && profile.gender && profile.dateOfBirth && profile.city,
+        );
+      }
       await this.profiles.save(profile);
     }
 
@@ -823,6 +847,9 @@ export class ProfileDetailsService {
         bio: profile.bio,
         visibility: profile.visibility,
         managingFor: profile.managingFor,
+        // The biodata card shows this profile's photograph, never that of
+        // whoever is signed in to fill it in.
+        photos: profile.photos ?? [],
       },
       details: details ?? null,
       siblings,
@@ -1133,60 +1160,84 @@ export class ProfileDetailsService {
       value !== null && value !== undefined && value !== '' &&
       !(typeof value === 'object' && Object.keys(value as object).length === 0);
 
-    const done: Record<ProfileSection, boolean> = {
+    // A profile with no biodata row yet is missing every field the row holds.
+    const d: Partial<ProfileDetails> = details ?? {};
+    /** The required fields of a section that are still empty, in form order. */
+    const lacking = (checks: [filled: boolean, field: MissingField][]): MissingField[] =>
+      checks.filter(([filled]) => !filled).map(([, field]) => field);
+
+    /*
+     * Field by field rather than one yes/no per section, so the biodata wizard
+     * can say exactly what is holding a step back instead of only refusing to
+     * move on. A section is complete exactly when nothing is listed for it.
+     */
+    const missingFields: Record<ProfileSection, MissingField[]> = {
       // Native place moved to the family section and place of birth is no
       // longer collected, so neither can be a condition of this one being
       // complete — every existing profile would otherwise become incomplete on
       // deploy, and the fix would look like data loss.
-      personal: Boolean(
-        details &&
-          has(details.firstName) &&
-          has(details.lastName) &&
-          has(profile.gender) &&
-          has(profile.dateOfBirth) &&
-          (profile.photos?.length ?? 0) >= ProfileDetailsService.REQUIRED_PHOTOS &&
-          has(details.heightCm) &&
-          has(details.complexion) &&
-          has(details.communicationAddress),
-      ),
-      religion: Boolean(
-        details && has(details.religion) && has(details.caste) && has(details.motherTongue),
-      ),
+      personal: lacking([
+        [
+          (profile.photos?.length ?? 0) >= ProfileDetailsService.REQUIRED_PHOTOS,
+          { key: 'photos', label: `${ProfileDetailsService.REQUIRED_PHOTOS} profile photographs` },
+        ],
+        [has(d.firstName), { key: 'firstName', label: 'First name' }],
+        [has(d.lastName), { key: 'lastName', label: 'Last name' }],
+        [has(profile.gender), { key: 'gender', label: 'Gender' }],
+        [has(profile.dateOfBirth), { key: 'dateOfBirth', label: 'Date of birth' }],
+        [has(d.heightCm), { key: 'heightCm', label: 'Height' }],
+        [has(d.complexion), { key: 'complexion', label: 'Complexion' }],
+        [has(d.communicationAddress), { key: 'communicationAddress', label: 'Communication address' }],
+      ]),
+      religion: lacking([
+        [has(d.religion), { key: 'religion', label: 'Religion' }],
+        [has(d.caste), { key: 'caste', label: 'Caste' }],
+        [has(d.motherTongue), { key: 'motherTongue', label: 'Mother tongue' }],
+      ]),
       // Answering "no horoscope" completes the section: the question has been
       // answered, which is all the profile needs.
-      horoscope: Boolean(
-        details && (details.horoscopeAvailable === false || has(details.horoscope)),
-      ),
-      marital: Boolean(details && has(details.maritalStatus)),
+      horoscope: lacking([
+        [
+          d.horoscopeAvailable === false || has(d.horoscope),
+          { key: 'horoscope', label: 'Horoscope details, or that there is no horoscope' },
+        ],
+      ]),
+      marital: lacking([[has(d.maritalStatus), { key: 'maritalStatus', label: 'Marital status' }]]),
       // The native place is asked here now.
-      family: Boolean(
-        details &&
-          has(details.father) &&
-          has(details.mother) &&
-          has(details.familyType) &&
-          (matchGender(profile) !== 'male' || has(details.familyNetWorth)) &&
-          details.brothers !== null &&
-          details.sisters !== null &&
-          // Counts and records have to agree, or the family section is telling
-          // two different stories.
-          siblings.length >= 0,
-      ),
-      education: Boolean(
-        details && has(details.highestQualification) && has(details.course),
-      ),
-      occupation: Boolean(
-        details && has(details.occupationStatus),
-      ),
-      preferences: Boolean(
-        details && has(details.preferredAgeMin) && has(details.preferredHeightMinCm),
-      ),
-      identity: Boolean(profile.governmentIdHash),
+      family: lacking([
+        [has(d.father), { key: 'father', label: "Father's name" }],
+        [has(d.mother), { key: 'mother', label: "Mother's name" }],
+        [has(d.familyType), { key: 'familyType', label: 'Family type' }],
+        [
+          matchGender(profile) !== 'male' || has(d.familyNetWorth),
+          { key: 'familyNetWorth', label: 'Family net worth' },
+        ],
+        // Counts and records have to agree, or the family section is telling
+        // two different stories.
+        [d.brothers !== null && siblings.length >= 0, { key: 'brothers', label: 'Brothers' }],
+        [d.sisters !== null, { key: 'sisters', label: 'Sisters' }],
+      ]),
+      education: lacking([
+        [has(d.highestQualification), { key: 'highestQualification', label: 'Highest qualification' }],
+        [has(d.course), { key: 'course', label: 'Course' }],
+      ]),
+      occupation: lacking([
+        [has(d.occupationStatus), { key: 'occupationStatus', label: 'Occupation status' }],
+      ]),
+      preferences: lacking([
+        [has(d.preferredAgeMin), { key: 'preferredAgeMin', label: 'Preferred age' }],
+        [has(d.preferredHeightMinCm), { key: 'preferredHeightMinCm', label: 'Preferred height' }],
+      ]),
+      identity: lacking([
+        [Boolean(profile.governmentIdHash), { key: 'governmentId', label: 'Government ID' }],
+      ]),
     };
 
     const sections = REQUIRED_SECTIONS.map((section) => ({
       section,
-      complete: done[section],
+      complete: missingFields[section].length === 0,
       label: SECTION_LABEL[section],
+      missingFields: missingFields[section],
     }));
     const missing = sections.filter((s) => !s.complete).map((s) => s.section);
 
@@ -1230,6 +1281,12 @@ export class ProfileDetailsService {
     }
     if (stewards && !owns && !stewardMayEditBiodata(profile, actor.userId)) {
       throw new ForbiddenException(CLOSED_ENGAGEMENT_MESSAGE);
+    }
+    // A family account's own profile holds the parent's or guardian's details.
+    // The biodata is for the bride or groom they manage, never for themselves,
+    // so it is written on that relative's profile instead.
+    if (actor.role === UserRole.FAMILY && owns && !stewards) {
+      throw new ForbiddenException(FAMILY_OWN_BIODATA_MESSAGE);
     }
 
     const existing = await this.details.findOne({ where: { profileId } });
