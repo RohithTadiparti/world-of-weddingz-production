@@ -11,6 +11,14 @@ export const CAPACITY_METRIC_KEYS = [
   'railwayMonthlyInr',
 ] as const;
 
+/**
+ * Source recorded for a metric whose value is the canonical configuration
+ * estimate rather than a measurement (operations.measurements.*). The
+ * dashboard reads it to label the value an estimate, or "not measured" when
+ * the estimate is the 0 placeholder.
+ */
+export const CONFIGURED_ESTIMATE_SOURCE = 'Canonical configured Railway estimate';
+
 export type CapacityMetricKey = (typeof CAPACITY_METRIC_KEYS)[number];
 export type CapacityUnit = 'count' | 'GB' | 'ms' | 'percent' | 'INR/month';
 

@@ -16,7 +16,9 @@ import {
   TrendUp,
 } from '@phosphor-icons/react';
 import { api } from '../../lib/api';
-import { BOOKING_STATUS_LABEL } from '../../lib/permissions';
+import { BOOKING_STATUS_LABEL, Permission, can } from '../../lib/permissions';
+import { usePermissions } from '../../store/auth';
+import InfrastructureSummary from '../../components/admin/infrastructure/InfrastructureSummary';
 import { ActivityFeed } from '../../components/AdminConsole';
 import { AnimatedCard, AnimatedCounter } from '../../components/ui/Motion';
 
@@ -60,6 +62,8 @@ interface Analytics {
  * the move to routes.
  */
 export default function AdminDashboard() {
+  const permissions = usePermissions();
+  const seesInfrastructure = can(permissions, Permission.ADMIN_INFRASTRUCTURE_READ);
   const { data: analytics } = useQuery({
     queryKey: ['analytics'],
     queryFn: async () => (await api.get('/admin/analytics')).data as Analytics,
@@ -125,6 +129,8 @@ export default function AdminDashboard() {
               <div key={i} className="card h-[104px] animate-pulse bg-surface-sunken" />
             ))}
       </div>
+
+      {seesInfrastructure && <InfrastructureSummary />}
 
       {analytics?.escrow && <RevenueOverview escrow={analytics.escrow} />}
 

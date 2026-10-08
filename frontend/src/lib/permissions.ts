@@ -82,6 +82,8 @@ export const Permission = {
   ADMIN_CONTACT_REVEAL: 'admin:contact:reveal',
   CATALOG_MANAGE: 'catalog:manage',
   ADMIN_INFRASTRUCTURE_READ: 'admin:infrastructure:read',
+  /** Reserved for the protected migration action (MIG-001, AUTH-001). */
+  ADMIN_INFRASTRUCTURE_MIGRATE: 'admin:infrastructure:migrate',
 } as const;
 
 export type PermissionValue = (typeof Permission)[keyof typeof Permission];

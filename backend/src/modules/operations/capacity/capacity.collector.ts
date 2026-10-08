@@ -5,6 +5,7 @@ import { AppConfigService } from '../../../config/app-config.service';
 import { CapacitySnapshot } from '../entities/capacity-snapshot.entity';
 import {
   CapacityMetric,
+  CONFIGURED_ESTIMATE_SOURCE,
   METRIC_UNITS,
   RUNTIME_CAPACITY_PROVIDER,
   RuntimeCapacityProvider,
@@ -54,7 +55,7 @@ export class CapacityCollector {
       metric(
         'railwayMonthlyInr',
         this.config.operations.measurements.railwayMonthlyInr,
-        'Canonical configured Railway estimate',
+        CONFIGURED_ESTIMATE_SOURCE,
       ),
     ];
     try {
