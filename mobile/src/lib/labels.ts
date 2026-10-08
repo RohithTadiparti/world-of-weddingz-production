@@ -97,7 +97,7 @@ export function ageText(age: number | null | undefined, ageRange?: string | null
 
 /** Who answers for a profile, as the server describes it. Null when self-managed. */
 export interface Stewardship {
-  kind: 'family' | 'agency';
+  kind: 'family' | 'agency' | 'steward';
   label: string;
   relation: string | null;
 }

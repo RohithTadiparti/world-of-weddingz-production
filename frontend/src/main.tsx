@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import CallProvider from './components/CallProvider';
 import HeartField from './components/HeartField';
+import './fonts';
 import './index.css';
 import { initTheme } from './store/theme';
 

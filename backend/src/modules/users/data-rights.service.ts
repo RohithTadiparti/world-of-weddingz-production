@@ -14,7 +14,15 @@ import { Booking } from '../bookings/entities/booking.entity';
 import { Invitation } from '../invitations/entities/invitation.entity';
 import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
-import { BookingStatus, ProfileClaimStatus, ProfileLifecycle } from '../../common/enums';
+import { Vendor } from '../vendors/entities/vendor.entity';
+import { PlannerProfile } from '../wedding-planners/entities/planner-profile.entity';
+import { revokeAllAccess } from '../auth/sessions.service';
+import {
+  BookingStatus,
+  ProfileClaimStatus,
+  ProfileLifecycle,
+  ProviderType,
+} from '../../common/enums';
 
 /**
  * How long an unclaimed profile may sit before it is purged.
@@ -25,6 +33,20 @@ import { BookingStatus, ProfileClaimStatus, ProfileLifecycle } from '../../commo
  * retention limit rather than a gesture.
  */
 const UNCLAIMED_RETENTION_DAYS = 730;
+
+/** Booking states with nothing left to happen. Every other state blocks erasure. */
+const TERMINAL_BOOKING_STATUSES: readonly BookingStatus[] = [
+  BookingStatus.COMPLETED,
+  BookingStatus.CANCELLED,
+];
+
+/**
+ * Derived rather than listed, so a state added to BookingStatus later blocks
+ * erasure by default instead of silently letting it through.
+ */
+export const OPEN_BOOKING_STATUSES: BookingStatus[] = Object.values(BookingStatus).filter(
+  (status) => !TERMINAL_BOOKING_STATUSES.includes(status),
+);
 
 /**
  * Export and erasure.
@@ -53,6 +75,8 @@ export class DataRightsService {
     @InjectRepository(Interest) private readonly interests: Repository<Interest>,
     @InjectRepository(Booking) private readonly bookings: Repository<Booking>,
     @InjectRepository(Invitation) private readonly invitations: Repository<Invitation>,
+    @InjectRepository(Vendor) private readonly vendors: Repository<Vendor>,
+    @InjectRepository(PlannerProfile) private readonly planners: Repository<PlannerProfile>,
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
   ) {}
@@ -121,10 +145,11 @@ export class DataRightsService {
   /**
    * Erases the personal record, keeping only what must survive.
    *
-   * Refused while money is in flight. Deleting the buyer of a booking with
-   * escrow held would strand real money with nobody to return it to, and "we
-   * deleted you and kept your fifty thousand rupees" is not a defensible
-   * outcome for anybody.
+   * Refused while any booking is still open, on either side. Deleting the
+   * buyer of a booking with escrow held would strand real money with nobody to
+   * return it to, and "we deleted you and kept your fifty thousand rupees" is
+   * not a defensible outcome for anybody; an unanswered request or quotation
+   * would leave the other party waiting on an account that no longer exists.
    */
   async erase(actor: AuthUser, password: string): Promise<{ erased: true }> {
     const user = await this.users.findOne({
@@ -136,20 +161,7 @@ export class DataRightsService {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new BadRequestException('Password is not correct');
 
-    const live = await this.bookings.count({
-      where: {
-        userId: actor.userId,
-        status: In([
-          BookingStatus.PAYMENT_PENDING,
-          BookingStatus.PENDING,
-          BookingStatus.CONFIRMED,
-          BookingStatus.IN_PROGRESS,
-          BookingStatus.COMPLETED_PENDING_FINAL_PAYMENT,
-          BookingStatus.DISPUTED,
-        ]),
-      },
-    });
-    if (live > 0) {
+    if (await this.hasOpenBookings(actor.userId)) {
       throw new BadRequestException(
         'You have bookings still in progress. Settle or cancel them before deleting your account.',
       );
@@ -188,6 +200,10 @@ export class DataRightsService {
         mfaSecret: null,
         phoneVerifiedAt: null,
       });
+
+      // Sign the shell out everywhere: an access or refresh token issued before
+      // the erasure must not keep working against an account that is gone.
+      await revokeAllAccess(manager, actor.userId, 'account erased');
     });
 
     await this.audit.record({
@@ -199,6 +215,39 @@ export class DataRightsService {
     });
 
     return { erased: true };
+  }
+
+  /**
+   * Any booking not yet finished, on either side of it: as the customer (or
+   * the person who placed it for them), or as the owner of the vendor or
+   * planner listing that was booked. A request that has not been priced yet
+   * still leaves a provider waiting on somebody who would no longer exist.
+   */
+  private async hasOpenBookings(userId: string): Promise<boolean> {
+    const open = In(OPEN_BOOKING_STATUSES);
+
+    const asCustomer = await this.bookings.count({
+      where: [
+        { userId, status: open },
+        { bookedByUserId: userId, status: open },
+      ],
+    });
+    if (asCustomer > 0) return true;
+
+    const [vendors, planners] = await Promise.all([
+      this.vendors.find({ where: { ownerUserId: userId }, select: ['id'] }),
+      this.planners.find({ where: { ownerUserId: userId }, select: ['id'] }),
+    ]);
+    const listings = [
+      ...vendors.map((v) => ({ providerType: ProviderType.VENDOR, id: v.id })),
+      ...planners.map((p) => ({ providerType: ProviderType.PLANNER, id: p.id })),
+    ];
+    if (!listings.length) return false;
+
+    const asProvider = await this.bookings.count({
+      where: listings.map((l) => ({ providerType: l.providerType, providerId: l.id, status: open })),
+    });
+    return asProvider > 0;
   }
 
   /**

@@ -11,7 +11,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape } from '../../../common/decorators/uploaded-url.decorator';
 import {
   MOBILE_MESSAGE,
   MOBILE_PATTERN,
@@ -59,7 +59,8 @@ export class UpsertAgencyDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(10)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   pictures?: string[];
 
   @ApiPropertyOptional({ maxLength: 2000 })

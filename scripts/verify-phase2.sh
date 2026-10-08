@@ -51,13 +51,6 @@ assert() {
 jqok() { jq -e "$1" /tmp/body >/dev/null 2>&1 && echo 1 || echo 0; }
 field() { jq -r ".$2 // empty" "$1"; }
 
-# Three photographs before the details. A biodata with no picture is one
-# nobody looks at, so the section that starts the form now requires them.
-seed_photos() { # seed_photos <profileId> <token>
-  for n in 1 2 3; do
-    req POST "/profiles/$1/details/photos" "{\"url\":\"https://cdn.example.com/seed-$1-$n.jpg\"}" "$2" >/dev/null
-  done
-}
 
 
 # An Aadhaar number carries a Verhoeff check digit and is unique platform-wide
@@ -73,7 +66,9 @@ seed_photos() { # seed_photos <profileId> <token>
 # Aadhaar endpoint, which was correct all along. The table is now indexed with
 # substr() out of one string per row so a row can be read against the standard
 # at a glance, and the permutation table is generated rather than typed.
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 AADHAAR_BODY="2$(date +%s | tail -c 8)$(printf '%03d' $(( $$ % 1000 )))"
 AADHAAR="${AADHAAR_BODY}$(verhoeff "$AADHAAR_BODY")"
@@ -126,11 +121,13 @@ GROOM_PROFILE=$(field /tmp/body id)
 
 echo
 echo "== 2. The account's own profile redisplays what was saved =="
-c=$(req PUT /users/me/profile '{"displayName":"Bride Kumari","address":"14 Banjara Hills, Hyderabad 500034","contactPhone":"9876500011"}' "$BRIDE")
+# Mobiles are unique across profiles, so a fixed number collides on a rerun.
+ALT_MOBILE=$(fixture_phone)
+c=$(req PUT /users/me/profile "{\"displayName\":\"Bride Kumari\",\"address\":\"14 Banjara Hills, Hyderabad 500034\",\"contactPhone\":\"$ALT_MOBILE\"}" "$BRIDE")
 check "address and an alternate mobile save" "$c" 200
 c=$(req GET /users/me "" "$BRIDE")
 assert "the address reads back" "$(jqok '.address == "14 Banjara Hills, Hyderabad 500034"')"
-assert "and the mobile came back in E.164" "$(jqok '.contactPhone == "+919876500011"')"
+assert "and the mobile came back in E.164" "$(jqok ".contactPhone == \"+91$ALT_MOBILE\"")"
 
 c=$(req PUT /users/me/profile '{"displayName":"Bride 99"}' "$BRIDE")
 check "a name with digits in it is refused" "$c" 400
@@ -267,9 +264,16 @@ echo
 echo "== 10. Chat: an accepted match is reachable before a word is said =="
 # The bride verified in section 6. The groom has to as well before he can
 # accept — which is the gate under test, so it is asserted rather than assumed.
+# The target's biodata has to be complete too; an incomplete one is answered
+# like a private profile.
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\"}" "$BRIDE")
+check "an interest to an incomplete biodata is refused" "$c" 403
+complete_biodata "$GROOM_PROFILE" "$GROOM" Groom Reddy
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\"}" "$BRIDE")
 check "the bride sends an interest" "$c" 201
 INTEREST=$(field /tmp/body id)
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\"}" "$BRIDE")
+check "sending it again is a conflict, not a second interest" "$c" 409
 c=$(req PUT "/matches/$INTEREST/accept" '{}' "$GROOM")
 check "an unverified profile cannot accept an interest" "$c" 403
 assert "and is told why, not just refused" \
@@ -298,6 +302,12 @@ c=$(req PUT "/chat/messages/read?withUserId=$BRIDE_ID" '{}' "$GROOM")
 check "opening the thread marks it read" "$c" 200
 c=$(req GET /chat/conversations "" "$GROOM")
 assert "and the badge clears" "$(jqok '[.[] | select(.unread > 0)] | length == 0')"
+
+# Housekeeping never creates a conversation: with nobody to talk to there is
+# no thread to mark, mute or clear.
+VENDOR_ID=$(jq -r '.user.id' /tmp/vendor.json)
+c=$(req PUT "/chat/messages/read?withUserId=$VENDOR_ID" '{}' "$GROOM")
+check "marking a thread that does not exist is not found" "$c" 404
 
 c=$(req GET "/chat/presence?withUserId=$BRIDE_ID" "" "$GROOM")
 check "presence reads" "$c" 200
@@ -358,10 +368,14 @@ assert "and nothing below fifty percent is recommended" "$(jqok '[.data[] | sele
 
 echo
 echo "== 14. A dispute says which money and shows its proof =="
-c=$(req POST /verification/cases "{\"subjectType\":\"booking\",\"subjectId\":\"$FAKE_BOOKING\",\"title\":\"No show\",\"description\":\"Nobody arrived on the day and the calls went unanswered.\",\"milestone\":\"advance\",\"evidence\":[\"https://cdn.example.com/receipt.jpg\"]}" "$BRIDE")
+RECEIPT=$(upload_media "$BRIDE" receipt.jpg /media/attachment/presign)
+HALL=$(upload_media "$BRIDE" hall.jpg /media/attachment/presign)
+INVOICE=$(upload_media "$BRIDE" invoice.pdf /media/attachment/presign)
+OTHER_DOC=$(upload_media "$GROOM" other.pdf /media/attachment/presign)
+c=$(req POST /verification/cases "{\"subjectType\":\"booking\",\"subjectId\":\"$FAKE_BOOKING\",\"title\":\"No show\",\"description\":\"Nobody arrived on the day and the calls went unanswered.\",\"milestone\":\"advance\",\"evidence\":[\"$RECEIPT\"]}" "$BRIDE")
 check "a dispute against an unknown booking is refused" "$c" 404
 
-c=$(req POST /verification/cases '{"subjectType":"vendor","title":"Listing is not what it claims","description":"The hall in the photographs is not the hall we were shown.","evidence":["https://cdn.example.com/hall.jpg"]}' "$BRIDE")
+c=$(req POST /verification/cases "{\"subjectType\":\"vendor\",\"title\":\"Listing is not what it claims\",\"description\":\"The hall in the photographs is not the hall we were shown.\",\"evidence\":[\"$HALL\"]}" "$BRIDE")
 check "a dispute is raised with evidence attached" "$c" 201
 CASE=$(field /tmp/body id)
 assert "the evidence is stored" "$(jqok '.evidence | length == 1')"
@@ -369,14 +383,18 @@ assert "and it is not yet escalated" "$(jqok '.requiresPhysicalVerification == f
 
 c=$(req POST /verification/cases '{"subjectType":"vendor","title":"Bad link","description":"This description is long enough to pass.","evidence":["not-a-url"]}' "$BRIDE")
 check "evidence that is not a URL is refused" "$c" 400
+# A well-formed address somewhere else is not an upload: only what the
+# platform's own storage handed out is stored (ISS-06).
+c=$(req POST /verification/cases '{"subjectType":"vendor","title":"Hotlink","description":"This description is long enough to pass.","evidence":["https://cdn.example.com/hall.jpg"]}' "$BRIDE")
+check "and so is evidence hosted somewhere else" "$c" 400
 c=$(req POST /verification/cases '{"subjectType":"booking","title":"Late","description":"Long enough to pass validation.","milestone":"sideways"}' "$BRIDE")
 check "an unknown milestone is refused" "$c" 400
 
-c=$(req PUT "/verification/cases/$CASE/evidence" '{"evidence":["https://cdn.example.com/invoice.pdf"]}' "$BRIDE")
+c=$(req PUT "/verification/cases/$CASE/evidence" "{\"evidence\":[\"$INVOICE\"]}" "$BRIDE")
 check "more evidence can be added later" "$c" 200
 assert "and it is added rather than replacing what was there" "$(jqok '.evidence | length == 2')"
 
-c=$(req PUT "/verification/cases/$CASE/evidence" '{"evidence":["https://cdn.example.com/other.pdf"]}' "$GROOM")
+c=$(req PUT "/verification/cases/$CASE/evidence" "{\"evidence\":[\"$OTHER_DOC\"]}" "$GROOM")
 check "somebody else cannot add to your case" "$c" 403
 
 c=$(req PUT "/verification/cases/$CASE/escalate" '{"reason":"short"}' "$ADMIN")
@@ -427,7 +445,7 @@ seed_photos "$BIO_P" "$BIO"
 c=$(req PUT "/profiles/$BIO_P/details/personal" '{"firstName":"Asha","lastName":"Rao","heightCm":162,"complexion":"fair","communicationAddress":"12 MG Road, Hyderabad","alternateMobile":"9876543210","residence":{"city":"Hyderabad"}}' "$BIO")
 check "and accepted once they are" "$c" 200
 
-c=$(req PUT "/profiles/$BIO_P/details/religion" '{"religion":"hindu","caste":"Reddy","subCaste":"Ontari","motherTongue":"Telugu"}' "$BIO")
+c=$(req PUT "/profiles/$BIO_P/details/religion" '{"religion":"hindu","caste":"Reddy","subCaste":"Pakanati Reddy","motherTongue":"Telugu"}' "$BIO")
 check "religion saves" "$c" 200
 c=$(req PUT "/profiles/$BIO_P/details/horoscope" '{"horoscopeAvailable":true,"rashi":"Mesha","star":"Ashwini","padam":"2","gothram":"Kashyapa","kujaDosham":"No","timeOfBirth":"04:35"}' "$BIO")
 check "the horoscope saves, gothram and all" "$c" 200
@@ -464,7 +482,8 @@ check "and so is an invented family status" "$c" 400
 # the same screen, because that is where a family has it to hand.
 c=$(req POST /media/attachment/presign '{"filename":"chart.pdf"}' "$BIO")
 check "an upload slot for the chart is issued" "$c" 201
-CHART=$(field /tmp/body publicUrl)
+# Stored only once the file is really there: presign, PUT, confirm.
+CHART=$(upload_media "$BIO" chart.pdf /media/attachment/presign)
 c=$(req PUT "/profiles/$BIO_P/details/preferences" "{\"preferredAgeMin\":24,\"preferredAgeMax\":34,\"preferredHeightMinCm\":150,\"preferredHeightMaxCm\":190,\"horoscopeExpectation\":\"required\",\"kujaDosham\":\"must_match\",\"preferredStars\":\"Ashwini\",\"horoscopeDocumentUrl\":\"$CHART\"}" "$BIO")
 check "horoscope expectations save with the preferences" "$c" 200
 c=$(req GET "/profiles/$BIO_P/details" "" "$BIO")

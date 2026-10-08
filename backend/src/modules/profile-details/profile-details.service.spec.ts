@@ -1,7 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { SuggestionsQueryDto } from '../matchmaking/dto/matchmaking.dto';
 import { Repository } from 'typeorm';
-import { ProfileDetailsService } from './profile-details.service';
+import { FAMILY_NET_WORTH_GROOM_ONLY, ProfileDetailsService } from './profile-details.service';
 import { ProfileDetails } from './entities/profile-details.entity';
 import { ProfileSibling } from './entities/profile-sibling.entity';
 import { ProfileAsset } from './entities/profile-asset.entity';
@@ -440,11 +440,53 @@ describe('ProfileDetailsService section saves', () => {
         sisters: 0,
         familyNetWorth: 7500000,
         familyNetWorthVisible: true,
-        // familyNetWorth deliberately omitted — must not throw
       } as unknown as FamilyDetailsDto),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({
+      familyNetWorth: null,
+      familyNetWorthVisible: false,
+      // Not silent: the response says which fields were not kept, and why.
+      ignoredFields: ['familyNetWorth', 'familyNetWorthVisible'],
+      notice: FAMILY_NET_WORTH_GROOM_ONLY,
+    });
 
     expect(stored).toMatchObject({ familyType: FamilyType.NUCLEAR, familyNetWorth: null, familyNetWorthVisible: false });
+    expect(stored).not.toHaveProperty('ignoredFields');
+  });
+
+  it('says nothing extra when a bride-side save leaves net worth out, as the forms do', async () => {
+    profile.gender = 'female';
+    const saved = await service.saveFamily(owner, 'p1', {
+      father: { name: 'Ravi Rao' },
+      mother: { name: 'Lata Rao' },
+      familyType: FamilyType.NUCLEAR,
+      familyStatus: 'middle_class',
+      brothers: 2,
+      sisters: 0,
+    } as unknown as FamilyDetailsDto);
+    expect(saved).not.toHaveProperty('ignoredFields');
+    expect(saved).not.toHaveProperty('notice');
+  });
+
+  it("keeps a groom's net worth visibility when a save does not send it", async () => {
+    profile.gender = 'male';
+    const base = {
+      father: { name: 'Ravi Rao' },
+      mother: { name: 'Lata Rao' },
+      familyType: FamilyType.NUCLEAR,
+      familyStatus: 'middle_class',
+      brothers: 0,
+      sisters: 1,
+      familyNetWorth: 7500000,
+    } as unknown as FamilyDetailsDto;
+
+    await service.saveFamily(owner, 'p1', { ...base, familyNetWorthVisible: true });
+    // The app's form sends the figure without the switch.
+    await expect(service.saveFamily(owner, 'p1', base)).resolves.toMatchObject({
+      familyNetWorthVisible: true,
+    });
+    await expect(
+      service.saveFamily(owner, 'p1', { ...base, familyNetWorthVisible: false }),
+    ).resolves.toMatchObject({ familyNetWorthVisible: false });
   });
 
   it('validates employment and business on an education save without an occupation', async () => {

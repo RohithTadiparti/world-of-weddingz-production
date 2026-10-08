@@ -8,7 +8,7 @@ import { AppConfigService } from '../src/config/app-config.service';
 import { User } from '../src/modules/auth/entities/user.entity';
 import { Profile } from '../src/modules/users/entities/profile.entity';
 import { ProfileDetails } from '../src/modules/profile-details/entities/profile-details.entity';
-import { UserRole } from '../src/common/enums';
+import { FamilyType, MaritalStatus, UserRole } from '../src/common/enums';
 
 // Uses the repository's isolated PostgreSQL/Redis test stack, with authenticated
 // fixtures so a signup-policy change cannot hide matchmaking regressions.
@@ -46,6 +46,17 @@ describe('Package Range API', () => {
       if (role === UserRole.GROOM) { candidate = profile; candidateToken = token; }
       else actors.push({ token, profile });
     }
+    // Only a profile with a complete biodata is suggested (ISS-08), so the
+    // candidate gets every section but education, which the test itself saves.
+    await profiles.update(candidate.id, { photos: [1, 2, 3].map((n) => `https://cdn.example.com/package-${n}.jpg`) });
+    const details = db.getRepository(ProfileDetails);
+    await details.save(details.create({
+      profileId: candidate.id, firstName: 'Package', lastName: 'Test', heightCm: 175, complexion: 'Fair',
+      communicationAddress: 'Mumbai', religion: 'Hindu', caste: 'Kamma', motherTongue: 'Telugu',
+      horoscopeAvailable: false, maritalStatus: MaritalStatus.NEVER_MARRIED, father: { name: 'Ramesh' },
+      mother: { name: 'Lakshmi' }, familyType: FamilyType.NUCLEAR, familyNetWorth: '10000000', brothers: 0, sisters: 0,
+      preferredAgeMin: 24, preferredHeightMinCm: 150,
+    }));
   }, 60000);
 
   afterAll(async () => {

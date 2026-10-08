@@ -211,3 +211,36 @@ export function paymentBreakup(total: string, payments: PaymentLike[]): PaymentB
     vendorEarnings: major(earnings),
   };
 }
+
+/**
+ * Where a booking's agreed price came from (ISS-18).
+ *
+ * - `quotation`: a quotation the customer accepted.
+ * - `listed`: a published service package, accepted as shown.
+ * - `budget`: the customer's stated budget, accepted by the provider.
+ * - `direct`: an amount set on the request itself, with no service, package
+ *   or quotation behind it.
+ * - `null`: nothing is agreed yet.
+ *
+ * `listedPrice` used to be "priced, and not by a quotation", which called an
+ * amount-only booking with no service or package a listed price.
+ */
+export type PriceSource = 'quotation' | 'listed' | 'budget' | 'direct' | null;
+
+export interface PriceSourceInput {
+  amount: string;
+  baseAmount?: string | null;
+  offeringId?: string | null;
+  estimatedAmount?: string | null;
+  expectedBudget?: string | null;
+  hasAcceptedQuotation: boolean;
+}
+
+export function priceSource(b: PriceSourceInput): PriceSource {
+  if (b.hasAcceptedQuotation) return 'quotation';
+  if (!(Number(b.amount) > 0)) return null;
+  if (b.offeringId && Number(b.estimatedAmount ?? 0) > 0) return 'listed';
+  const base = Number(b.baseAmount ?? b.amount);
+  if (Number(b.expectedBudget ?? 0) > 0 && base === Number(b.expectedBudget)) return 'budget';
+  return 'direct';
+}

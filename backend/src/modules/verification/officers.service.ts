@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from '../auth/entities/user.entity';
+import { revokeAllAccess } from '../auth/sessions.service';
 import { Profile } from '../users/entities/profile.entity';
 import { CreateOfficerDto, SetAvailabilityDto } from './dto/officer.dto';
 import {
@@ -16,6 +17,7 @@ import { MailService } from '../../platform/mail/mail.service';
 import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { generateTemporaryPassword } from '../../common/util/passwords';
+import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 import { OfficerAvailabilityStatus, ProfileClaimStatus, UserRole } from '../../common/enums';
 
 export interface OfficerView {
@@ -164,9 +166,15 @@ export class OfficersService {
     });
     const availByUser = new Map(avail.map((a) => [a.officerUserId, a]));
 
-    return people.map((o) =>
-      this.view(o, byUser.get(o.id) ?? o.email ?? o.phone ?? o.id, availByUser.get(o.id)),
-    );
+    // A roster is an administrator list: contact details masked (ISS-11).
+    return people.map((o) => {
+      const masked = { ...o, email: maskEmail(o.email), phone: maskPhone(o.phone) } as User;
+      return this.view(
+        masked,
+        byUser.get(o.id) ?? masked.email ?? masked.phone ?? o.id,
+        availByUser.get(o.id),
+      );
+    });
   }
 
   /**
@@ -180,8 +188,14 @@ export class OfficersService {
       throw new BadRequestException('That account is not a verification officer');
     }
 
+    const wasActive = officer.isActive;
     officer.isActive = isActive;
-    await this.users.save(officer);
+    await this.users.manager.transaction(async (manager) => {
+      await manager.save(officer);
+      // A suspended officer is signed out everywhere, and stays signed out
+      // after reinstatement until they sign in again.
+      if (wasActive && !isActive) await revokeAllAccess(manager, officer.id, 'account suspended');
+    });
     await this.audit.record({
       action: AuditAction.OFFICER_CREATED,
       actor,

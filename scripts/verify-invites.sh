@@ -48,7 +48,9 @@ field() { jq -r ".$2 // empty" "$1"; }
 # Identity verification now gates sending an interest, accepting one and
 # fixing a match. Every persona that does any of those has to go through it
 # first — the gate itself is asserted in verify-phase2.
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 
 # Phone is the duplicate key for an agency-built profile, and the check is
@@ -132,7 +134,10 @@ check "an incomplete profile cannot browse matches" "$c" 403
 # defaults, same-city plus a 2-year age gap does not reach it. Matching
 # religion, education and lifestyle takes the pair well over the threshold.
 PREFS='{"religion":"hindu","education":"masters","lifestyle":["vegetarian","non-smoker"]}'
-req PUT /users/me/profile "{\"displayName\":\"Solo\",\"gender\":\"female\",\"dateOfBirth\":\"1996-06-15\",\"city\":\"Hyderabad\",\"visibility\":\"public\",\"preferences\":$PREFS,\"photos\":[\"https://cdn.example.com/s1.jpg\",\"https://cdn.example.com/s2.jpg\"]}" "$SOLO" >/dev/null
+# Photographs are real uploads: a URL from anywhere else is refused.
+S1=$(upload_media "$SOLO" s1.jpg)
+S2=$(upload_media "$SOLO" s2.jpg)
+req PUT /users/me/profile "{\"displayName\":\"Solo\",\"gender\":\"female\",\"dateOfBirth\":\"1996-06-15\",\"city\":\"Hyderabad\",\"visibility\":\"public\",\"preferences\":$PREFS,\"photos\":[\"$S1\",\"$S2\"]}" "$SOLO" >/dev/null
 
 c=$(req GET /matches/suggestions "" "$SOLO")
 check "solo user browses matches unaided once the profile is complete" "$c" 200
@@ -161,17 +166,22 @@ check "admin approves the agency" "$c" 200
 
 echo
 echo "== 4. Agent builds a profile for someone with NO account =="
-c=$(req POST /agents/profiles "{\"displayName\":\"Priya\",\"contactEmail\":\"priya-$STAMP@t.com\",\"contactPhone\":\"$(phone 004)\",\"gender\":\"female\",\"dateOfBirth\":\"1997-04-12\",\"city\":\"Hyderabad\",\"bio\":\"Loves classical music.\",\"photos\":[\"https://cdn.example.com/a.jpg\",\"https://cdn.example.com/b.jpg\"],$CONSENT}" "$AGENT")
+PA=$(upload_media "$AGENT" a.jpg)
+PB=$(upload_media "$AGENT" b.jpg)
+c=$(req POST /agents/profiles "{\"displayName\":\"Priya\",\"contactEmail\":\"priya-$STAMP@t.com\",\"contactPhone\":\"$(phone 004)\",\"gender\":\"female\",\"dateOfBirth\":\"1997-04-12\",\"city\":\"Hyderabad\",\"bio\":\"Loves classical music.\",\"photos\":[\"$PA\",\"$PB\"],$CONSENT}" "$AGENT")
 check "agent creates a profile with photos and details" "$c" 201
 cp /tmp/body /tmp/managed.json
 MANAGED=$(field /tmp/managed.json id)
 grep -q '"userId":null' /tmp/managed.json && assert "the profile has no account behind it" 1 || assert "the profile has no account behind it" 0
 grep -q '"claimStatus":"unclaimed"' /tmp/managed.json && assert "profile is unclaimed" 1 || assert "profile is unclaimed" 0
 
-c=$(req POST "/agents/profiles/$MANAGED/photos" '{"url":"https://cdn.example.com/c.jpg"}' "$AGENT")
+PC=$(upload_media "$AGENT" c.jpg)
+c=$(req POST "/agents/profiles/$MANAGED/photos" "{\"url\":\"$PC\"}" "$AGENT")
 check "agent adds another photo" "$c" 201
 c=$(req POST "/agents/profiles/$MANAGED/photos" '{"url":"not-a-url"}' "$AGENT")
 check "a non-url photo is rejected" "$c" 400
+c=$(req POST "/agents/profiles/$MANAGED/photos" '{"url":"https://cdn.example.com/c.jpg"}' "$AGENT")
+check "and so is a photo hosted anywhere but our own storage" "$c" 400
 
 # Email became optional when intake moved to phone-first: a walk-in family
 # hands over a number far more often than an address.
@@ -197,7 +207,11 @@ check "another agent cannot browse as it" "$c" 403
 GROOM_PROFILE=$(req GET /agents/profiles/actable "" "$GROOM" >/dev/null 2>&1; echo "")
 c=$(req GET /users/me "" "$GROOM")
 GP=$(field /tmp/body id)
-verify_identity "$GP" "$GROOM" >/dev/null
+# An interest needs a complete biodata on both sides and a verified identity
+# on the sending one (and on the accepting one, for the reply).
+req PUT /users/me/profile "{\"displayName\":\"Groom\",\"gender\":\"male\",\"dateOfBirth\":\"1994-03-02\",\"city\":\"Hyderabad\",\"visibility\":\"public\"}" "$GROOM" >/dev/null
+ready_for_interests "$GP" "$GROOM" Groom Reddy
+complete_biodata "$MANAGED" "$AGENT" Priya Sharma
 verify_identity "$MANAGED" "$AGENT" >/dev/null
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\",\"profileId\":\"$MANAGED\"}" "$AGENT")
 check "agent sends an interest FROM the unclaimed profile" "$c" 201
@@ -206,6 +220,8 @@ grep -q "\"fromProfileId\":\"$MANAGED\"" /tmp/body && assert "interest is keyed 
 
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\",\"profileId\":\"$MANAGED\"}" "$AGENT2")
 check "another agent cannot send from that profile" "$c" 403
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\",\"profileId\":\"$MANAGED\"}" "$AGENT")
+check "sending the same interest twice is a conflict" "$c" 409
 c=$(req PUT "/matches/$INTEREST/accept" "" "$GROOM")
 check "the recipient accepts the interest" "$c" 200
 
@@ -213,7 +229,9 @@ echo
 echo "== 6. Profile privacy in suggestions =="
 # SOLO's profile was completed at sign-in; the groom's is filled in here so the
 # pair actually score against each other.
-req PUT /users/me/profile "{\"displayName\":\"Groom\",\"gender\":\"male\",\"dateOfBirth\":\"1994-03-02\",\"city\":\"Hyderabad\",\"visibility\":\"public\",\"preferences\":$PREFS,\"photos\":[\"https://cdn.example.com/g1.jpg\",\"https://cdn.example.com/g2.jpg\"]}" "$GROOM" >/dev/null
+G1=$(upload_media "$GROOM" g1.jpg)
+G2=$(upload_media "$GROOM" g2.jpg)
+req PUT /users/me/profile "{\"displayName\":\"Groom\",\"gender\":\"male\",\"dateOfBirth\":\"1994-03-02\",\"city\":\"Hyderabad\",\"visibility\":\"public\",\"preferences\":$PREFS,\"photos\":[\"$G1\",\"$G2\"]}" "$GROOM" >/dev/null
 # GROOM has not fetched suggestions yet, so this is not served from the cache
 # that SOLO warmed up before the profiles had any detail on them.
 c=$(req GET /matches/suggestions "" "$GROOM")
@@ -286,7 +304,8 @@ else
     && assert "and can take it off their book" 1 \
     || assert "delete was withheld after the claim" 0
 
-  c=$(req POST "/agents/profiles/$MANAGED/photos" '{"url":"https://cdn.example.com/claimed.jpg"}' "$AGENT")
+  CLAIMED_PHOTO=$(upload_media "$AGENT" claimed.jpg)
+  c=$(req POST "/agents/profiles/$MANAGED/photos" "{\"url\":\"$CLAIMED_PHOTO\"}" "$AGENT")
   check "the server agrees: a photograph still goes on" "$c" 201
 
   c=$(req GET /agents/clients "" "$AGENT")
@@ -316,7 +335,7 @@ fi
 
 echo
 echo "== 8. Family members steward relatives, but run no agency =="
-c=$(req POST /agents/profiles "{\"displayName\":\"Relative\",\"contactEmail\":\"rel-$STAMP@t.com\",\"contactPhone\":\"$(phone 006)\",\"gender\":\"male\",$CONSENT}" "$FAMILY")
+c=$(req POST /agents/profiles "{\"displayName\":\"Relative\",\"contactEmail\":\"rel-$STAMP@t.com\",\"contactPhone\":\"$(phone 006)\",\"gender\":\"male\",\"stewardRelation\":\"Uncle\",$CONSENT}" "$FAMILY")
 check "a family account can build a relative profile" "$c" 201
 c=$(req PUT /agents/agency '{"agencyName":"Not An Agency"}' "$FAMILY")
 check "a family account cannot register an agency" "$c" 403
@@ -353,7 +372,7 @@ check "one user cannot revoke another user session" "$c" 401
 echo
 echo "== 11. Brute-force lockout =="
 LOCK_EMAIL="lock-$STAMP@t.com"
-c=$(req POST /auth/register "{\"email\":\"$LOCK_EMAIL\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"bride\",\"displayName\":\"Lock Me\"}")
+c=$(req POST /auth/register "{\"email\":\"$LOCK_EMAIL\",\"password\":\"Password123\",\"accountType\":\"individual\",\"role\":\"bride\",\"displayName\":\"Lock Me\",\"phone\":\"$(fixture_phone)\"}")
 check "target account created" "$c" 201
 
 # The login route is also IP rate-limited (10/min by design), and the checks

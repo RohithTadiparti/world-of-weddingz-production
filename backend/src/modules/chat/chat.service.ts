@@ -23,7 +23,7 @@ import {
   MatchFixedState,
   ThreadKind,
   UserRole,
-  isIndividual,
+  isMatchable,
   isProvider,
 } from '../../common/enums';
 import { ageBand, ageOf, profilePhotoOf } from '../users/dto/public-profile.dto';
@@ -220,10 +220,10 @@ export class ChatService {
   private async agentMatchKind(sender: User, recipient: User): Promise<ThreadKind | null> {
     let agent: User;
     let individual: User;
-    if (sender.role === UserRole.AGENT && isIndividual(recipient.role)) {
+    if (sender.role === UserRole.AGENT && isMatchable(recipient.role)) {
       agent = sender;
       individual = recipient;
-    } else if (recipient.role === UserRole.AGENT && isIndividual(sender.role)) {
+    } else if (recipient.role === UserRole.AGENT && isMatchable(sender.role)) {
       agent = recipient;
       individual = sender;
     } else {
@@ -291,9 +291,11 @@ export class ChatService {
       return ThreadKind.REPRESENTATION;
     }
 
-    // Individual to individual is always a match thread; acceptance is a
-    // separate question the caller decides.
-    if (isIndividual(sender.role) && isIndividual(recipient.role)) {
+    // Bride or groom to bride or groom is always a match thread; acceptance is
+    // a separate question the caller decides. A family account is not one: its
+    // own profile holds the parent's details and is never matched, so it has
+    // no match thread of its own to open.
+    if (isMatchable(sender.role) && isMatchable(recipient.role)) {
       return ThreadKind.MATCH;
     }
 
@@ -581,14 +583,17 @@ export class ChatService {
     otherProfile: Profile | undefined,
   ): Promise<{ kind: ThreadKind | null; context: ConversationContext | null }> {
     const kind = me && other ? this.classifyThread(me, other) : null;
-    const context = await this.contextFor(myProfile, otherProfile);
+    // A pair with no reason to talk has no match to describe, whatever interest
+    // rows still sit between their profiles.
+    const context =
+      me && other && kind === null ? null : await this.contextFor(myProfile, otherProfile);
 
     if (
       kind === ThreadKind.INQUIRY &&
       me &&
       other &&
       me.role === UserRole.AGENT &&
-      isIndividual(other.role) &&
+      isMatchable(other.role) &&
       otherProfile
     ) {
       const thread = await this.agentMatchThread(me.id, other.id);
@@ -776,6 +781,9 @@ export class ChatService {
   private async matchedButSilent(userId: string, alreadyListed: string[]): Promise<string[]> {
     const profile = await this.profiles.findOne({ where: { userId } });
     if (!profile) return [];
+    // Only a bride or groom has matches of their own to talk to.
+    const account = await this.users.findOne({ where: { id: userId }, select: ['id', 'role'] });
+    if (!account || !isMatchable(account.role)) return [];
 
     const accepted = await this.interests.find({
       where: [
@@ -791,9 +799,16 @@ export class ChatService {
     const others = await this.profiles.find({ where: { id: In(otherProfileIds) } });
 
     const seen = new Set(alreadyListed);
-    return others
+    const candidates = others
       .map((p) => p.userId)
       .filter((id): id is string => Boolean(id) && !seen.has(id as string));
+    if (candidates.length === 0) return [];
+    const accounts = await this.users.find({
+      where: { id: In(candidates) },
+      select: ['id', 'role'],
+    });
+    const matchable = new Set(accounts.filter((u) => isMatchable(u.role)).map((u) => u.id));
+    return candidates.filter((id) => matchable.has(id));
   }
 
   // ------------------------------------------------------- blocking
@@ -831,9 +846,35 @@ export class ChatService {
     return this.prefs.save(this.prefs.create({ userId, conversationId }));
   }
 
+  /**
+   * The direct (non-booking) thread this reader already has with somebody.
+   *
+   * Mute, clear, delete and read-mark are housekeeping on a thread that exists;
+   * they are never a way to start one. Creating the row here let any account
+   * mint an empty "match" conversation with anybody, around the gate that
+   * `send` and `history` apply, so these only ever look up. Threads are created
+   * by the gated paths alone. Deliberately not `assertCanChat`: a match whose
+   * acceptance was later withdrawn still sits in the list, locked, and its
+   * owner must still be able to mute, clear or remove it.
+   */
+  private async existingConversation(userId: string, withUserId: string): Promise<Conversation> {
+    if (userId === withUserId) {
+      throw new BadRequestException('You do not have a conversation with yourself');
+    }
+    const other = await this.users.findOne({ where: { id: withUserId }, select: ['id'] });
+    if (!other) throw new NotFoundException('User not found');
+
+    const [participantA, participantB] = this.key(userId, withUserId);
+    const convo = await this.conversations.findOne({
+      where: { participantA, participantB, bookingId: IsNull() },
+    });
+    if (!convo) throw new NotFoundException('You have no conversation with this account');
+    return convo;
+  }
+
   /** Stop this thread interrupting you. It still receives messages. */
   async setMuted(userId: string, withUserId: string, muted: boolean) {
-    const convo = await this.getOrCreateConversation(userId, withUserId);
+    const convo = await this.existingConversation(userId, withUserId);
     const pref = await this.preference(userId, convo.id);
     pref.muted = muted;
     await this.prefs.save(pref);
@@ -849,7 +890,7 @@ export class ChatService {
    * actually means: they want their screen empty, not the record gone.
    */
   async clear(userId: string, withUserId: string) {
-    const convo = await this.getOrCreateConversation(userId, withUserId);
+    const convo = await this.existingConversation(userId, withUserId);
     const pref = await this.preference(userId, convo.id);
     pref.clearedAt = new Date();
     await this.prefs.save(pref);
@@ -864,7 +905,7 @@ export class ChatService {
    * conversation reappearing.
    */
   async deleteConversation(userId: string, withUserId: string) {
-    const convo = await this.getOrCreateConversation(userId, withUserId);
+    const convo = await this.existingConversation(userId, withUserId);
     const pref = await this.preference(userId, convo.id);
     pref.deletedAt = new Date();
     // Deleting implies clearing: a thread that comes back should come back
@@ -1013,14 +1054,7 @@ export class ChatService {
    * their unread badge that has to clear.
    */
   async markRead(userId: string, withUserId: string): Promise<{ marked: number }> {
-    const convo = await this.conversations.findOne({
-      where: [
-        { participantA: userId, participantB: withUserId, bookingId: IsNull() },
-        { participantA: withUserId, participantB: userId, bookingId: IsNull() },
-      ],
-    });
-    if (!convo) return { marked: 0 };
-
+    const convo = await this.existingConversation(userId, withUserId);
     const result = await this.messages.update(
       { conversationId: convo.id, senderId: withUserId, readAt: IsNull() },
       { readAt: new Date() },

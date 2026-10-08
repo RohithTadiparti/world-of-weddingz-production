@@ -5,6 +5,7 @@ import { CheckCircle } from '@phosphor-icons/react';
 import { ProfileSilhouette } from './ProfileSilhouette';
 import { AnimatedCard, AnimatedHeart } from './ui/Motion';
 import { relationshipPresentation } from '../lib/individual-journey';
+import { cardStewardshipLine } from '../lib/profile-labels';
 
 /** Server-side privacy view: an age band, not a date of birth. */
 export interface PublicProfile {
@@ -50,6 +51,12 @@ export interface PublicProfile {
   };
   /** Which agency put this profile up. Null when the person registered themselves. */
   sourceAgency?: string | null;
+  /** Who answers for a managed profile; `label` already reads "Managed by …". */
+  stewardship?: {
+    kind: 'family' | 'agency' | 'steward';
+    label: string;
+    relation: string | null;
+  } | null;
 }
 
 export type InteractionState =
@@ -275,10 +282,11 @@ export default function MatchCard({
                 {p.profileCode}
               </span>
               {/* The bride/groom's own name is above; this says who runs the
-                  profile for them, when a family member does (EZ1-I132). */}
-              {p.managedByRelation && (
+                  profile for them (EZ1-I132) — a family member, or an agency
+                  whose name is not already on the "Added by" line below. */}
+              {cardStewardshipLine(p) && (
                 <span className="block text-[0.6875rem] text-gray-500">
-                  Managed by their {p.managedByRelation}
+                  {cardStewardshipLine(p)}
                 </span>
               )}
             </button>

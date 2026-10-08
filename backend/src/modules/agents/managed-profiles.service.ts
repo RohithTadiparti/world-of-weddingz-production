@@ -23,6 +23,7 @@ import { InvitationsService } from '../invitations/invitations.service';
 import { ConsentService } from '../circulation/consent.service';
 import { AgentBillingService } from './agent-billing.service';
 import { ModerationService } from '../../platform/moderation/moderation.service';
+import { assertNewMediaUploaded } from '../../platform/storage/kept-media';
 import { ConsentScope, FamilyType, MaritalStatus, NetworkVisibility, OccupationStatus, ProfileLifecycle, ProfileVisibility } from '../../common/enums';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
@@ -191,6 +192,7 @@ export class ManagedProfilesService {
     // Photographs handed over at intake are attached here rather than through
     // addPhoto, so they get addPhoto's check here: before the transaction, so
     // a refused photograph leaves no half-created profile behind.
+    assertNewMediaUploaded('photos', dto.photos, []);
     await this.moderation.assertGenuinePhotos(dto.photos, [], {
       userId: actor.userId,
       kind: 'managed_profile',
@@ -499,7 +501,9 @@ export class ManagedProfilesService {
     }
 
     // A full photo list in an edit is another way to attach one; only the
-    // photographs this profile does not already have are checked.
+    // photographs this profile does not already have are checked — for being
+    // an upload here as well as for being genuine.
+    assertNewMediaUploaded('photos', fields.photos, profile.photos);
     await this.moderation.assertGenuinePhotos(fields.photos, profile.photos, {
       userId: actor.userId,
       kind: 'managed_profile',

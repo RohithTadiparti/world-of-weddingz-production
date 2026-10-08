@@ -15,6 +15,7 @@ import { SupportCase } from '../verification/entities/support-case.entity';
 import { AdminBookingQueryDto, AdminTransactionQueryDto } from './dto/console.dto';
 import { PaymentStatus, ProviderType } from '../../common/enums';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
+import { maskEmail } from '../../common/util/pii-mask';
 import { serviceNamesByIds } from '../catalog/service-names';
 import { QuotationSummary, escrowSummary, summariseQuotations } from '../bookings/booking-summary';
 import { WeddingFacts, bookingContextOf } from '../bookings/booking-venue';
@@ -253,9 +254,10 @@ export class AdminBookingsService {
       this.quotations.find({ where: { bookingId: In(bookingIds) } }),
     ]);
 
-    // A buyer with no profile yet is still somebody: their email names them.
+    // A buyer with no profile yet is still somebody: their email names them,
+    // masked as on every administrator list (ISS-11).
     const buyerName = new Map<string, string>();
-    for (const u of buyers) if (u.email) buyerName.set(u.id, u.email);
+    for (const u of buyers) if (u.email) buyerName.set(u.id, maskEmail(u.email) as string);
     for (const p of profiles) if (p.userId && p.displayName) buyerName.set(p.userId, p.displayName);
     const vendorName = new Map(vendors.map((v) => [v.id, v.name]));
     const plannerName = new Map(planners.map((p) => [p.id, p.agencyName]));
@@ -346,7 +348,7 @@ export class AdminBookingsService {
         : Promise.resolve([]),
     ]);
     const buyerName = new Map<string, string>();
-    for (const u of buyers) if (u.email) buyerName.set(u.id, u.email);
+    for (const u of buyers) if (u.email) buyerName.set(u.id, maskEmail(u.email) as string);
     for (const p of profiles) if (p.userId && p.displayName) buyerName.set(p.userId, p.displayName);
     const providerName = new Map<string, string>([
       ...vendors.map((v) => [v.id, v.name] as [string, string]),

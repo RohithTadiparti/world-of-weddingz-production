@@ -109,25 +109,6 @@ export class VerificationQueryDto extends PaginationDto {
   officerUserId?: string;
 }
 
-export class CreateOfficerDto {
-  @ApiProperty({ example: 'officer@wow.example.com' })
-  @IsString()
-  @MaxLength(254)
-  email: string;
-
-  @ApiProperty({ example: 'Suresh Kumar', minLength: 2, maxLength: 120 })
-  @IsString()
-  @MinLength(2)
-  @MaxLength(120)
-  displayName: string;
-
-  @ApiPropertyOptional({ maxLength: 80 })
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  city?: string;
-}
-
 /**
  * What an officer writes up after a visit.
  *

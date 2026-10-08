@@ -79,6 +79,7 @@ export const Permission = {
   ADMIN_VENDOR_APPROVE: 'admin:vendor:approve',
   ADMIN_ANALYTICS_READ: 'admin:analytics:read',
   ADMIN_DISPUTE_RESOLVE: 'admin:dispute:resolve',
+  ADMIN_CONTACT_REVEAL: 'admin:contact:reveal',
   CATALOG_MANAGE: 'catalog:manage',
 } as const;
 

@@ -5,6 +5,7 @@ import {
   quotationStage,
   summariseQuotations,
   QuotationLike,
+  priceSource,
 } from './booking-summary';
 
 const quote = (
@@ -146,5 +147,28 @@ describe('escrow summary', () => {
       commission: '0.00',
       payout: '0.00',
     });
+  });
+});
+
+describe('priceSource', () => {
+  const base = { amount: '1000.00', hasAcceptedQuotation: false };
+
+  it('is not a listed price when no service or package was chosen', () => {
+    expect(priceSource({ ...base, offeringId: null, estimatedAmount: null })).toBe('direct');
+  });
+
+  it('is a listed price only when a package total was used', () => {
+    expect(priceSource({ ...base, offeringId: 'o1', estimatedAmount: '1000.00' })).toBe('listed');
+  });
+
+  it('recognises an accepted customer budget', () => {
+    expect(priceSource({ ...base, expectedBudget: '1000.00' })).toBe('budget');
+  });
+
+  it('prefers the accepted quotation, and is null before anything is agreed', () => {
+    expect(priceSource({ ...base, offeringId: 'o1', estimatedAmount: '900', hasAcceptedQuotation: true })).toBe(
+      'quotation',
+    );
+    expect(priceSource({ amount: '0.00', hasAcceptedQuotation: false, offeringId: 'o1', estimatedAmount: '9' })).toBeNull();
   });
 });

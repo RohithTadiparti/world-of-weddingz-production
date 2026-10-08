@@ -41,7 +41,7 @@ import { useMatchmakingGate } from "@/lib/matchmaking";
 import { useAuth } from "@/store/auth";
 import { rgb, space, useTheme, radius } from "@/theme";
 import { Txt, typeface } from "@/theme/fonts";
-import { ageText } from "@/lib/labels";
+import { ageText, stewardshipLine, type Stewardship } from "@/lib/labels";
 
 interface Profile {
   id: string;
@@ -52,6 +52,8 @@ interface Profile {
   city?: string | null;
   photos: string[];
   profileCode: string;
+  /** Who answers for a managed profile; the label already reads "Managed by …". */
+  stewardship?: Stewardship | null;
   card?: {
     religion: string | null;
     motherTongue: string | null;
@@ -524,6 +526,11 @@ function MatchCard({
         {profile.card?.profession ? (
           <Caption numberOfLines={1} style={{ fontSize: 11 }}>
             {profile.card.profession}
+          </Caption>
+        ) : null}
+        {stewardshipLine(profile.stewardship) ? (
+          <Caption numberOfLines={1} style={{ fontSize: 11 }}>
+            {stewardshipLine(profile.stewardship)}
           </Caption>
         ) : null}
         <View

@@ -76,7 +76,7 @@ describe('AuthService', () => {
     create: jest.fn(async () => ({ id: 'sess-1' })),
     rotate: jest.fn(async () => ({ id: 'sess-2' })),
     revokeAllForUser: jest.fn(),
-    revokeByToken: jest.fn(),
+    revokeFamilyByToken: jest.fn(),
   } as unknown as SessionsService;
   const mail = {
     sendEmailVerification: jest.fn(),
@@ -675,6 +675,23 @@ describe('AuthService', () => {
       (jwt.verifyAsync as jest.Mock).mockResolvedValueOnce({ sub: 'u1' });
       repo.findOne.mockResolvedValueOnce({ id: 'u1', isActive: false });
       await expect(service.refresh('valid.token')).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('passes a refused rotation through, so a replayed token gets no tokens', async () => {
+      (jwt.verifyAsync as jest.Mock).mockResolvedValueOnce({ sub: 'u1' });
+      repo.findOne.mockResolvedValueOnce({ id: 'u1', isActive: true, role: UserRole.BRIDE });
+      (sessions.rotate as jest.Mock).mockRejectedValueOnce(
+        new UnauthorizedException('Session expired, please sign in again'),
+      );
+      await expect(service.refresh('replayed.token')).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+  });
+
+  describe('logout', () => {
+    it('revokes the whole login the refresh token belongs to', async () => {
+      await service.logout('current.token');
+      expect(sessions.revokeFamilyByToken).toHaveBeenCalledWith('current.token', 'logout');
+      expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
     });
   });
 });

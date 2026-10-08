@@ -5,6 +5,7 @@ import { User } from '../auth/entities/user.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { PlannerProfile } from '../wedding-planners/entities/planner-profile.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
+import { PENDING_AGENCY } from '../agents/agency-status';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Payment } from '../bookings/entities/payment.entity';
 import { VerificationRequest } from '../verification/entities/verification-request.entity';
@@ -59,7 +60,8 @@ export class AdminPendingCountsService {
       notifications,
     ] = await Promise.all([
       this.users.count({ where: { role: In([...INDIVIDUAL_ROLES]), isVerified: false } }),
-      this.agents.count({ where: { isApproved: false } }),
+      // The same rows GET /admin/agents/pending lists: rejected ones excluded (ISS-10).
+      this.agents.count({ where: PENDING_AGENCY }),
       this.vendors.count({ where: { isApproved: false } }),
       this.planners.count({ where: { isApproved: false } }),
       this.bookings.count({ where: { status: BookingStatus.DISPUTED } }),

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../../lib/api';
 import { MOBILE_10_PATTERN } from '../../lib/permissions';
 import { BUSINESS_STATUS_LABEL, labelFrom, milestoneLabel, paymentStatusLabel } from '../../lib/labels';
@@ -120,6 +120,15 @@ export function AdminUsers() {
   );
 }
 
+const AGENCY_DETAIL_LABEL: Record<string, string> = {
+  contactPhone: 'contact number',
+  address: 'address',
+  startDate: 'start date',
+};
+
+/** The words for a registration detail an agency left blank. */
+const agencyDetailLabel = (field: string) => AGENCY_DETAIL_LABEL[field] ?? field;
+
 /** The masthead every admin screen opens with, so directory pages match the rest. */
 function Masthead({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -143,7 +152,9 @@ export function AdminAgents() {
  */
 interface RoleDirectoryRow {
   id: string;
-  email: string;
+  /** Masked by the server (ISS-11); the detail page has the audited reveal. */
+  email: string | null;
+  phone?: string | null;
   isActive: boolean;
   isVerified: boolean;
   createdAt: string;
@@ -243,13 +254,13 @@ function RoleDirectory({
             <h2 className="section-title">{title} accounts</h2>
             <p className="text-xs text-gray-500">{data?.meta.total ?? 0} {noun} from the backend</p>
           </div>
-          <input className="input w-full sm:w-80" placeholder="Search by email" value={search}
-            onChange={(event) => change({ q: event.target.value || undefined })} aria-label={`Search ${noun} by email`} />
+          <input className="input w-full sm:w-80" placeholder="Search by email or mobile" value={search}
+            onChange={(event) => change({ q: event.target.value || undefined })} aria-label={`Search ${noun} by email or mobile`} />
         </div>
         {isLoading ? <Loading rows={5} /> : isError ? (
           <p className="p-6 text-sm text-critical-fg">The {noun} directory could not be loaded. Try again.</p>
         ) : rows.length === 0 ? (
-          <EmptyState title={`No ${noun} match`}><span>Try a different status or email search.</span></EmptyState>
+          <EmptyState title={`No ${noun} match`}><span>Try a different status, email or mobile number.</span></EmptyState>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
@@ -258,7 +269,7 @@ function RoleDirectory({
               </tr></thead>
               <tbody className="divide-y divide-gray-100">
                 {rows.map((account) => <tr key={account.id} onClick={() => navigate(`${detailBase}/${account.id}`)} className="cursor-pointer transition-colors hover:bg-brand-soft/30 focus-within:bg-brand-soft/30">
-                  <td className="px-4 py-3"><Link className="block font-medium text-gray-900 hover:text-brand-strong focus-visible:underline" to={`${detailBase}/${account.id}`}>{account.email}</Link><span className="block font-mono text-[11px] text-gray-400">#{account.id.slice(0, 8)}</span></td>
+                  <td className="px-4 py-3"><Link className="block font-medium text-gray-900 hover:text-brand-strong focus-visible:underline" to={`${detailBase}/${account.id}`}>{account.email ?? account.phone ?? 'No email on file'}</Link><span className="block font-mono text-[11px] text-gray-400">#{account.id.slice(0, 8)}</span></td>
                   <td className="px-4 py-3"><StatusPill active={account.isActive} /></td>
                   <td className="px-4 py-3"><span className={`pill ${account.isVerified ? 'bg-positive-bg text-positive-fg' : 'bg-caution-bg text-caution-fg'}`}>{account.isVerified ? 'Verified' : 'Not verified'}</span></td>
                   <td className="px-4 py-3 text-gray-600">{new Date(account.createdAt).toLocaleDateString()}</td>
@@ -364,7 +375,7 @@ export function AdminVendors() {
           </div>
           <input
             className="input w-full sm:w-80"
-            placeholder="Search by business name"
+            placeholder="Search by business name, owner email or mobile"
             value={search}
             onChange={(event) => {
               const next = new URLSearchParams(params);
@@ -879,19 +890,23 @@ export function AdminOfficers() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
+  /*
+   * Searched by the server (ISS-11): emails arrive masked, so only the server
+   * can match the stored address or mobile number. It also matches the name,
+   * id and coverage labels this page used to filter on itself. The filter
+   * counts describe the searched set, as on the other directories.
+   */
+  const needle = search.trim();
   const { data, isLoading } = useQuery<OfficerRow[]>({
-    queryKey: ['admin-officers'],
-    queryFn: async () => (await api.get('/admin/officers')).data,
+    queryKey: ['admin-officers', needle],
+    queryFn: async () =>
+      (await api.get('/admin/officers', { params: { q: needle || undefined } })).data,
+    placeholderData: keepPreviousData,
   });
 
   const officers = data ?? [];
   const count = (f: OfficerFilter) => officers.filter((o) => officerMatches(o, f)).length;
-  const shown = officers.filter((o) =>
-    officerMatches(o, filter) &&
-    [o.name, o.email, o.id, ...o.serviceAreas.map((area) => area.label)]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(search.trim().toLowerCase())),
-  );
+  const shown = officers.filter((o) => officerMatches(o, filter));
 
   async function setActive(id: string, active: boolean) {
     if (!window.confirm(active ? 'Reinstate this officer?' : 'Suspend this officer?')) return;
@@ -954,7 +969,7 @@ export function AdminOfficers() {
           className="input w-full"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search name, email, ID or coverage"
+          placeholder="Search name, email, mobile, ID or coverage"
         />
       </label>
 
@@ -1149,8 +1164,15 @@ export function AdminApprovals() {
       registrationNumber: string | null;
       contactPhone: string | null;
       about: string | null;
+      /** Optional registration details left blank; the agency is listed regardless. */
+      missingDetails?: string[];
     }[]
   >('pending-agents', '/admin/agents/pending');
+  // Refused agencies are no longer "awaiting approval" (ISS-10); they are
+  // listed apart so a decision can still be reconsidered.
+  const { data: rejectedAgents } = q<
+    { id: string; agencyName: string; city?: string; rejectionReason: string | null }[]
+  >('rejected-agents', '/admin/agents/rejected');
 
   async function act(url: string, keys: string[], body?: unknown) {
     setError('');
@@ -1183,6 +1205,11 @@ export function AdminApprovals() {
                     'No further details supplied'}
                 </p>
                 {a.about && <p className="mt-1 text-sm text-gray-600">{a.about}</p>}
+                {a.missingDetails && a.missingDetails.length > 0 && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Incomplete registration: no {a.missingDetails.map(agencyDetailLabel).join(', ')}
+                  </p>
+                )}
               </div>
               <div className="flex gap-2">
                 <button
@@ -1213,7 +1240,9 @@ export function AdminApprovals() {
                 <button
                   className="btn-outline"
                   onClick={async () => {
-                    await act(`/admin/agents/${a.id}/reject`, ['pending-agents'], { reason });
+                    await act(`/admin/agents/${a.id}/reject`, ['pending-agents', 'rejected-agents'], {
+                      reason,
+                    });
                     setRejecting(null);
                     setReason('');
                   }}
@@ -1226,6 +1255,40 @@ export function AdminApprovals() {
         ))}
         {!pendingAgents?.length && <p className="text-sm text-gray-400">Nothing pending.</p>}
       </div>
+
+      {(rejectedAgents?.length ?? 0) > 0 && (
+        <details className="card">
+          <summary className="section-title cursor-pointer">
+            Rejected agencies ({rejectedAgents?.length})
+          </summary>
+          <p className="mb-3 mt-1 text-sm text-gray-500">
+            Told why and waiting to resubmit, so not counted as pending. Resubmitting returns an
+            agency to the list above; approve here only to reverse a rejection.
+          </p>
+          {(rejectedAgents ?? []).map((a) => (
+            <div
+              key={a.id}
+              className="flex flex-wrap items-start justify-between gap-3 border-b py-3 last:border-0"
+            >
+              <div>
+                <p className="font-medium">
+                  {a.agencyName}
+                  {a.city ? `, ${a.city}` : ''}
+                </p>
+                {a.rejectionReason && (
+                  <p className="text-sm text-gray-500">Reason given: {a.rejectionReason}</p>
+                )}
+              </div>
+              <button
+                className="btn-outline"
+                onClick={() => act(`/admin/agents/${a.id}/approve`, ['pending-agents', 'rejected-agents'])}
+              >
+                Approve instead
+              </button>
+            </div>
+          ))}
+        </details>
+      )}
 
       <div className="card">
         <h2 className="section-title mb-2">Vendors awaiting approval</h2>

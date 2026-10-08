@@ -25,7 +25,8 @@ delivered, and stops moving the moment someone disputes it.
 - [10. The profile lifecycle](#10-the-profile-lifecycle)
 - [11. Configuration](#11-configuration)
 - [12. Reaching people off the platform](#12-reaching-people-off-the-platform)
-- [13. What this round deliberately did not do](#13-what-this-round-deliberately-did-not-do)
+- [13. Data maintenance after the live e2e fixes](#13-data-maintenance-after-the-live-e2e-fixes)
+- [14. What this round deliberately did not do](#14-what-this-round-deliberately-did-not-do)
 
 ---
 
@@ -49,11 +50,15 @@ stateDiagram-v2
 **`in_person` is a first-class role** with a deliberately narrow permission row:
 the verification queue, the case queue, and nothing else. No matchmaking, no
 listings, no bookings, and — importantly — no ability to allocate work to
-themselves. An officer decides who else gets operational access, so their own
+themselves. An officer's findings decide who else gets operational access, so their own
 surface is the smallest on the platform.
 
 **There is no sign-up for it.** `POST /verification/officers` is admin-only and
-is the only way an officer account exists. Credentials go out by email under the
+is the only way an officer account exists. The body is `{ email, name, phone, region? }`:
+the email must be a deliverable address (placeholder hosts such as `example.com`,
+`wow.local`, `localhost` and `test` are refused), the name is 2-120 characters and
+the mobile number (10-15 digits, optional `+`) is mandatory because the officer is
+dispatched on it. Credentials go out by email under the
 same single-use rule as a provisioned customer (§3).
 
 **Three separations hold the flow honest:**
@@ -61,7 +66,7 @@ same single-use rule as a provisioned customer (§3).
 | Rule | Where | Why |
 | --- | --- | --- |
 | Only an admin allocates | `VERIFICATION_ALLOCATE`, admin-only | An officer choosing their own work is not an allocation |
-| Only the allocated officer decides | `decide()` checks `assignedToUserId` | Otherwise "allocation" is advisory |
+| Only the allocated officer reports; only an admin decides | `submitFindings` checks `assignedToUserId`; `decide()` and `requestCorrection()` need `verification:decide` and refuse any non-admin | Otherwise "allocation" is advisory, and an officer would review their own visit |
 | Anything but an approval needs a reason | `decide()` rejects a blank `remarks` | Being left guessing after a home visit is how you lose an applicant |
 
 Approval is also the *only* place `isApproved` becomes true on an agency or a
@@ -170,6 +175,8 @@ Three gates, all from the spec:
 | --- | --- | --- |
 | Sign-up | Individuals may self-register | `INDIVIDUAL_USER_ENABLED` |
 | Matchmaking | Complete profile, and not already in a fixed match | — |
+| Interests | Sending needs a complete biodata (identity aside); only profiles with one are suggested or may be sent an interest | — |
+| Identity | Sending, accepting and confirming a match as fixed need the subject profile verified (Aadhaar OTP); browsing stays open | `MATCHMAKING_REQUIRES_IDENTITY` |
 | Services | Vendor and planner bookings are open to any signed-in buyer | `SERVICES_REQUIRE_MATCH_FIXED` |
 
 With `INDIVIDUAL_USER_ENABLED=false` the platform runs as an agent-only
@@ -318,6 +325,7 @@ private and has its held fees refunded.
 | --- | --- | --- |
 | `INDIVIDUAL_USER_ENABLED` | `true` | Whether individuals may self-register |
 | `SERVICES_REQUIRE_MATCH_FIXED` | `false` | Whether the marketplace waits for a fixed match |
+| `MATCHMAKING_REQUIRES_IDENTITY` | `true` | Whether sending, accepting and fixing an interest need a verified subject profile |
 | `CHAT_REDACT_CONTACTS` | `true` | Contact stripping in chat |
 | `PUSH_PROVIDER` | `log` | `fcm` sends through Firebase Cloud Messaging |
 | `PUSH_SERVER_KEY` | — | Required when `PUSH_PROVIDER=fcm` |
@@ -365,7 +373,88 @@ the template name and its parameters, not an assembled sentence, because that
 is what actually goes to Meta and a rendered default would hide a template
 mismatch until the real provider was switched on.
 
-## 13. What this round deliberately did not do
+## 13. Data maintenance after the live e2e fixes
+
+Two fixes from the 2026-10-08 live e2e run (ISSUES.md) stop new bad rows but
+cannot repair rows the old code already wrote. Each has a one-off script. Both
+are **dry runs unless `--apply` is passed**, print what they found, and boot a
+small slice of the application (configuration, database, storage) so they use
+the app's own rules rather than a copy of them in SQL. Run them with the
+deployment's environment, so they see the same database and storage settings
+the API does.
+
+| Script | Source checkout | Inside the backend container |
+| --- | --- | --- |
+| Phantom chat threads | `npm run cleanup:phantom-chats [-- --apply]` | `npm run cleanup:phantom-chats:prod [-- --apply]` |
+| External media URLs | `npm run report:external-media [-- --apply] [-- --verbose]` | `npm run report:external-media:prod [-- --apply]` |
+
+Take a database backup before any `--apply`, and run the dry run first and read
+it: the apply acts on what the dry run lists, re-checked at the moment of the
+write.
+
+### Phantom chat threads (ISS-05)
+
+Muting, clearing, deleting or read-marking a thread used to create the
+conversation if it did not exist, so doing any of those to a stranger left an
+empty "match" thread in both people's lists. The housekeeping paths no longer
+create threads; `cleanup:phantom-chats` removes the ones already made.
+
+A conversation is listed only when all of these hold:
+
+- it is a direct thread (`bookingId` is null) — booking threads are never touched;
+- no message has ever been written to it (clearing is a watermark, so a thread
+  somebody used still has its messages);
+- `ChatService.assertCanChat` refuses the pair in **both** directions — the same
+  gate the API applies, so a pair with an accepted interest, an agent and the
+  client they represent, or an enquiry to a provider keeps its empty thread.
+  Only a refusal (403) or a missing account (404) counts; any other error stops
+  the run rather than being read as "no relationship".
+
+`--apply` deletes the listed conversations and their `chat_preferences` rows
+(mute, clear and delete state) in one transaction. The delete repeats the
+"direct and empty" test, so a thread that received its first message after the
+listing is skipped and reported, not deleted. If a listed pair later becomes a
+match, opening the chat simply creates a fresh thread.
+
+### External media URLs (ISS-06)
+
+Upload fields now accept only `media://` references and addresses the
+platform's own storage hands out (the CDN base, the local store's public path,
+the bucket's hosts). Rows written before that can still hold links to other
+sites. Two things follow:
+
+**Edit forms keep working.** Forms that send a whole list back — profile photos,
+managed profile photos, agency office photographs, vendor portfolio and
+compliance documents, planner portfolio and each wedding's photos — accept an
+entry that is byte-for-byte one the same record already stores, even if it
+fails the origin check; only *new* entries must be uploads. The same holds for
+the single-value fields such a form resends (event picture, horoscope document,
+a planner wedding's cover): unchanged is accepted, a new value must be an
+upload. The DTO checks the shape (`IsMediaUrlShape`) and the service enforces
+the rest with the stored row in hand (`backend/src/platform/storage/kept-media.ts`),
+with the same 400 message as before (`each value in photos must be a file
+uploaded here`). Fields that only ever add something — chat attachments,
+booking reference images and messages, evidence, album items, the invitation
+card, a single added photo — stay strict in the DTO.
+
+**`report:external-media`** lists every stored external value per table and
+column, using the same recogniser as the API (so run it with the deployment's
+`MEDIA_*` / `CDN_BASE_URL` settings, or uploads will be misreported as
+external). `--verbose` lists every row rather than the first five per column.
+
+`--apply` removes external entries **only from the gallery list fields**:
+`profiles.photos`, `agent_profiles.pictures`, `vendors.portfolio`,
+`vendors.complianceDocuments`, `planner_profiles.portfolio` and each wedding's
+`photos` in `planner_profiles.weddings`. It never deletes a record and never
+clears a single-value field (an event's picture, a horoscope document, a
+wedding cover, a primary photo, a message attachment); those are report-only
+and want a person to decide. Evidence and booking reference images are
+report-only too, because they are what a dispute is argued from. Each row is
+re-read under a lock inside one transaction and cleaned as it stands at that
+moment. When a removed photo was the biodata's primary photo, the primary moves
+to the first remaining photo, as it does when the owner removes it.
+
+## 14. What this round deliberately did not do
 
 - **SMS.** Still the largest gap. Intake is phone-first and provisioning is
   email-only, so a walk-in client with no email address cannot be handed an

@@ -14,10 +14,10 @@ A visitor picks an **account type** at sign-up. The server turns that into a
 | Marriage agent    | `agent`                   | Onboards and represents clients; buys on their behalf      |
 | Vendor            | `vendor`                  | Sells wedding services (venue, catering, photography, …)   |
 | Wedding planner   | `planner`                 | Sells planning packages; co-manages plans they are engaged on |
-| *(not offered)*   | `in_person`               | Visits applicants, decides verifications, investigates cases |
+| *(not offered)*   | `in_person`               | Visits applicants, reports findings, investigates cases    |
 | *(not offered)*   | `admin`                   | Approvals, analytics, disputes, account suspension         |
 
-`in_person` is **not** self-registerable either. A verification officer decides
+`in_person` is **not** self-registerable either. A verification officer's findings decide
 whether other people get operational access, so the account exists only because
 an administrator created it:
 
@@ -163,14 +163,21 @@ Skipping the second layer is what produced the IDOR bugs listed in §6.
 | `case:raise` | ● | ● | ● | ● | ● | ● |
 | `case:investigate` / `case:settle` | | | | | ● | ● |
 | `case:allocate` | | | | | | ● |
-| `verification:process` / `verification:decide` | | | | | ● | ● |
+| `verification:process` | | | | | ● | ● |
+| `verification:fieldwork` / `identity:confirm` | | | | | ● | |
+| `verification:decide` | | | | | | ● |
 | `verification:allocate` | | | | | | ● |
 | `ai:assist` | ● | ● | ● | ● | | ● |
-| `admin:*` (users, agents, vendors, officers, analytics, disputes, audit) | | | | | | ● |
+| `admin:*` (users, agents, vendors, officers, analytics, disputes, audit, contact reveal) | | | | | | ● |
 
-Two rows are worth reading twice. An officer can **decide** a verification but
-not **allocate** one — choosing your own visits is not an allocation. And an
-agent holds `match:respond_interest` and `match:fix` because a walk-in client
+Two rows are worth reading twice. An officer can **report on** a verification
+(findings and a recommendation) but neither **decide** it nor **allocate** it —
+the administrator decides, and choosing your own visits is not an allocation.
+Asking a vendor to correct named fields (`PUT /verification/requests/:id/request-correction`)
+is part of deciding: it needs `verification:decide` and the service refuses
+anyone but an administrator. An officer who finds wrong details lists them in
+their findings, and the administrator sends them back.
+And an agent holds `match:respond_interest` and `match:fix` because a walk-in client
 with no account has nobody else to answer for them; the ownership check in the
 service still confines that to profiles on their own books.
 

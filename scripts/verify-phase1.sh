@@ -54,91 +54,11 @@ field() { jq -r ".$2 // empty" "$1"; }
 # Identity verification now gates sending an interest, accepting one and
 # fixing a match. Every persona that does any of those has to go through it
 # first — the gate itself is asserted in verify-phase2.
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 
-# A business now has a life rather than a boolean, so getting one live means
-# walking the path a vendor actually walks: fill in the catalog, look it over,
-# submit, then allocate, visit and decide. Skipping to "approved" is refused,
-# which is the point of the state machine.
-#
-#   go_live <businessToken> <businessId> <adminToken> <officerId> <officerToken>
-FINDINGS_JSON='{"visited":true,"observations":"Attended the address; the business is as described.","issues":[],"recommendation":"approve"}'
-
-# The catalog is configuration, so a service asks whatever an administrator
-# decided it should ask. The helper therefore reads the form and answers it,
-# rather than assuming a shape — which is the same reason the form exists.
-answers_for() { # answers_for <serviceForm json on stdin>
-  jq -c '[.[] | select(.required)] | map({(.key): (
-      if   .type == "boolean"       then true
-      elif .type == "single_select" then (.constraints.options[0].value // "other")
-      elif .type == "multi_select"  then [(.constraints.options[0].value // "other")]
-      elif .type == "date"          then "2027-01-01"
-      elif .type == "time"          then "10:00"
-      elif .type == "date_time"     then "2027-01-01T10:00:00.000Z"
-      elif .type == "url"           then "https://example.com/portfolio"
-      elif (.type == "number" or .type == "decimal" or .type == "currency"
-            or .type == "duration" or .type == "range")
-                                    then (.constraints.min // 1)
-      else "Not specified" end)}) | add // {}'
-}
-
-seed_catalog() { # seed_catalog <token> <businessId>
-  req GET /catalog/categories "" "$1" >/dev/null
-  cat_ids=$(jq -r '.[].id' /tmp/body)
-  # An empty catalog is a setup problem, not a test failure, and it used to
-  # look like one six assertions later: this returned quietly, the business got
-  # no priced service, and the suite reported "Finish these first: Catalog
-  # services" from somewhere else entirely. Say it here, where it is true.
-  if [ -z "$cat_ids" ]; then
-    echo "  FAIL  the service catalog is empty — run the catalog seed first:" >&2
-    echo "        docker compose -f docker/docker-compose.yml --profile seed run --rm seed-catalog" >&2
-    FAIL=$((FAIL + 1))
-    return 1
-  fi
-
-  for cat_id in $cat_ids; do
-    req GET "/catalog/categories/$cat_id/services" "" "$1" >/dev/null
-    def_ids=$(jq -r '.[].id' /tmp/body)
-    for def_id in $def_ids; do
-      req GET "/catalog/services/$def_id" "" "$1" >/dev/null
-      def_json=$(cat /tmp/body)
-      attrs=$(echo "$def_json" | jq -c '.serviceForm' | answers_for)
-      req POST "/vendors/$2/services" "{\"definitionId\":\"$def_id\",\"attributes\":$attrs}" "$1" >/dev/null
-      svc_id=$(jq -r '.id // empty' /tmp/body)
-      [ -z "$svc_id" ] && continue
-
-      # The definition decides which pricing models a service may use, so the
-      # price is built from that rather than assumed. Quote-only models carry
-      # no amount; everything else does.
-      model=$(echo "$def_json" | jq -r '.definition.allowedPricingModels[0] // "fixed"')
-      case "$model" in
-        custom_quote|no_public_price) price_json="" ;;
-        *) price_json=',"price":"25000"' ;;
-      esac
-      req POST "/vendors/$2/services/$svc_id/offerings" \
-        "{\"name\":\"Standard\",\"pricingModel\":\"$model\"$price_json,\"active\":true}" "$1" >/dev/null
-      [ "$(jq -r '.id // empty' /tmp/body)" != "" ] && return 0
-    done
-  done
-  return 1
-}
-
-go_live() { # go_live <vendorToken> <businessId> <adminToken> <officerId> <officerToken>
-  seed_catalog "$1" "$2" || return 1
-  req POST "/vendors/$2/first-review" "" "$1" >/dev/null
-  req POST "/vendors/$2/submit-verification" "" "$1" >/dev/null
-
-  req GET "/verification/requests?applicantType=vendor&limit=100" "" "$3" >/dev/null
-  vreq=$(jq -r --arg id "$2" '(.data // .)[] | select(.subjectId == $id) | .id' /tmp/body | head -1)
-  [ -z "$vreq" ] && return 1
-
-  req PUT "/verification/requests/$vreq/allocate" "{\"officerUserId\":\"$4\"}" "$3" >/dev/null
-  req PUT "/verification/requests/$vreq/start" "" "$5" >/dev/null
-  req PUT "/verification/requests/$vreq/findings" "$FINDINGS_JSON" "$5" >/dev/null
-  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$5" >/dev/null
-  return 0
-}
 
 CONSENT='"consent":{"method":"in_person","givenByRelation":"father","givenByName":"Ramesh Sharma","givenAt":"2026-08-01","allowsCirculation":true}'
 
@@ -204,23 +124,23 @@ ADMIN=$(field /tmp/body accessToken)
 
 echo
 echo "== 2. In-Person officers exist only because an admin created them =="
-c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$BRIDE")
+c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$BRIDE")
 check "a user cannot create a verification officer" "$c" 403
-c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$AGENT")
+c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$AGENT")
 check "an agent cannot create a verification officer" "$c" 403
 
-c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$ADMIN")
+c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$ADMIN")
 check "admin creates a verification officer" "$c" 201
 OFFICER_ID=$(field /tmp/body id)
 OFFICER_TEMP=$(field /tmp/body devPassword)
 [ -n "$OFFICER_TEMP" ] && assert "the temporary password comes back in log-mail mode" 1 || assert "no temporary password returned" 0
 
-c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Duplicate\"}" "$ADMIN")
+c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Duplicate\"}" "$ADMIN")
 check "the same email cannot be used twice" "$c" 409
 
 echo
 echo "== 3. A provisioned account is locked to the password reset =="
-c=$(req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"$OFFICER_TEMP\"}")
+c=$(req POST /auth/login "{\"email\":\"officer-$STAMP@t.com\",\"password\":\"$OFFICER_TEMP\"}")
 check "officer signs in with the temporary password" "$c" 200
 OFFICER=$(field /tmp/body accessToken)
 body_has '"mustResetPassword":true' "the response says the password must be replaced"
@@ -234,7 +154,7 @@ check "the password change itself is allowed through" "$c" 200
 c=$(req GET /verification/requests "" "$OFFICER")
 check "the old session is terminated by the change" "$c" 401
 
-c=$(req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"OfficerPass1\"}")
+c=$(req POST /auth/login "{\"email\":\"officer-$STAMP@t.com\",\"password\":\"OfficerPass1\"}")
 check "officer signs in again with their own password" "$c" 200
 OFFICER=$(field /tmp/body accessToken)
 c=$(req GET /verification/requests "" "$OFFICER")
@@ -258,7 +178,7 @@ check "an unverified agency still cannot build profiles" "$c" 403
 c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"approved"}' "$AGENT")
 check "an applicant cannot approve themselves" "$c" 403
 c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"approved"}' "$OFFICER")
-check "an officer cannot decide a request that is not allocated to them" "$c" 403
+check "an officer cannot record a decision at all, allocated or not" "$c" 403
 c=$(req PUT "/verification/requests/$REQ/allocate" "{\"officerUserId\":\"$OFFICER_ID\"}" "$OFFICER")
 check "an officer cannot allocate work to themselves" "$c" 403
 
@@ -266,17 +186,18 @@ c=$(req PUT "/verification/requests/$REQ/allocate" "{\"officerUserId\":\"$OFFICE
 check "admin allocates the visit" "$c" 200
 c=$(req PUT "/verification/requests/$REQ/start" "" "$OFFICER")
 check "officer picks it up" "$c" 200
-c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"rejected"}' "$OFFICER")
+c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"rejected"}' "$ADMIN")
 check "a rejection without a reason is refused" "$c" 400
 
 # An approval has to rest on a visit somebody actually made and wrote up.
+# The officer only recommends; the decision is the administrator's (ISS-20).
 # Without this the whole verification step is a checkbox.
-c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"approved"}' "$OFFICER")
+c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"approved"}' "$ADMIN")
 check "and an approval before anybody has been anywhere is refused too" "$c" 400
 c=$(req PUT "/verification/requests/$REQ/findings" '{"visited":true,"observations":"Attended the address; the business is as described.","issues":[],"recommendation":"approve"}' "$OFFICER")
 check "officer writes up the visit" "$c" 200
-c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"approved"}' "$OFFICER")
-check "officer approves on the strength of it" "$c" 200
+c=$(req PUT "/verification/requests/$REQ/decide" '{"status":"approved"}' "$ADMIN")
+check "the administrator approves on the strength of it" "$c" 200
 
 c=$(req GET /agents/agency "" "$AGENT")
 body_has '"isApproved":true' "the approval activated the agency"
@@ -332,6 +253,11 @@ echo "== 7. Match Fixed provisions the customer account =="
 # refuses, so the officer confirms it here rather than the fixture faking it.
 c=$(req PUT "/verification/identity/$PARTNER/verify" "" "$OFFICER")
 check "the officer confirms the counterpart's document too" "$c" 200
+# An interest carries the biodata to the other side, so both clients need a
+# complete one (three real photographs included) before it can be sent.
+complete_biodata "$MANAGED" "$AGENT" Client Kumari
+complete_biodata "$PARTNER" "$AGENT" Partner Rao
+agency_matchable "$PARTNER" "$AGENT"
 c=$(req POST /matches/interest "{\"toProfileId\":\"$PARTNER\",\"profileId\":\"$MANAGED\"}" "$AGENT")
 check "agent introduces two of their own clients" "$c" 201
 INTEREST=$(field /tmp/body id)
@@ -380,6 +306,9 @@ c=$(req POST "/vendors/$LISTING/submit-verification" "" "$VENDOR")
 check "submitting an incomplete listing is refused" "$c" 400
 
 seed_catalog "$VENDOR" "$LISTING"
+# A catalog is not the whole of it: a contact mobile, a compliance document
+# and a portfolio photograph, the last two uploaded for real.
+business_documents "$VENDOR" "$LISTING"
 c=$(req GET "/vendors/$LISTING/completion" "" "$VENDOR")
 body_has '"canSubmit":true' "with a priced service it can be submitted"
 
@@ -394,6 +323,13 @@ body_has '"status":"pending_verification"' "which locks the listing"
 # The lock is enforced by the API, not by hiding a button.
 c=$(req PUT "/vendors/$LISTING" '{"description":"Sneaking an edit in."}' "$VENDOR")
 check "the details cannot be edited while it is being verified" "$c" 403
+
+# Until it is live a listing is nobody's business but its owner's and the
+# administrator's: the public read answers as if it did not exist.
+c=$(req GET "/vendors/$LISTING" "")
+check "a listing under verification is not found publicly" "$c" 404
+c=$(req GET "/vendors/$LISTING" "" "$VENDOR")
+check "while its owner can still open it" "$c" 200
 
 c=$(req GET /verification/me "" "$VENDOR")
 VREQ=$(field /tmp/body id)
@@ -413,8 +349,8 @@ c=$(req GET "/verification/requests/$VREQ" "" "$OFFICER")
 check "the officer opens the request" "$c" 200
 body_has '"subject"' "and gets the business record they are going to verify"
 req PUT "/verification/requests/$VREQ/findings" '{"visited":true,"observations":"Attended the address; the business is as described.","issues":[],"recommendation":"approve"}' "$OFFICER" >/dev/null
-c=$(req PUT "/verification/requests/$VREQ/decide" '{"status":"approved"}' "$OFFICER")
-check "officer approves the listing after the visit" "$c" 200
+c=$(req PUT "/verification/requests/$VREQ/decide" '{"status":"approved"}' "$ADMIN")
+check "the administrator approves the listing after the visit" "$c" 200
 c=$(req GET "/vendors/$LISTING" "")
 body_has '"status":"live"' "and the listing goes live"
 
@@ -441,8 +377,8 @@ EARLY_BOOKING=$(field /tmp/body id)
 c=$(req PUT "/bookings/$EARLY_BOOKING/cancel" '{"reason":"Only here to prove the door is open."}' "$BRIDE")
 check "she withdraws it again, leaving the rest of the suite as it was" "$c" 200
 
-verify_identity "$BRIDE_PROFILE" "$BRIDE" >/dev/null
-verify_identity "$GROOM_PROFILE" "$GROOM" >/dev/null
+ready_for_interests "$BRIDE_PROFILE" "$BRIDE" Bride Kumari
+ready_for_interests "$GROOM_PROFILE" "$GROOM" Groom Reddy
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\"}" "$BRIDE")
 check "bride sends the groom an interest" "$c" 201
 BG=$(field /tmp/body id)

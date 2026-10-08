@@ -119,11 +119,11 @@ of any kind. Dotted dependencies additionally degrade to no-ops when disabled.
 | Marriage agent | `agent` | Takes walk-in details, builds and circulates profiles, proposes matches, collects the agency fee. | field verification | 23 |
 | Vendor | `vendor` | Sells wedding services; confirms and delivers bookings; paid from escrow. | field verification | 10 |
 | Wedding planner | `planner` | Sells planning packages; co-manages the plans they are engaged on. | field verification | 14 |
-| *not self-registerable* | `in_person` | Visits applicants, decides verifications, investigates disputes. | created by admin | 9 |
+| *not self-registerable* | `in_person` | Visits applicants, reports findings for an administrator to decide, investigates disputes. | created by admin | 9 |
 | *not self-registerable* | `admin` | Approvals, analytics, disputes, suspensions, audit. | seeded out of band | 51 |
 
-The `in_person` row is deliberately the narrowest on the platform: an officer
-decides whether other people get operational access, so they get the
+The `in_person` row is deliberately the narrowest on the platform: an officer's
+findings decide whether other people get operational access, so they get the
 verification and case queues and nothing else — and cannot allocate work to
 themselves, because an officer choosing their own visits is not an allocation.
 
@@ -290,7 +290,7 @@ The SMS provider interface takes a template id for exactly this reason.
 | An agency floods the shared network pool | The pool stops being useful to everyone else | Per-agency quota; automatic de-listing as consent lapses |
 | Consent expires unnoticed while a profile is circulating | A family's details stay in circulation without permission | Expiry on circulation consent; nightly de-listing a week ahead of lapse |
 | A gateway and our records diverge | Money held or refunded in one system and not the other | Hourly reconciliation raising a mismatch for a human, deliberately not auto-correcting |
-| An officer approves without visiting | Field verification becomes a rubber stamp | Admin cannot approve at all; only an allocated officer decides, and every decision is recorded with its reason |
+| An officer approves without visiting | Field verification becomes a rubber stamp | Admin cannot approve without findings from the allocated officer's visit; the officer reports, the admin decides, and every decision is recorded with its reason |
 | Two buyers race for the last slot | A vendor double-booked on a wedding day | Pessimistic row lock inside the booking transaction |
 | The client's permission mirror drifts from the server's | Navigation hides or offers the wrong things | A frontend test reads the backend enum off disk and fails on drift |
 

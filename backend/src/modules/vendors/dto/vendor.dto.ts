@@ -4,7 +4,7 @@ import { CATEGORY_SLUG, MAX_CATEGORIES } from '../vendor-categories';
 import { Type } from 'class-transformer';
 import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
 import { ArrayMaxSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape } from '../../../common/decorators/uploaded-url.decorator';
 import { Transform } from 'class-transformer';
 import { ReviewStatus } from '../../../common/enums';
 import {
@@ -127,7 +127,8 @@ export class VendorComplianceDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(10)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   complianceDocuments?: string[];
 }
 
@@ -198,7 +199,8 @@ export class CreateVendorDto extends IntersectionType(VendorComplianceDto, Socia
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(30)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   @MaxLength(2048, { each: true })
   portfolio?: string[];
 }

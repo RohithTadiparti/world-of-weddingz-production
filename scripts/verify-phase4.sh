@@ -63,7 +63,9 @@ field() { jq -r ".$2 // empty" "$1"; }
 # Identity verification now gates sending an interest, accepting one and
 # fixing a match. Every persona that does any of those has to go through it
 # first — the gate itself is asserted in verify-phase2.
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 
 # A GST number is unique platform-wide, so a random four digits collides once a
@@ -88,96 +90,7 @@ gst() {
   printf '36%s%sF%dZ5' "$letters" "$digits" "$(( ${1:-1} % 10 ))"
 }
 
-# A business now has a life rather than a boolean, so getting one live means
-# walking the path a vendor actually walks: fill in the catalog, look it over,
-# submit, then allocate, visit and decide. Skipping to "approved" is refused,
-# which is the point of the state machine.
-#
-#   go_live <businessToken> <businessId> <adminToken> <officerId> <officerToken>
-FINDINGS_JSON='{"visited":true,"observations":"Attended the address; the business is as described.","issues":[],"recommendation":"approve"}'
 
-# The catalog is configuration, so a service asks whatever an administrator
-# decided it should ask. The helper therefore reads the form and answers it,
-# rather than assuming a shape — which is the same reason the form exists.
-answers_for() { # answers_for <serviceForm json on stdin>
-  jq -c '[.[] | select(.required)] | map({(.key): (
-      if   .type == "boolean"       then true
-      elif .type == "single_select" then (.constraints.options[0].value // "other")
-      elif .type == "multi_select"  then [(.constraints.options[0].value // "other")]
-      elif .type == "date"          then "2027-01-01"
-      elif .type == "time"          then "10:00"
-      elif .type == "date_time"     then "2027-01-01T10:00:00.000Z"
-      elif .type == "url"           then "https://example.com/portfolio"
-      elif (.type == "number" or .type == "decimal" or .type == "currency"
-            or .type == "duration" or .type == "range")
-                                    then (.constraints.min // 1)
-      else "Not specified" end)}) | add // {}'
-}
-
-seed_catalog() { # seed_catalog <token> <businessId>
-  req GET /catalog/categories "" "$1" >/dev/null
-  cat_ids=$(jq -r '.[].id' /tmp/body)
-  # An empty catalog is a setup problem, not a test failure, and it used to
-  # look like one six assertions later: this returned quietly, the business got
-  # no priced service, and the suite reported "Finish these first: Catalog
-  # services" from somewhere else entirely. Say it here, where it is true.
-  if [ -z "$cat_ids" ]; then
-    echo "  FAIL  the service catalog is empty — run the catalog seed first:" >&2
-    echo "        docker compose -f docker/docker-compose.yml --profile seed run --rm seed-catalog" >&2
-    FAIL=$((FAIL + 1))
-    return 1
-  fi
-
-  for cat_id in $cat_ids; do
-    req GET "/catalog/categories/$cat_id/services" "" "$1" >/dev/null
-    def_ids=$(jq -r '.[].id' /tmp/body)
-    for def_id in $def_ids; do
-      req GET "/catalog/services/$def_id" "" "$1" >/dev/null
-      def_json=$(cat /tmp/body)
-      attrs=$(echo "$def_json" | jq -c '.serviceForm' | answers_for)
-      req POST "/vendors/$2/services" "{\"definitionId\":\"$def_id\",\"attributes\":$attrs}" "$1" >/dev/null
-      svc_id=$(jq -r '.id // empty' /tmp/body)
-      [ -z "$svc_id" ] && continue
-
-      # The definition decides which pricing models a service may use, so the
-      # price is built from that rather than assumed. Quote-only models carry
-      # no amount; everything else does.
-      model=$(echo "$def_json" | jq -r '.definition.allowedPricingModels[0] // "fixed"')
-      case "$model" in
-        custom_quote|no_public_price) price_json="" ;;
-        *) price_json=',"price":"25000"' ;;
-      esac
-      req POST "/vendors/$2/services/$svc_id/offerings" \
-        "{\"name\":\"Standard\",\"pricingModel\":\"$model\"$price_json,\"active\":true}" "$1" >/dev/null
-      [ "$(jq -r '.id // empty' /tmp/body)" != "" ] && return 0
-    done
-  done
-  return 1
-}
-
-go_live() { # go_live <vendorToken> <businessId> <adminToken> <officerId> <officerToken>
-  seed_catalog "$1" "$2" || return 1
-  req POST "/vendors/$2/first-review" "" "$1" >/dev/null
-  req POST "/vendors/$2/submit-verification" "" "$1" >/dev/null
-
-  req GET "/verification/requests?applicantType=vendor&limit=100" "" "$3" >/dev/null
-  vreq=$(jq -r --arg id "$2" '(.data // .)[] | select(.subjectId == $id) | .id' /tmp/body | head -1)
-  [ -z "$vreq" ] && return 1
-
-  req PUT "/verification/requests/$vreq/allocate" "{\"officerUserId\":\"$4\"}" "$3" >/dev/null
-  req PUT "/verification/requests/$vreq/start" "" "$5" >/dev/null
-  req PUT "/verification/requests/$vreq/findings" "$FINDINGS_JSON" "$5" >/dev/null
-  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$5" >/dev/null
-  return 0
-}
-
-# Three photographs before the details. A biodata with no picture is one
-# nobody looks at, so the section that starts the form now requires them.
-seed_photos() { # seed_photos <profileId> <token>
-  for n in 1 2 3; do
-    req POST "/profiles/$1/details/photos" "{\"url\":\"https://cdn.example.com/seed-$1-$n.jpg\"}" "$2" >/dev/null
-  done
-}
 
 
 REG_PHONE_BASE=$(date +%s | tail -c 7)
@@ -269,8 +182,10 @@ c=$(req GET /users/me "" "$GROOM")
 GROOM_PROFILE=$(field /tmp/body id)
 c=$(req GET /users/me "" "$BRIDE")
 BRIDE_PROFILE=$(field /tmp/body id)
-verify_identity "$BRIDE_PROFILE" "$BRIDE" >/dev/null
-verify_identity "$GROOM_PROFILE" "$GROOM" >/dev/null
+# Both biodatas complete and both identities verified: what an interest,
+# its acceptance and the fixing all require now.
+ready_for_interests "$BRIDE_PROFILE" "$BRIDE" Bride Kumari
+ready_for_interests "$GROOM_PROFILE" "$GROOM" Groom Reddy
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\"}" "$BRIDE")
 check "bride sends the groom an interest" "$c" 201
 BG=$(field /tmp/body id)
@@ -287,20 +202,20 @@ check "nor can a buyer add a question" "$c" 403
 echo
 echo "== 4. A vendor lists against the catalog =="
 GST=$(gst 1)
-c=$(req POST /vendors "{\"name\":\"Sky $STAMP\",\"category\":\"other\",\"otherCategory\":\"Drone crew\",\"city\":\"Hyderabad\",\"gstNumber\":\"$GST\",\"panNumber\":\"ABCDE1234F\",\"registeredAddress\":\"12 Banjara Hills, Hyderabad\",\"contactPhone\":\"9876543210\"}" "$VENDOR")
+c=$(req POST /vendors "{\"name\":\"Sky $STAMP\",\"category\":\"photography\",\"city\":\"Hyderabad\",\"gstNumber\":\"$GST\",\"panNumber\":\"ABCDE1234F\",\"registeredAddress\":\"12 Banjara Hills, Hyderabad\",\"contactPhone\":\"9876543210\"}" "$VENDOR")
 check "vendor creates the business" "$c" 201
 LISTING=$(field /tmp/body id)
 # A business is approved by a verification officer who visited it, not by an
 # administrator clicking approve — the old direct route was removed for that
 # reason. Setup here; the separations are exercised in verify-phase1.
-c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$ADMIN")
+c=$(req POST /verification/officers "{\"email\":\"officer-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Officer $STAMP\",\"region\":\"Hyderabad\"}" "$ADMIN")
 check "admin creates a verification officer" "$c" 201
 OFFICER_ID=$(field /tmp/body id)
 OFFICER_TEMP=$(field /tmp/body devPassword)
-req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"$OFFICER_TEMP\"}" >/dev/null
+req POST /auth/login "{\"email\":\"officer-$STAMP@t.com\",\"password\":\"$OFFICER_TEMP\"}" >/dev/null
 OFFICER=$(field /tmp/body accessToken)
 req POST /auth/password/change "{\"currentPassword\":\"$OFFICER_TEMP\",\"newPassword\":\"OfficerPass1\"}" "$OFFICER" >/dev/null
-req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"OfficerPass1\"}" >/dev/null
+req POST /auth/login "{\"email\":\"officer-$STAMP@t.com\",\"password\":\"OfficerPass1\"}" >/dev/null
 OFFICER=$(field /tmp/body accessToken)
 
 
@@ -357,6 +272,9 @@ body_has '"offerings"' "alongside the prices they can choose from"
 # The listing is complete now, so it can be walked to live: look it over,
 # submit, visit, decide. Placed here rather than earlier because the completion
 # check requires a priced service, and that is what sections 4 to 6 just built.
+# Besides the catalog: a contact mobile, a compliance document and a portfolio
+# photograph, both files uploaded for real (see business_documents).
+business_documents "$VENDOR" "$LISTING"
 req POST "/vendors/$LISTING/first-review" "" "$VENDOR" >/dev/null
 c=$(req POST "/vendors/$LISTING/submit-verification" "" "$VENDOR")
 check "the vendor submits the completed business for verification" "$c" 200
@@ -572,7 +490,7 @@ c=$(req GET "/events/$EVENT/rsvp" "" "$BRIDE")
 check "the RSVP dashboard is served" "$c" 200
 body_has '"totalInvited":3' "three invitations went out"
 body_has '"totalInvitedHeadcount":9' "covering nine people, not three"
-body_has '"notResponded":{"invitations":3,"people":9}' "and nobody has answered yet"
+body_has '"not_responded":{"invitations":3,"people":9}' "and nobody has answered yet"
 
 c=$(req GET "/events/$EVENT/rsvp/not_responded" "" "$BRIDE")
 check "the not-responded card opens its guests" "$c" 200
@@ -587,13 +505,13 @@ check "the host records a reply taken over the phone" "$c" 200
 
 c=$(req GET "/events/$EVENT/rsvp" "" "$BRIDE")
 body_has '"coming":{"invitations":1,"people":3}' "three of the four invited are coming"
-body_has '"notResponded":{"invitations":2,"people":5}' "and five people are still unaccounted for"
+body_has '"not_responded":{"invitations":2,"people":5}' "and five people are still unaccounted for"
 
 INV2=$(req GET "/events/$EVENT/rsvp/not_responded" "" "$BRIDE" >/dev/null; jq -r --arg g "$G2" '.[] | select(.guestId == $g) | .inviteId' /tmp/body)
 c=$(req PUT "/events/invites/$INV2/rsvp" '{"status":"declined","declineReason":"Travelling that week"}' "$BRIDE")
 check "a refusal is recorded with the reason they gave" "$c" 200
 c=$(req GET "/events/$EVENT/rsvp" "" "$BRIDE")
-body_has '"notComing":{"invitations":1,"people":0}' "nobody is coming from a refusal, whatever the family size"
+body_has '"not_coming":{"invitations":1,"people":0}' "nobody is coming from a refusal, whatever the family size"
 
 c=$(req GET "/events/$EVENT/rsvp/not_coming" "" "$BRIDE")
 check "the not-coming card opens" "$c" 200
@@ -627,34 +545,44 @@ check "an unknown category is refused rather than silently empty" "$c" 400
 
 echo
 echo "== 18. A profile can have photographs of its own =="
-c=$(req GET /users/me "" "$BRIDE")
-BRIDE_PROFILE=$(field /tmp/body id)
+# A persona of its own: the bride's biodata was completed in section 3 for the
+# interest, so her photographs no longer start from nothing.
+reg photos individual bride
+PHOTOS=$(field /tmp/photos.json accessToken)
+c=$(req GET /users/me "" "$PHOTOS")
+PHOTOS_PROFILE=$(field /tmp/body id)
 
-c=$(req GET "/profiles/$BRIDE_PROFILE/details/photos" "" "$BRIDE")
+c=$(req GET "/profiles/$PHOTOS_PROFILE/details/photos" "" "$PHOTOS")
 check "the photo list is readable" "$c" 200
 body_has '"photos":\[\]' "and starts empty"
 
-c=$(req POST "/profiles/$BRIDE_PROFILE/details/photos" '{"url":"https://cdn.example.com/a.jpg"}' "$BRIDE")
+# Real uploads: a photograph field takes only what our own storage handed out.
+PA=$(upload_media "$PHOTOS" a.jpg)
+PB=$(upload_media "$PHOTOS" b.jpg)
+c=$(req POST "/profiles/$PHOTOS_PROFILE/details/photos" "{\"url\":\"$PA\"}" "$PHOTOS")
 check "the subject adds one themselves" "$c" 201
-body_has '"primaryPhotoUrl":"https://cdn.example.com/a.jpg"' "the first one becomes the one shown first"
+assert "the first one becomes the one shown first" "$(jq -e --arg u "$PA" '.primaryPhotoUrl == $u' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
 
-c=$(req POST "/profiles/$BRIDE_PROFILE/details/photos" '{"url":"not-a-url"}' "$BRIDE")
+c=$(req POST "/profiles/$PHOTOS_PROFILE/details/photos" '{"url":"not-a-url"}' "$PHOTOS")
 check "something that is not an uploaded photo is refused" "$c" 400
+c=$(req POST "/profiles/$PHOTOS_PROFILE/details/photos" '{"url":"https://cdn.example.com/a.jpg"}' "$PHOTOS")
+check "and so is a photo hosted anywhere but our own storage" "$c" 400
 
-c=$(req POST "/profiles/$BRIDE_PROFILE/details/photos" '{"url":"https://cdn.example.com/b.jpg"}' "$BRIDE")
+c=$(req POST "/profiles/$PHOTOS_PROFILE/details/photos" "{\"url\":\"$PB\"}" "$PHOTOS")
 check "a second is added" "$c" 201
-c=$(req POST "/profiles/$BRIDE_PROFILE/details/photos" '{"url":"https://cdn.example.com/a.jpg"}' "$BRIDE")
+c=$(req POST "/profiles/$PHOTOS_PROFILE/details/photos" "{\"url\":\"$PA\"}" "$PHOTOS")
 check "adding the same one twice is a no-op rather than a duplicate" "$c" 201
-c=$(req GET "/profiles/$BRIDE_PROFILE/details/photos" "" "$BRIDE")
+c=$(req GET "/profiles/$PHOTOS_PROFILE/details/photos" "" "$PHOTOS")
 assert "there are two, not three" "$(jq -e '.photos | length == 2' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
 
-c=$(req PUT "/profiles/$BRIDE_PROFILE/details/primary-photo" '{"url":"https://cdn.example.com/b.jpg"}' "$BRIDE")
+c=$(req PUT "/profiles/$PHOTOS_PROFILE/details/primary-photo" "{\"url\":\"$PB\"}" "$PHOTOS")
 check "another can be promoted" "$c" 200
-c=$(req DELETE "/profiles/$BRIDE_PROFILE/details/photos" '{"url":"https://cdn.example.com/b.jpg"}' "$BRIDE")
+c=$(req DELETE "/profiles/$PHOTOS_PROFILE/details/photos" "{\"url\":\"$PB\"}" "$PHOTOS")
 check "and removed" "$c" 200
-body_has '"primaryPhotoUrl":"https://cdn.example.com/a.jpg"' "removing the primary moves it rather than leaving it dangling"
+assert "removing the primary moves it rather than leaving it dangling" "$(jq -e --arg u "$PA" '.primaryPhotoUrl == $u' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
 
-c=$(req POST "/profiles/$BRIDE_PROFILE/details/photos" '{"url":"https://cdn.example.com/x.jpg"}' "$OTHER")
+PX=$(upload_media "$OTHER" x.jpg)
+c=$(req POST "/profiles/$PHOTOS_PROFILE/details/photos" "{\"url\":\"$PX\"}" "$OTHER")
 check "somebody else cannot put photographs on your profile" "$c" 403
 
 echo
@@ -678,6 +606,7 @@ LISTING2=$(field /tmp/body id)
 
 # Walked to live like any other: nothing is verified until the vendor asks.
 seed_catalog "$VENDOR2" "$LISTING2"
+business_documents "$VENDOR2" "$LISTING2"
 req POST "/vendors/$LISTING2/first-review" "" "$VENDOR2" >/dev/null
 c=$(req POST "/vendors/$LISTING2/submit-verification" "" "$VENDOR2")
 check "the second business is submitted for verification" "$c" 200
@@ -708,7 +637,8 @@ check "a write-up too short to mean anything is refused" "$c" 400
 c=$(req PUT "/verification/requests/$REQ2/findings" '{"visited":false,"observations":"Could not find the address at all.","issues":[],"recommendation":"reject"}' "$OFFICER")
 check "recommending a rejection without saying what went wrong is refused" "$c" 400
 
-c=$(req PUT "/verification/requests/$REQ2/findings" '{"visited":true,"observations":"Attended. Kitchen and two vans present, GST certificate on the wall.","issues":[],"evidence":["https://cdn.example.com/gst.jpg"],"recommendation":"approve"}' "$OFFICER")
+GST_PHOTO=$(upload_media "$OFFICER" gst.jpg /media/attachment/presign)
+c=$(req PUT "/verification/requests/$REQ2/findings" "{\"visited\":true,\"observations\":\"Attended. Kitchen and two vans present, GST certificate on the wall.\",\"issues\":[],\"evidence\":[\"$GST_PHOTO\"],\"recommendation\":\"approve\"}" "$OFFICER")
 check "the officer submits their findings" "$c" 200
 body_has '"status":"submitted"' "which moves it out of their queue"
 
@@ -747,14 +677,15 @@ body_has 'photograph the second kitchen' "carrying the exact reason, verbatim"
 # ride out on the public listing, where a competitor could read what an officer
 # thought of the premises.
 c=$(req GET "/vendors/$LISTING2" "")
-check "the public listing is served to anybody" "$c" 200
+# A listing sent back for another visit is not live, so the public read
+# answers as though it did not exist (ISS-16) and there is nothing to leak.
+check "a listing that is not live is not served publicly" "$c" 404
 grep -q 'photograph the second kitchen' /tmp/body && assert "the refusal reason is public" 0 || assert "but the refusal reason is not in it" 1
 grep -q '"panNumber"' /tmp/body && assert "the PAN number is public" 0 || assert "nor is the PAN number" 1
 grep -q '"gstNumber"' /tmp/body && assert "the GST number is public" 0 || assert "nor the GST number" 1
 grep -q '"registeredAddress"' /tmp/body && assert "the registered address is public" 0 || assert "nor the registered address" 1
 grep -q '"complianceDocuments"' /tmp/body && assert "the compliance documents are public" 0 || assert "nor the links to the compliance documents" 1
 grep -q '"payoutAccountId"' /tmp/body && assert "the payout account is public" 0 || assert "nor the payout account" 1
-body_has '"ratingAvg"' "what a buyer needs to choose is all still there"
 
 c=$(req GET "/vendors/$LISTING2/manage" "" "$BRIDE")
 check "and another account cannot read the full row either" "$c" 403
@@ -762,7 +693,8 @@ check "and another account cannot read the full row either" "$c" 403
 c=$(req PUT "/vendors/$LISTING2" '{"description":"Second kitchen documented."}' "$VENDOR2")
 check "and is editable again, which a rejection never is" "$c" 200
 
-c=$(req PUT "/verification/requests/$REQ2/findings" '{"visited":true,"observations":"Went back. Second kitchen photographed, everything in order.","issues":[],"evidence":["https://cdn.example.com/kitchen2.jpg"],"recommendation":"approve"}' "$OFFICER")
+KITCHEN_PHOTO=$(upload_media "$OFFICER" kitchen2.jpg /media/attachment/presign)
+c=$(req PUT "/verification/requests/$REQ2/findings" "{\"visited\":true,\"observations\":\"Went back. Second kitchen photographed, everything in order.\",\"issues\":[],\"evidence\":[\"$KITCHEN_PHOTO\"],\"recommendation\":\"approve\"}" "$OFFICER")
 check "the officer goes back and writes it up again" "$c" 200
 
 c=$(req PUT "/verification/requests/$REQ2/decide" '{"status":"approved"}' "$ADMIN")
@@ -835,9 +767,9 @@ echo
 echo "== 23. Allocation that knows where the applicant is =="
 # Two officers, one covering the applicant's city and carrying work, one
 # covering nowhere and carrying nothing. Workload alone picks the wrong one.
-req POST /verification/officers "{\"email\":\"geo-a-$STAMP@wow.local\",\"name\":\"Geo A $STAMP\"}" "$ADMIN" >/dev/null
+req POST /verification/officers "{\"email\":\"geo-a-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Geo A $STAMP\"}" "$ADMIN" >/dev/null
 GEO_A=$(field /tmp/body id)
-req POST /verification/officers "{\"email\":\"geo-b-$STAMP@wow.local\",\"name\":\"Geo B $STAMP\"}" "$ADMIN" >/dev/null
+req POST /verification/officers "{\"email\":\"geo-b-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Geo B $STAMP\"}" "$ADMIN" >/dev/null
 GEO_B=$(field /tmp/body id)
 
 c=$(req POST "/verification/officers/$GEO_A/areas" '{"city":"Hyderabad"}' "$ADMIN")
@@ -874,6 +806,7 @@ NOT_YET=$(jq -r --arg id "$LISTING3" '[(.data // .)[] | select(.subjectId == $id
 assert "a draft listing is not in the officer queue" "$([ "$NOT_YET" = "0" ] && echo 1 || echo 0)"
 
 seed_catalog "$VENDOR3" "$LISTING3" >/dev/null
+business_documents "$VENDOR3" "$LISTING3"
 req POST "/vendors/$LISTING3/first-review" "" "$VENDOR3" >/dev/null
 c=$(req POST "/vendors/$LISTING3/submit-verification" "" "$VENDOR3")
 check "and enters it on submission" "$c" 200
@@ -908,6 +841,7 @@ check "a business applies from a city nobody lists" "$c" 201
 LISTING4=$(field /tmp/body id)
 
 seed_catalog "$VENDOR4" "$LISTING4" >/dev/null
+business_documents "$VENDOR4" "$LISTING4"
 req POST "/vendors/$LISTING4/first-review" "" "$VENDOR4" >/dev/null
 req POST "/vendors/$LISTING4/submit-verification" "" "$VENDOR4" >/dev/null
 
@@ -992,6 +926,7 @@ MB_B=$(field /tmp/body id)
 # submitted last.
 for biz in "$MB_A" "$MB_B"; do
   seed_catalog "$MB" "$biz" >/dev/null
+  business_documents "$MB" "$biz"
   req POST "/vendors/$biz/first-review" "" "$MB" >/dev/null
   req POST "/vendors/$biz/submit-verification" "" "$MB" >/dev/null
 done
@@ -1087,14 +1022,19 @@ GEN=$(field /tmp/genuine.json accessToken)
 c=$(req GET /users/me "" "$GEN")
 GEN_PROFILE=$(field /tmp/body id)
 
-c=$(req POST "/profiles/$GEN_PROFILE/details/photos" '{"url":"https://cdn.example.com/holiday.jpg"}' "$GEN")
+# Uploaded for real. The stored key keeps the file name, which is what the
+# generated-image check reads, so the refusals below still exercise it.
+GEN_OK=$(upload_media "$GEN" holiday.jpg)
+GEN_MJ=$(upload_media "$GEN" midjourney-portrait.png)
+GEN_AI=$(upload_media "$GEN" ai-generated-face.png)
+c=$(req POST "/profiles/$GEN_PROFILE/details/photos" "{\"url\":\"$GEN_OK\"}" "$GEN")
 check "an ordinary photograph goes on" "$c" 201
 
-c=$(req POST "/profiles/$GEN_PROFILE/details/photos" '{"url":"https://cdn.example.com/midjourney-portrait.png"}' "$GEN")
+c=$(req POST "/profiles/$GEN_PROFILE/details/photos" "{\"url\":\"$GEN_MJ\"}" "$GEN")
 check "one straight out of a generator is refused" "$c" 400
-body_has 'authentic photograph' "and says what to do instead"
+body_has 'genuine photo' "and says what to do instead"
 
-c=$(req POST "/profiles/$GEN_PROFILE/details/photos" '{"url":"https://cdn.example.com/ai-generated-face.png"}' "$GEN")
+c=$(req POST "/profiles/$GEN_PROFILE/details/photos" "{\"url\":\"$GEN_AI\"}" "$GEN")
 check "so is one that says so in its name" "$c" 400
 
 c=$(req GET "/profiles/$GEN_PROFILE/details/photos" "" "$GEN")
@@ -1108,8 +1048,8 @@ check "one photograph is not enough to start the details" "$c" 400
 body_has 'photographs before' "and says how many are needed"
 body_has '1 so far' "and how many there are"
 
-req POST "/profiles/$GEN_PROFILE/details/photos" '{"url":"https://cdn.example.com/second.jpg"}' "$GEN" >/dev/null
-req POST "/profiles/$GEN_PROFILE/details/photos" '{"url":"https://cdn.example.com/third.jpg"}' "$GEN" >/dev/null
+req POST "/profiles/$GEN_PROFILE/details/photos" "{\"url\":\"$(upload_media "$GEN" second.jpg)\"}" "$GEN" >/dev/null
+req POST "/profiles/$GEN_PROFILE/details/photos" "{\"url\":\"$(upload_media "$GEN" third.jpg)\"}" "$GEN" >/dev/null
 c=$(req PUT "/profiles/$GEN_PROFILE/details/personal" '{"firstName":"Meera","lastName":"Nair","heightCm":160,"complexion":"fair","communicationAddress":"3 Kondapur, Hyderabad"}' "$GEN")
 check "with three, the details save" "$c" 200
 
@@ -1231,9 +1171,11 @@ check "somebody can open their own profile" "$c" 200
 body_has '"identityVerified"' "and it says whether the document was checked"
 
 c=$(req GET "/profiles/$BRIDE_PROFILE/view" "" "$OTHER")
-# The bride's profile is matches-only by default, and OTHER is not matched.
-check "a stranger cannot open a matches-only profile" "$c" 403
-body_has 'accepted on both sides' "and is told what would open it"
+# The bride's profile is matches-only by default, and OTHER is not matched:
+# a stranger gets the basic, limited view and is told what would open the rest.
+check "a stranger opens only the basic view of a matches-only profile" "$c" 200
+assert "limited, at the basic level" "$(jq -e '.limited == true and .accessLevel == "basic"' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
+body_has '"unlockRequirement":"accepted_interest"' "and is told what would open it"
 
 # The subtractive rule holds: the address and the second number never travel.
 c=$(req GET "/profiles/$BRIDE_PROFILE/view" "" "$BRIDE")
@@ -1301,6 +1243,16 @@ body_has '"businesses"' "the businesses they own"
 body_has '"bookings"' "the bookings they placed"
 body_has '"casesRaised"' "and the complaints they made"
 grep -q 'passwordHash' /tmp/body && assert "the detail view leaks the hash" 0 || assert "with no hash anywhere in it" 1
+# Contact details are masked on the detail view (ISS-11); the whole values are
+# a separate, audited read.
+VENDOR_EMAIL="vendor-$STAMP@t.com"
+assert "the contact is masked by default" "$(jq -e '.user.contactMasked == true' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
+grep -q "$VENDOR_EMAIL" /tmp/body && assert "the full email leaked into the detail view" 0 || assert "and the full email is not in it" 1
+c=$(req GET "/admin/accounts/$VENDOR_UID/contact" "" "$ADMIN")
+check "an administrator can reveal it on purpose" "$c" 200
+assert "which returns the whole address" "$(jq -e --arg e "$VENDOR_EMAIL" '.email == $e' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
+c=$(req GET "/admin/accounts/$VENDOR_UID/contact" "" "$VENDOR")
+check "and nobody else can" "$c" 403
 
 c=$(req GET "/admin/businesses?status=live&limit=5" "" "$ADMIN")
 check "businesses list by lifecycle state" "$c" 200
@@ -1444,9 +1396,11 @@ echo "== 40. Attaching the thing you are complaining about =="
 # issued for it. This posts the *real* presigned URL, which is what the browser
 # does and what nothing here ever did.
 
-c=$(req POST /media/profile-photo/presign '{"filename":"receipt.jpg"}' "$BRIDE")
+c=$(req POST /media/attachment/presign '{"filename":"receipt.jpg"}' "$BRIDE")
 check "an upload slot is issued" "$c" 201
-REAL_URL=$(field /tmp/body publicUrl)
+# Uploaded and confirmed the way the browser does it: presign, PUT, complete.
+# Only an address the platform's own storage handed out is stored (ISS-06).
+REAL_URL=$(upload_media "$BRIDE" receipt.jpg /media/attachment/presign)
 
 c=$(req POST /verification/cases "{\"subjectType\":\"other\",\"title\":\"Attachment\",\"description\":\"Attaching the receipt the platform just gave me a slot for.\",\"evidence\":[\"$REAL_URL\"]}" "$BRIDE")
 check "and a case accepts the URL the platform itself issued" "$c" 201
@@ -1495,7 +1449,8 @@ body_has 'shareUrl' "carrying the share link, since it is public"
 # itself issued. This is the path the browser takes.
 c=$(req POST "/media/albums/$ALBUM/presign" '{"filename":"mehendi.jpg"}' "$BRIDE")
 check "an upload slot for the album is issued" "$c" 201
-PHOTO=$(field /tmp/body publicUrl)
+# Uploaded through the album slot and confirmed, as the browser does it.
+PHOTO=$(upload_media "$BRIDE" mehendi.jpg "/media/albums/$ALBUM/presign")
 c=$(req POST "/media/albums/$ALBUM/items" "{\"url\":\"$PHOTO\",\"type\":\"image\"}" "$BRIDE")
 check "and the photograph goes into the album" "$c" 201
 ITEM=$(field /tmp/body id)
@@ -1610,7 +1565,10 @@ check "a key that climbs out of the store is refused" "$TRAV" 400
 
 # And the platform accepts its own URL, which it did not before: @IsUrl also
 # demanded a top-level domain, and the storage host has none.
-c=$(req PUT /users/me/profile "{\"displayName\":\"Bride\",\"photos\":[\"$PUB\"]}" "$BRIDE")
+# Stored only once confirmed, and under an origin the store recognises: the
+# helper uploads it the way the web client does.
+PUB_STORED=$(upload_media "$BRIDE" portrait-stored.jpg)
+c=$(req PUT /users/me/profile "{\"displayName\":\"Bride\",\"photos\":[\"$PUB_STORED\"]}" "$BRIDE")
 check "and the profile accepts the URL the platform issued" "$c" 200
 body_has 'mock-storage' "storing it against the profile"
 
@@ -1684,9 +1642,10 @@ req PUT /users/me/profile "{\"displayName\":\"Ic\",\"gender\":\"male\",\"dateOfB
 req GET /users/me "" "$IA" >/dev/null; P_IA=$(field /tmp/body id)
 req GET /users/me "" "$IB" >/dev/null; P_IB=$(field /tmp/body id)
 req GET /users/me "" "$IC" >/dev/null; P_IC=$(field /tmp/body id)
-verify_identity "$P_IA" "$IA" >/dev/null
-verify_identity "$P_IB" "$IB" >/dev/null
-verify_identity "$P_IC" "$IC" >/dev/null
+# Interests need complete biodatas on both sides and verified identities.
+ready_for_interests "$P_IA" "$IA" Ia Rao
+ready_for_interests "$P_IB" "$IB" Ib Rao
+ready_for_interests "$P_IC" "$IC" Ic Rao
 
 c=$(req GET /matches/interests "" "$IA")
 check "the board is served, empty" "$c" 200
@@ -1772,6 +1731,13 @@ check "a one-character search is refused" "$c" 400
 # Muting is one side's decision about their own screen.
 c=$(req PUT /chat/mute "{\"withUserId\":\"$IC_ID\",\"muted\":true}" "$IA")
 check "she mutes the thread" "$c" 200
+# Housekeeping never creates a conversation (ISS-05): with nobody she has
+# talked to there is nothing to mute, clear or delete.
+NO_THREAD=$(jq -r '.user.id' /tmp/vendor.json)
+c=$(req PUT /chat/mute "{\"withUserId\":\"$NO_THREAD\",\"muted\":true}" "$IA")
+check "muting a thread that does not exist is not found" "$c" 404
+c=$(req PUT /chat/clear "{\"withUserId\":\"$NO_THREAD\"}" "$IA")
+check "nor can one be cleared" "$c" 404
 c=$(req GET /chat/conversations "" "$IA")
 assert "her list shows it muted" "$(jq -e --arg u "$IC_ID" 'any(.[]; .withUserId == $u and .muted == true)' /tmp/body >/dev/null 2>&1 && echo 1 || echo 0)"
 c=$(req GET /chat/conversations "" "$IC")

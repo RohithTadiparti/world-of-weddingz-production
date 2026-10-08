@@ -18,7 +18,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape, IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
 import { IsStrictString } from '../../../common/decorators/strict-type.decorator';
 import { Transform } from 'class-transformer';
 import { EventCategory, EventStatus, RsvpStatus } from '../../../common/enums';
@@ -166,7 +166,8 @@ export class UpdateEventDto {
   plannerNotes?: string;
 
   @ApiPropertyOptional()
-  @IsOptional() @IsUploadedUrl()
+  // A new value must be an upload; the stored one may be resent (kept-media.ts).
+  @IsOptional() @IsMediaUrlShape()
   imageUrl?: string;
 
   @ApiPropertyOptional({ enum: EventStatus })

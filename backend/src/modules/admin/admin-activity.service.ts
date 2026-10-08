@@ -13,6 +13,7 @@ import { WeddingEvent } from '../events/entities/event.entity';
 import { MONEY_TAKEN } from './reports.service';
 import { ActivityQueryDto } from './dto/console.dto';
 import { UserRole, VerificationStatus, isIndividual } from '../../common/enums';
+import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 import { bookingContextOf } from '../bookings/booking-venue';
 
 /** One line in the activity feed. Deliberately uniform across every source. */
@@ -310,7 +311,8 @@ export class AdminActivityService {
           draft.kind === 'dispute.raised'
             ? `${AdminActivityService.disputeRaiser(actor?.role)} ${draft.summary}`
             : draft.summary,
-        actorName: actor ? (actor.email ?? actor.phone ?? null) : null,
+        // Masked: the feed is a list like any other (ISS-11).
+        actorName: actor ? (maskEmail(actor.email) ?? maskPhone(actor.phone) ?? null) : null,
         actorRole: actor?.role ?? null,
       };
     });

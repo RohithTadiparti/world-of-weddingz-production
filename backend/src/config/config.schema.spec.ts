@@ -87,6 +87,26 @@ describe('production deployment provider policy', () => {
     expect(result.value.SMTP_SECURE).toBe(true);
   });
 
+  it('refuses the test delivery capture on a public deployment', () => {
+    const result = configValidationSchema.validate(
+      {
+        ...publicBeta,
+        TEST_DELIVERY_CAPTURE_ENABLED: 'true',
+        TEST_DELIVERY_CAPTURE_KEY: 'k'.repeat(32),
+      },
+      { abortEarly: false },
+    );
+
+    expect(result.error?.message).toContain('TEST_DELIVERY_CAPTURE_ENABLED must be false');
+  });
+
+  it('caps the refresh reuse grace window at a few seconds', () => {
+    expect(configValidationSchema.validate(productionBase).value.REFRESH_REUSE_GRACE_SECONDS).toBe(5);
+    expect(
+      configValidationSchema.validate({ ...productionBase, REFRESH_REUSE_GRACE_SECONDS: '60' }).error,
+    ).toBeDefined();
+  });
+
   it('rejects Zoho port 465 without secure transport', () => {
     const result = configValidationSchema.validate({ ...publicBeta, SMTP_SECURE: 'false' }, { abortEarly: false });
 

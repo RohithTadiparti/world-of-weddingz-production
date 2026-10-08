@@ -35,5 +35,7 @@ describe('Biodata height and photo API validation', () => {
     }
     await expect(pipe.transform({ url: 'javascript:alert(1)' }, { type: 'body', metatype: ProfilePhotoDto })).rejects.toThrow();
     await expect(pipe.transform({ url: 'ftp://example.com/photo.jpg' }, { type: 'body', metatype: ProfilePhotoDto })).rejects.toThrow();
+    // Well-formed is not enough: it has to be one of the platform's own uploads.
+    await expect(pipe.transform({ url: 'https://evil.example.com/x.jpg' }, { type: 'body', metatype: ProfilePhotoDto })).rejects.toThrow();
   });
 });

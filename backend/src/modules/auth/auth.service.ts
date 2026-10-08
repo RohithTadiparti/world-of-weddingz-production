@@ -679,7 +679,7 @@ export class AuthService {
   }
 
   async logout(refreshToken?: string, userId?: string): Promise<{ success: true }> {
-    if (refreshToken) await this.sessions.revokeByToken(refreshToken, 'logout');
+    if (refreshToken) await this.sessions.revokeFamilyByToken(refreshToken, 'logout');
     else if (userId) await this.sessions.revokeAllForUser(userId, 'logout');
     return { success: true };
   }

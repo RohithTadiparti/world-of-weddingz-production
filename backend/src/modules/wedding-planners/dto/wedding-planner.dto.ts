@@ -26,7 +26,7 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { SocialLinksDto } from '../../../common/dto/social-links.dto';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape } from '../../../common/decorators/uploaded-url.decorator';
 import { isMediaRef } from '../../../platform/storage/storage-keys';
 import {
   MAX_PLANNER_WEDDINGS,
@@ -158,7 +158,8 @@ export class PlannerWeddingDto {
   @ApiPropertyOptional()
   @IsOptional()
   @Transform(blankToNull)
-  @IsUploadedUrl()
+  // A new value must be an upload; the stored one may be resent (kept-media.ts).
+  @IsMediaUrlShape()
   @MaxLength(2048)
   coverUrl?: string | null;
 
@@ -166,7 +167,8 @@ export class PlannerWeddingDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(MAX_WEDDING_PHOTOS)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   @MaxLength(2048, { each: true })
   photos?: string[];
 
@@ -270,7 +272,8 @@ export class UpsertPlannerProfileDto extends SocialLinksDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(30)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   @MaxLength(2048, { each: true })
   portfolio?: string[];
 

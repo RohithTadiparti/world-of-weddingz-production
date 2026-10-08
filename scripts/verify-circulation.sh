@@ -55,13 +55,6 @@ assert() {
 
 field() { jq -r ".$2 // empty" "$1"; }
 
-# Three photographs before the details. A biodata with no picture is one
-# nobody looks at, so the section that starts the form now requires them.
-seed_photos() { # seed_photos <profileId> <token>
-  for n in 1 2 3; do
-    req POST "/profiles/$1/details/photos" "{\"url\":\"https://cdn.example.com/seed-$1-$n.jpg\"}" "$2" >/dev/null
-  done
-}
 
 
 # Phone is the duplicate key for an agency-built profile, and the check is
@@ -76,7 +69,9 @@ jqok()  { jq -e "$1" /tmp/body >/dev/null 2>&1 && echo 1 || echo 0; }
 # Identity verification now gates sending an interest, accepting one and
 # fixing a match. Every persona that does any of those has to go through it
 # first — the gate itself is asserted in verify-phase2.
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 
 if command -v redis-cli >/dev/null 2>&1; then
@@ -162,6 +157,9 @@ check "profile created with NO email address" "$c" 201
 cp /tmp/body /tmp/priya.json
 PRIYA=$(field /tmp/priya.json id)
 assert "email is null on the profile" "$(jq -e '.contactEmail == null' /tmp/priya.json >/dev/null && echo 1 || echo 0)"
+# An agency's new client starts private; the agent makes it matchable on
+# purpose, so the gates below are the consent and completeness ones.
+agency_matchable "$PRIYA" "$AGENT_A"
 
 c=$(req POST /agents/profiles "{\"displayName\":\"NoPhone\",\"contactEmail\":\"np-$STAMP@t.com\",$CONSENT}" "$AGENT_A")
 check "mobile number is still required" "$c" 400
@@ -314,6 +312,10 @@ req POST "/circulation/profiles/$PRIYA/consent" '{"scope":"circulation","method"
 c=$(req POST /agents/profiles "{\"displayName\":\"Arjun\",\"contactPhone\":\"+9198765${NUM}2\",\"gender\":\"male\",\"dateOfBirth\":\"1995-02-02\",\"city\":\"Hyderabad\",$CONSENT_OK}" "$AGENT_B")
 check "agent B builds the other side" "$c" 201
 ARJUN=$(field /tmp/body id)
+# The other side has to be ready too: a complete biodata, matchable, and a
+# verified identity before anything can be proposed to it.
+complete_biodata "$ARJUN" "$AGENT_B" Arjun Rao
+agency_matchable "$ARJUN" "$AGENT_B"
 verify_identity "$ARJUN" "$AGENT_B" >/dev/null
 verify_identity "$PRIYA" "$AGENT_A" >/dev/null
 
@@ -329,6 +331,13 @@ check "agent B can open it too" "$c" 200
 c=$(req GET "/circulation/proposals/$INTEREST" "" "$BRIDE")
 check "an unrelated user cannot" "$c" 403
 
+# The notes open once the other side has said yes. The interest reaches an
+# agency client through the agency, which lets it through and then answers.
+c=$(req PUT "/matches/$INTEREST/agency/forward" '{}' "$AGENT_B")
+check "agent B lets the interest through to their client" "$c" 200
+c=$(req PUT "/matches/$INTEREST/accept" '{}' "$AGENT_B")
+check "agent B accepts for their client" "$c" 200
+
 c=$(req POST "/circulation/proposals/$INTEREST/notes" '{"body":"Horoscopes match. Can the families meet on Sunday?"}' "$AGENT_A")
 check "agent A posts a note" "$c" 201
 c=$(req POST "/circulation/proposals/$INTEREST/notes" '{"body":"Checking with them, will confirm tomorrow."}' "$AGENT_B")
@@ -341,7 +350,7 @@ assert "the thread reads back in order" "$(jqok '.notes | length == 2 and (.[0].
 
 echo
 echo "== 11. Family stewards circulate, but do not browse the network =="
-c=$(req POST /agents/profiles "{\"displayName\":\"Cousin\",\"contactPhone\":\"+9198765${NUM}3\",\"gender\":\"female\",$CONSENT_OK}" "$FAMILY")
+c=$(req POST /agents/profiles "{\"displayName\":\"Cousin\",\"contactPhone\":\"+9198765${NUM}3\",\"gender\":\"female\",\"dateOfBirth\":\"1998-01-01\",\"city\":\"Hyderabad\",\"stewardRelation\":\"Cousin\",$CONSENT_OK}" "$FAMILY")
 check "a family account builds a relative profile" "$c" 201
 COUSIN=$(field /tmp/body id)
 fill_biodata "$COUSIN" "$FAMILY"
@@ -371,6 +380,7 @@ NOCIRC='"consent":{"method":"in_person","givenByRelation":"father","givenByName"
 c=$(req POST /agents/profiles "{\"displayName\":\"Later Yes\",\"contactPhone\":\"$(phone 090)\",\"gender\":\"female\",\"dateOfBirth\":\"1998-02-02\",\"city\":\"Warangal\",$NOCIRC}" "$AGENT_A")
 check "a profile is taken on without permission to share it" "$c" 201
 LATER=$(field /tmp/body id)
+agency_matchable "$LATER" "$AGENT_A"
 
 c=$(req GET /agents/profiles "" "$AGENT_A")
 check "the client book is readable" "$c" 200

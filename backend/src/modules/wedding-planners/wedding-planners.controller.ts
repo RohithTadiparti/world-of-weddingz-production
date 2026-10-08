@@ -79,7 +79,7 @@ export class WeddingPlannersController {
   @Public()
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.planners.findOne(id);
+    return this.planners.findPublic(id);
   }
 
   @ApiBearerAuth()

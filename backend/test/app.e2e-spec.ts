@@ -5,6 +5,10 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { isValidAadhaar } from '../src/common/util/government-id';
+import { DataSource } from 'typeorm';
+import { Profile } from '../src/modules/users/entities/profile.entity';
+import { ProfileDetails } from '../src/modules/profile-details/entities/profile-details.entity';
+import { FamilyType, MaritalStatus, OccupationStatus } from '../src/common/enums';
 
 /**
  * A valid Aadhaar number nobody has used yet.
@@ -523,6 +527,48 @@ describe('WOW API (e2e)', () => {
     });
   });
 
+  /**
+   * Fills in every biodata section straight into the database.
+   *
+   * Sending an interest needs a complete biodata, and an interest can only be
+   * sent to a profile whose biodata is complete (ISS-03, ISS-08). The section
+   * forms have their own suites; here they are only the price of entry, so
+   * the rows are written directly rather than walked through nine endpoints.
+   */
+  const completeBiodata = async (profileId: string) => {
+    const db = app.get(DataSource);
+    await db.getRepository(Profile).update(profileId, {
+      photos: [1, 2, 3].map((n) => `https://cdn.example.com/e2e/${profileId}-${n}.jpg`),
+    });
+    const details = db.getRepository(ProfileDetails);
+    const row = (await details.findOneBy({ profileId })) ?? details.create({ profileId });
+    await details.save(
+      details.merge(row, {
+        firstName: 'First',
+        lastName: 'Last',
+        heightCm: 170,
+        complexion: 'Fair',
+        communicationAddress: 'Mumbai',
+        religion: 'Hindu',
+        caste: 'Kamma',
+        motherTongue: 'Telugu',
+        horoscopeAvailable: false,
+        maritalStatus: MaritalStatus.NEVER_MARRIED,
+        father: { name: 'Ramesh Sharma' },
+        mother: { name: 'Lakshmi Sharma' },
+        familyType: FamilyType.NUCLEAR,
+        familyNetWorth: '10000000',
+        brothers: 0,
+        sisters: 0,
+        highestQualification: 'B.Tech',
+        course: 'Computer Science',
+        occupationStatus: OccupationStatus.EMPLOYED,
+        preferredAgeMin: 24,
+        preferredHeightMinCm: 150,
+      }),
+    );
+  };
+
   const verifyIdentity = async (
     profileId: string,
     token: string,
@@ -550,10 +596,8 @@ describe('WOW API (e2e)', () => {
   };
 
   /*
-   * Identity verification no longer gates an interest (EZ1-I70): an in-person
-   * check is not part of the individual flow, so sending, accepting and fixing
-   * all proceed without one. What still closes the door is an incomplete
-   * profile — a half-filled biodata wastes the time of everyone it reaches.
+   * An incomplete profile is refused at the door — a half-filled biodata wastes
+   * the time of everyone it reaches.
    */
   it('will not let an incomplete profile send an interest', async () => {
     const reg = await http()
@@ -577,8 +621,40 @@ describe('WOW API (e2e)', () => {
     expect(JSON.stringify(refused.body)).toContain('Complete the profile');
   });
 
-  it('runs the interest to accept flow between two individuals', async () => {
+  it('will not let a complete but empty-biodata profile send one either', async () => {
+    // The basics alone set profileCompleted; the biodata is still empty.
+    const refused = await http()
+      .post('/api/matches/interest')
+      .set('Authorization', `Bearer ${soloToken}`)
+      .send({ toProfileId: groomProfileId })
+      .expect(403);
+    expect(JSON.stringify(refused.body)).toContain('Complete the biodata');
+  });
+
+  it('refuses an interest to a profile whose biodata is not ready', async () => {
+    await completeBiodata(soloProfileId);
     await verifyIdentity(soloProfileId, soloToken);
+
+    const refused = await http()
+      .post('/api/matches/interest')
+      .set('Authorization', `Bearer ${soloToken}`)
+      .send({ toProfileId: groomProfileId })
+      .expect(403);
+    expect(JSON.stringify(refused.body)).toContain('not accepting interests');
+  });
+
+  it('requires the sender to be identity verified', async () => {
+    await completeBiodata(groomProfileId);
+
+    const refused = await http()
+      .post('/api/matches/interest')
+      .set('Authorization', `Bearer ${groomToken}`)
+      .send({ toProfileId: soloProfileId })
+      .expect(403);
+    expect(JSON.stringify(refused.body)).toMatch(/Identity verification/);
+  });
+
+  it('runs the interest to accept flow between two individuals', async () => {
     await verifyIdentity(groomProfileId, groomToken);
 
     const sent = await http()
@@ -589,10 +665,22 @@ describe('WOW API (e2e)', () => {
       })
       .expect(201);
 
+    // A second send while the first is open is a conflict, not a new row.
+    await http()
+      .post('/api/matches/interest')
+      .set('Authorization', `Bearer ${soloToken}`)
+      .send({ toProfileId: groomProfileId })
+      .expect(409);
+
     await http()
       .put(`/api/matches/${sent.body.id}/accept`)
       .set('Authorization', `Bearer ${groomToken}`)
       .expect(200);
+
+    await http()
+      .put(`/api/matches/${sent.body.id}/accept`)
+      .set('Authorization', `Bearer ${groomToken}`)
+      .expect(409);
   });
 
   it('never returns an exact date of birth to another user', async () => {
@@ -666,6 +754,30 @@ describe('WOW API (e2e)', () => {
         onBehalfOfUserId: groomProfileId,
       })
       .expect(400);
+  });
+
+  it('hides a listing that is not live from everyone but its owner', async () => {
+    const created = await http()
+      .post('/api/vendors')
+      .set('Authorization', `Bearer ${vendorToken}`)
+      .send({ name: `Draft Venue ${unique}`, category: 'venue', city: 'Hyderabad' })
+      .expect(201);
+    const id = created.body.id as string;
+
+    await http().get(`/api/vendors/${id}`).expect(404);
+    await http()
+      .get(`/api/vendors/${id}`)
+      .set('Authorization', `Bearer ${soloToken}`)
+      .expect(404);
+    await http()
+      .get(`/api/vendors/${id}`)
+      .set('Authorization', 'Bearer not-a-real-token')
+      .expect(404);
+    const own = await http()
+      .get(`/api/vendors/${id}`)
+      .set('Authorization', `Bearer ${vendorToken}`)
+      .expect(200);
+    expect(own.body).not.toHaveProperty('ownerUserId');
   });
 
   it('leaves the couple their own albums and assistant', async () => {

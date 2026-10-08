@@ -13,6 +13,7 @@ import { S3StorageDriver } from './s3-storage.driver';
 import { StorageSettings, assertStorageConfig } from './storage-config';
 import { isSafeKey, refKey, toRef } from './storage-keys';
 import { STORAGE_DRIVER, StorageDriver, UrlOptions } from './storage.driver';
+import { UploadedMediaRecogniser, configureUploadedMedia } from './uploaded-media';
 
 export interface PresignedUpload {
   /** The client PUTs the file here. */
@@ -62,6 +63,9 @@ export class StorageService {
     assertStorageConfig(this.s);
     this.driver =
       driver ?? (this.s.storageProvider === 's3' ? new S3StorageDriver(this.s) : new LocalStorageDriver(this.s));
+    // The upload fields (IsUploadedUrl) are checked by class-validator, outside
+    // dependency injection, so they learn where uploads live from here.
+    configureUploadedMedia(new UploadedMediaRecogniser(this.s, this.driver));
   }
 
   /** True when objects are private and stored as keys. */

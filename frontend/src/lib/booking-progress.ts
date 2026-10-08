@@ -183,3 +183,23 @@ export function nextActionFor(booking: ProgressBooking): string {
       return '';
   }
 }
+
+/**
+ * Whether the provider can accept a new request as it stands (ISS-18).
+ *
+ * Only when the customer named a price: a selected package total or a stated
+ * budget. A request with neither -- including one that carries only a bare
+ * amount -- is refused by `PUT /bookings/:id/accept` ("Send a quotation
+ * instead"), so the provider is offered Send quotation rather than a button
+ * that can only fail.
+ */
+export function canAcceptCustomerRequest(booking: {
+  status: string;
+  estimatedAmount?: string | null;
+  expectedBudget?: string | null;
+}): boolean {
+  return (
+    booking.status === 'requested' &&
+    (Number(booking.estimatedAmount ?? 0) > 0 || Number(booking.expectedBudget ?? 0) > 0)
+  );
+}

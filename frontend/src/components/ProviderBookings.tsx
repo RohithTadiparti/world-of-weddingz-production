@@ -10,7 +10,7 @@ import { Permission, can } from '../lib/permissions';
 import { SELLER_STATUS_LABEL } from '../lib/labels';
 import { usePermissions } from '../store/auth';
 import { FieldSpec, formatAnswer } from './DynamicForm';
-import { canMarkCompleted, canMarkDelivered } from '../lib/booking-progress';
+import { canAcceptCustomerRequest, canMarkCompleted, canMarkDelivered } from '../lib/booking-progress';
 
 interface IncomingBooking {
   id: string;
@@ -270,17 +270,6 @@ export default function ProviderBookings({ canQuote }: { canQuote: boolean }) {
         )}
       />
     </div>
-  );
-}
-
-function canAcceptCustomerRequest(booking: {
-  status: string;
-  estimatedAmount?: string | null;
-  expectedBudget?: string | null;
-}): boolean {
-  return (
-    booking.status === 'requested' &&
-    (Number(booking.estimatedAmount ?? 0) > 0 || Number(booking.expectedBudget ?? 0) > 0)
   );
 }
 

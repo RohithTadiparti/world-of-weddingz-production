@@ -60,6 +60,7 @@ const schema = Joi.object<PlatformConfig>({
     individualUserEnabled: Joi.boolean().required(),
     chatRedactContacts: Joi.boolean().required(),
     servicesRequireMatchFixed: Joi.boolean().required(),
+    matchmakingRequiresIdentity: Joi.boolean().required(),
     catalogReviewThresholdPercent: Joi.number().min(0).max(1000).required(),
   })
     .unknown(false)

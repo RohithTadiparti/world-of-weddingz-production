@@ -23,6 +23,7 @@ import { ClientSearchDto, UpdateClientStatusDto } from './dto/agent.dto';
 import { UpsertAgencyDto } from './dto/agency.dto';
 import {
   AddProfilePhotoDto,
+  RemoveProfilePhotoDto,
   CreateManagedProfileDto,
   ManagedProfileSearchDto,
   UpdateManagedProfileDto,
@@ -175,7 +176,7 @@ export class AgentsController {
   removePhoto(
     @CurrentUser() actor: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: AddProfilePhotoDto,
+    @Body() dto: RemoveProfilePhotoDto,
   ) {
     return this.managed.removePhoto(actor, id, dto.url);
   }

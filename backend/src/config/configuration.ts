@@ -107,6 +107,20 @@ export default () => {
     // to the marketplace turns it back on.
     servicesRequireMatchFixed: toBool(process.env.SERVICES_REQUIRE_MATCH_FIXED, platform.features.servicesRequireMatchFixed),
     /**
+     * Whether a profile must have its identity verified before it may send an
+     * interest, accept one, or confirm a match as fixed.
+     *
+     * On by default: those are the steps where another family starts relying
+     * on who this person is, and verification is self-serve (an Aadhaar OTP on
+     * the biodata), so the gate costs a minute rather than an appointment.
+     * Browsing and suggestions stay open either way. An operator who wants the
+     * EZ1-I70 behaviour back — verification informational only — turns it off.
+     */
+    matchmakingRequiresIdentity: toBool(
+      process.env.MATCHMAKING_REQUIRES_IDENTITY,
+      platform.features.matchmakingRequiresIdentity,
+    ),
+    /**
      * How much a live listing's price may move before an administrator looks.
      *
      * Zero is off, which is the default: most price changes are a vendor
@@ -137,9 +151,10 @@ export default () => {
     maxFailedLogins: toNumber(process.env.MAX_FAILED_LOGINS, 8),
     lockoutMinutes: toNumber(process.env.LOCKOUT_MINUTES, 15),
 
-    // A refresh token replaced this recently and presented again is a lost
-    // race (a reload or a second tab), not theft; 0 treats every reuse as theft.
-    refreshReuseGraceSeconds: toNumber(process.env.REFRESH_REUSE_GRACE_SECONDS, 10),
+    // A refresh token replaced this recently and presented again is treated as
+    // a lost race (a reload or a second tab): refused, but the login is not
+    // revoked. It never mints a new session. 0 treats every reuse as theft.
+    refreshReuseGraceSeconds: toNumber(process.env.REFRESH_REUSE_GRACE_SECONDS, 5),
 
     // Single-use email token lifetimes.
     invitationTtlHours: toNumber(process.env.INVITATION_TTL_HOURS, 168),

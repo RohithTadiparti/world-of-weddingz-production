@@ -11,17 +11,7 @@
  * impossible.
  */
 
-@import '@fontsource-variable/geist-mono';
-/* The matrimony home template's pair: Karla carries the text, Cormorant
- * Garamond the titles. Only the weights the template sets are loaded. */
-@import '@fontsource/karla/300.css';
-@import '@fontsource/karla/400.css';
-@import '@fontsource/karla/500.css';
-@import '@fontsource/karla/600.css';
-@import '@fontsource/cormorant-garamond/300.css';
-@import '@fontsource/cormorant-garamond/400.css';
-@import '@fontsource/cormorant-garamond/500.css';
-@import '@fontsource/cormorant-garamond/400-italic.css';
+/* Web fonts are loaded from src/fonts.ts, not imported here: see there. */
 
 @import "tailwindcss";
 @config "../tailwind.config.js";

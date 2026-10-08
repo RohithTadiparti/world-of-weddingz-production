@@ -43,6 +43,17 @@ export class ActivityQueryDto {
   to?: string;
 }
 
+/** The officer roster's one filter, answered server-side (ISS-11). */
+export class OfficerRosterQueryDto {
+  @ApiPropertyOptional({
+    description: 'Email or mobile (full or partial), name, id or coverage label.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
+}
+
 /** Shared by the accounts and businesses directories — same three questions. */
 export class DirectoryQueryDto extends PaginationDto {
   @ApiPropertyOptional({ enum: UserRole })
@@ -55,7 +66,11 @@ export class DirectoryQueryDto extends PaginationDto {
   @IsEnum(BusinessStatus)
   status?: BusinessStatus;
 
-  @ApiPropertyOptional({ description: 'Substring of the email, or of the business name.' })
+  @ApiPropertyOptional({
+    description:
+      'Accounts: part of the email or mobile. Businesses: part of the name, or of the ' +
+      "owner's email or mobile. Matched on the stored values; responses show them masked.",
+  })
   @IsOptional()
   @IsString()
   @MaxLength(120)

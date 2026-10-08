@@ -901,7 +901,11 @@ function Wordmark({ compact = false, light = false }: { compact?: boolean; light
 function HomeOrDashboard() {
   const token = useAuth((s) => s.accessToken);
   const ready = useAuth((s) => s.ready);
+  const role = useAuth((s) => s.user?.role);
   if (ready && !token) return <Home />;
+  // An administrator holds every permission, so the consumer dashboard read
+  // them as a vendor's and opened the vendor home. Their home is the console.
+  if (token && role === 'admin') return <Navigate to="/admin" replace />;
   return (
     <Protected>
       <Dashboard />

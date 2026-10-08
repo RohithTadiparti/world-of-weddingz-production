@@ -31,6 +31,7 @@ import {
   InterestStatus,
   ShareAudience,
   UserRole,
+  MATCHABLE_ROLES,
   isIndividual,
 } from '../../common/enums';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
@@ -94,6 +95,19 @@ export class SharingService {
     const stewards = profile.managedByUserId === actor.userId;
     if (!owns && !stewards && actor.role !== UserRole.ADMIN) {
       throw new ForbiddenException('That profile is not yours to circulate');
+    }
+    // A family account's own profile describes the parent or guardian, not
+    // somebody to be matched; it is the relatives they manage that circulate.
+    if (profile.userId) {
+      const owner = await this.users.findOne({
+        where: { id: profile.userId },
+        select: ['id', 'role'],
+      });
+      if (owner?.role === UserRole.FAMILY) {
+        throw new BadRequestException(
+          'Your own family-member profile is not a biodata. Circulate the relative you manage instead.',
+        );
+      }
     }
     if (profile.visibility === ProfileVisibility.PRIVATE) {
       throw new BadRequestException(
@@ -405,6 +419,14 @@ export class SharingService {
       .where('p."networkVisibility" = :pool', { pool: NetworkVisibility.POOL })
       .andWhere('p.visibility != :private', { private: ProfileVisibility.PRIVATE })
       .andWhere('(p."managedByUserId" IS NULL OR p."managedByUserId" != :me)', { me: actor.userId })
+      // Only somebody to be matched: an unclaimed profile, or one held by a
+      // bride or groom. A family account's own row describes the parent.
+      .andWhere(
+        `(p."userId" IS NULL OR EXISTS (
+           SELECT 1 FROM users acct WHERE acct.id = p."userId" AND acct.role IN (:...matchable)
+         ))`,
+        { matchable: [...MATCHABLE_ROLES] },
+      )
       /*
        * Somebody whose match is fixed is not available.
        *

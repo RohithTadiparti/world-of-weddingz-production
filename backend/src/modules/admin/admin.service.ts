@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { User } from '../auth/entities/user.entity';
+import { revokeAllAccess } from '../auth/sessions.service';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { PlannerProfile } from '../wedding-planners/entities/planner-profile.entity';
 import { Booking } from '../bookings/entities/booking.entity';
@@ -36,11 +37,13 @@ import {
 import { RedisService } from '../../platform/redis/redis.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
+import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 
 /** Admin-facing user row. Excludes hash columns by explicit projection. */
 export interface AdminUserView {
   id: string;
-  email: string;
+  /** Masked on lists (ISS-11); the account detail's audited reveal has it whole. */
+  email: string | null;
   role: UserRole;
   isActive: boolean;
   isVerified: boolean;
@@ -80,7 +83,8 @@ export class AdminService {
       skip: (page - 1) * limit,
       order: { createdAt: 'DESC' },
     });
-    return paginate(rows as AdminUserView[], total, page, limit);
+    const masked = rows.map((row) => ({ ...row, email: maskEmail(row.email) }));
+    return paginate(masked as AdminUserView[], total, page, limit);
   }
 
   async setUserStatus(id: string, dto: UpdateUserStatusDto): Promise<AdminUserView> {
@@ -88,20 +92,37 @@ export class AdminService {
     if (!user) throw new NotFoundException('User not found');
     // Compared rather than assigned: the DTO takes the raw value so a string
     // cannot be coerced into a yes. See `StrictBoolean`.
+    const wasActive = user.isActive;
     user.isActive = dto.isActive === true;
-    await this.users.save(user);
+    await this.users.manager.transaction(async (manager) => {
+      await manager.save(user);
+      // Suspension signs the account out everywhere, so reactivating it later
+      // needs a fresh sign-in rather than reviving the tokens it had.
+      if (wasActive && !user.isActive) await revokeAllAccess(manager, user.id, 'account suspended');
+    });
     const { passwordHash, refreshTokenHash, ...safe } = user as User & Record<string, unknown>;
     void passwordHash;
     void refreshTokenHash;
     return safe as unknown as AdminUserView;
   }
 
-  listPendingVendors() {
-    return this.vendors.find({ where: { isApproved: false }, order: { createdAt: 'ASC' } });
+  /*
+   * The two approval queues carry the business's own contact fields masked,
+   * like every other administrator list (ISS-11). Approving does not need them
+   * whole; contacting the owner goes through the account detail's reveal.
+   */
+  async listPendingVendors() {
+    const rows = await this.vendors.find({ where: { isApproved: false }, order: { createdAt: 'ASC' } });
+    return rows.map((vendor) => ({ ...vendor, contactPhone: maskPhone(vendor.contactPhone) }));
   }
 
-  listPendingPlanners() {
-    return this.planners.find({ where: { isApproved: false }, order: { createdAt: 'ASC' } });
+  async listPendingPlanners() {
+    const rows = await this.planners.find({ where: { isApproved: false }, order: { createdAt: 'ASC' } });
+    return rows.map((planner) => ({
+      ...planner,
+      contactPhone: maskPhone(planner.contactPhone),
+      contactEmail: maskEmail(planner.contactEmail),
+    }));
   }
 
   async approvePlanner(actor: AuthUser, plannerId: string) {
@@ -178,7 +199,7 @@ export class AdminService {
 
     // Who is arguing with whom, over what, at what price. The raiser is named
     // by their profile, else their business — a vendor raising a dispute has no
-    // profile — else their email, which is all this used to show.
+    // profile — else their email, masked as on every administrator list.
     const idsOf = (type: ProviderType) => [
       ...new Set(bookings.filter((b) => b.providerType === type).map((b) => b.providerId)),
     ];
@@ -192,10 +213,12 @@ export class AdminService {
           agencies: this.agencies,
         },
         rows.map((r) => r.raisedBy),
+        { maskEmail: true },
       ),
       displayNamesByUserIds(
         { users: this.users, profiles: this.profiles },
         bookings.map((b) => b.userId),
+        { maskEmail: true },
       ),
       idsOf(ProviderType.VENDOR).length
         ? this.vendors.find({ where: { id: In(idsOf(ProviderType.VENDOR)) } })
@@ -218,7 +241,7 @@ export class AdminService {
       const raiser = raiserById.get(r.raisedBy);
       return {
         ...r,
-        raisedByName: raiserNames.get(r.raisedBy) ?? raiser?.email ?? 'Unknown',
+        raisedByName: raiserNames.get(r.raisedBy) ?? maskEmail(raiser?.email) ?? 'Unknown',
         raisedByRole: raiser?.role ?? null,
         booking: booking
           ? {

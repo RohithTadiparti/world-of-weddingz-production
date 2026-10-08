@@ -137,6 +137,13 @@ export enum Permission {
   ADMIN_ANALYTICS_READ = 'admin:analytics:read',
   ADMIN_DISPUTE_RESOLVE = 'admin:dispute:resolve',
   /**
+   * Read an account's full email address and mobile number.
+   *
+   * The account detail shows both masked; seeing them whole is a separate,
+   * audited read so that "who looked up this person's number" has an answer.
+   */
+  ADMIN_CONTACT_REVEAL = 'admin:contact:reveal',
+  /**
    * Configure the service catalog: categories, service definitions, the
    * attributes that make up their forms, and which pricing models each
    * service may be sold on.

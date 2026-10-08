@@ -33,3 +33,39 @@ describe('AuditService observability', () => {
     error.mockRestore();
   });
 });
+
+describe('AuditService list masking', () => {
+  it('truncates actor addresses and masks contact details in metadata', async () => {
+    const row = {
+      id: 'a1',
+      actorUserId: null,
+      actorRole: null,
+      action: AuditAction.AUTH_LOGIN_FAILED,
+      resourceType: 'user',
+      resourceId: null,
+      metadata: { email: 'rohith@gmail.com', reason: 'bad_password' },
+      ip: '203.0.113.77',
+      createdAt: new Date(0),
+    } as AuditEvent;
+    const v6 = { ...row, id: 'a2', ip: '2001:db8:85a3::8a2e:370:7334' } as AuditEvent;
+    const qb = {
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[row, v6], 2]),
+    };
+    const repo = { createQueryBuilder: jest.fn(() => qb) } as unknown as Repository<AuditEvent>;
+
+    const result = await new AuditService(repo).list(1, 20);
+
+    expect(result.data[0]).toMatchObject({
+      ip: '203.0.113.x',
+      metadata: { email: 'r***@gmail.com', reason: 'bad_password' },
+    });
+    expect(result.data[1].ip).toBe('2001:db8:85a3::/48');
+    expect(JSON.stringify(result.data)).not.toContain('rohith@');
+    // The stored row itself is untouched.
+    expect(row.ip).toBe('203.0.113.77');
+  });
+});

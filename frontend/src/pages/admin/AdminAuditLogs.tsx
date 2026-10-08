@@ -104,6 +104,8 @@ const ACTION_TITLE: Record<string, string> = {
   'data.exported': 'Data exported',
   'data.erased': 'Data erased',
 
+  'admin.contact_revealed': 'Contact details revealed',
+
   'user.suspended': 'User suspended',
   'user.reinstated': 'User reinstated',
   'dispute.resolved': 'Dispute resolved',
@@ -259,7 +261,7 @@ function AuditDetail({ e }: { e: AuditEvent }) {
             />
           </>
         )}
-        {e.ip && <DetailRow label="IP address" value={e.ip} />}
+        {e.ip && <DetailRow label="IP (masked)" value={e.ip} />}
         <DetailRow label="When" value={formatDateTime(e.createdAt)} />
         {extras.map(([k, v]) => (
           <DetailRow key={k} label={humanKey(k)} value={humanValue(v)} />

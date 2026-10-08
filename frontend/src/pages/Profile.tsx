@@ -83,12 +83,17 @@ export default function Profile() {
    * gender were asked for the same reason and are equally beside the point:
    * nobody is matched against the agency.
    *
-   * A family member is a client as well as a steward, so all of it stays for
-   * them. AGENCY_MANAGE is the capability that separates the two.
+   * AGENCY_MANAGE is the capability that separates the two.
+   *
+   * A family member's own profile is not a biodata either: it holds the
+   * parent's or guardian's details and is never shown in matches. Who the
+   * match is for, and how they are related, belong to each relative they
+   * manage (Family Profiles), so this page no longer asks them here — it was
+   * printing "Managing profile for | Bride" beside "enter your own details".
    */
   const isAgency = can(permissions, Permission.AGENCY_MANAGE);
-  const stewardFields = isSteward && !isAgency;
   const isFamilyMember = role === 'family';
+  const stewardFields = isSteward && !isAgency && !isFamilyMember;
   const isIndividual = role === 'bride' || role === 'groom';
   // Bride and groom are account roles, not a second question for the person to
   // answer. Keep the profile display and every save aligned with that canonical
@@ -101,7 +106,7 @@ export default function Profile() {
    * (EZ1-I85, EZ1-I93). Show it only to people who actually have a profile in
    * the matches — an individual, or a steward managing one.
    */
-  const showVisibility = hasBiodata || stewardFields;
+  const showVisibility = (hasBiodata || stewardFields) && !isFamilyMember;
 
   const { data, isLoading } = useQuery({
     queryKey: ['me'],
@@ -247,7 +252,7 @@ export default function Profile() {
             )}
             <p className="page-subtitle">
               {isFamilyMember
-                ? 'Enter your own details. Groom or bride details belong in Biodata.'
+                ? 'Your own details, as the parent or guardian. They are never shown in matches.'
                 : <>Your account details. {hasBiodata && 'The biodata families see lives separately.'}</>}
             </p>
             </div>
@@ -265,8 +270,12 @@ export default function Profile() {
         {isFamilyMember && (
           <p className="rounded-md border border-brand/20 bg-brand-soft px-3 py-2 text-sm text-gray-700">
             <strong>Important:</strong> You are logged in as a Family Member. Enter your own
-            parent or guardian details here, not the groom&apos;s or bride&apos;s. Their information is
-            entered separately in Biodata.
+            parent or guardian details here, not the groom&apos;s or bride&apos;s. The person you are
+            finding a match for has their own profile and biodata under{' '}
+            <Link className="text-brand-strong underline" to="/client-profiles">
+              Family Profiles
+            </Link>
+            .
           </p>
         )}
 

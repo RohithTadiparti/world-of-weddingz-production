@@ -218,8 +218,9 @@ export default function Profile() {
       {error ? <Alert tone="critical">{error}</Alert> : null}
       {isFamilyMember ? (
         <Alert tone="caution">
-          Important: you are logged in as a Family Member. Enter your own parent or guardian
-          details here. Groom or bride details belong in Biodata.
+          Important: you are logged in as a Family Member. These are your own details as the
+          parent or guardian, and they are never shown in matches. The bride or groom you are
+          finding a match for has their own profile and biodata under Family Profiles.
         </Alert>
       ) : null}
 

@@ -84,6 +84,17 @@ export class SmtpMailProvider implements MailProvider {
 
 export const MAIL_PROVIDER = 'MAIL_PROVIDER';
 
+export const LOG_MAIL_IN_PRODUCTION_WARNING =
+  'MAIL_PROVIDER is "log" with NODE_ENV=production: no email is delivered, so password ' +
+  'reset, email verification and invitation links never reach anyone. Set MAIL_PROVIDER=smtp ' +
+  'with MAIL_FROM, SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER and SMTP_PASSWORD.';
+
+/**
+ * Chooses the transport. The public deployment tiers already refuse to boot
+ * without SMTP (config.schema.ts); any other production-mode run with the log
+ * transport is allowed, because test stacks rely on it, but says so loudly at
+ * startup rather than leaving the first failed password reset to discover it.
+ */
 export const mailProviderFactory = {
   provide: MAIL_PROVIDER,
   inject: [AppConfigService, LogMailProvider, SmtpMailProvider],
@@ -91,5 +102,9 @@ export const mailProviderFactory = {
     cfg: AppConfigService,
     log: LogMailProvider,
     smtp: SmtpMailProvider,
-  ): MailProvider => (cfg.mail.provider === 'smtp' ? smtp : log),
+  ): MailProvider => {
+    if (cfg.mail.provider === 'smtp') return smtp;
+    if (cfg.isProduction) new Logger('Mail').warn(LOG_MAIL_IN_PRODUCTION_WARNING);
+    return log;
+  },
 };

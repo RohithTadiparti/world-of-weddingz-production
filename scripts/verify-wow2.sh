@@ -55,7 +55,9 @@ gst() {
   digits=$(printf '%.4s' "${digits}0000")
   printf '27%s%sF%dZ5' "$letters" "$digits" "$(( ${1:-1} % 10 ))"
 }
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 if command -v redis-cli >/dev/null 2>&1; then
   KEYS=$(redis-cli -h "${REDIS_HOST:-redis}" --scan --pattern 'throttle:*' 2>/dev/null)
@@ -121,21 +123,10 @@ req PUT /users/me/profile '{"displayName":"Pardhu Rao","gender":"male","dateOfBi
 c=$(req GET /users/me "" "$GROOM"); GP=$(field /tmp/body id)
 verify_identity "$GP" "$GROOM" >/dev/null
 
-fill_biodata() { # fill_biodata <profileId> <token> <first> <last>
-  for n in 1 2 3; do
-    req POST "/profiles/$1/details/photos" "{\"url\":\"https://cdn.example.com/w2-$1-$n.jpg\"}" "$2" >/dev/null
-  done
-  req PUT "/profiles/$1/details/personal" \
-    "{\"firstName\":\"$3\",\"lastName\":\"$4\",\"heightCm\":168,\"complexion\":\"fair\",\"communicationAddress\":\"1 Station Road, Warangal\",\"residence\":{\"city\":\"Warangal\"}}" "$2" >/dev/null
-  req PUT "/profiles/$1/details/religion" \
-    '{"religion":"hindu","caste":"Reddy","subCaste":"Ontari","motherTongue":"Telugu"}' "$2" >/dev/null
-  req PUT "/profiles/$1/details/marital" '{"maritalStatus":"never_married"}' "$2" >/dev/null
-  req PUT "/profiles/$1/details/education" \
-    '{"highestQualification":"masters","course":"MBA","institution":"Osmania","occupationStatus":"employed","employment":{"role":"Analyst"},"incomeVisible":false}' "$2" >/dev/null
-}
-
-fill_biodata "$BP" "$BRIDE" Anitha Rao
-fill_biodata "$GP" "$GROOM" Pardhu Rao
+# Every section, three real photographs and a verified identity: the bar for
+# being suggested at all, and for sending the interest in section 7.
+ready_for_interests "$BP" "$BRIDE" Anitha Rao
+ready_for_interests "$GP" "$GROOM" Pardhu Rao
 
 c=$(req GET "/matches/suggestions?sort=recent&limit=50" "" "$BRIDE")
 check "suggestions read" "$c" 200

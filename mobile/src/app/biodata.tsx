@@ -27,6 +27,7 @@ import {
 import { radius, space } from '@/theme';
 import { ageFrom, genderForIndividualRole, GENDER_LABEL } from '@/lib/labels';
 import { formatPlace } from '@/lib/format';
+import { matchGender } from '@/lib/match-gender';
 import { useAuth } from '@/store/auth';
 
 interface BiodataResponse {
@@ -176,8 +177,11 @@ export default function BiodataWizard() {
   // A self-managed bride/groom's role is canonical. Managed profiles can be
   // either gender, so they intentionally keep their persisted value.
   const fixedGender = isOwnProfile ? genderForIndividualRole(user?.role) : null;
-  const targetGender = String(fixedGender ?? full?.profile?.gender ?? full?.profile?.managingFor ?? me?.gender ?? me?.managingFor ?? '').toLowerCase();
-  const isGroom = targetGender === 'groom' || targetGender === 'male' || targetGender === 'm';
+  // Groom or bride is decided exactly as the server decides it for the net
+  // worth rule: the profile's managingFor first, then its gender. The role is
+  // only a fallback for a self-managed profile whose side is not stored yet.
+  const side = matchGender(full?.profile ?? (isOwnProfile ? me : null)) ?? fixedGender;
+  const isGroom = side === 'male';
   const showMarital = d.maritalStatus && d.maritalStatus !== 'never_married';
 
   // Photographs are on the first step: the server will not save the basic

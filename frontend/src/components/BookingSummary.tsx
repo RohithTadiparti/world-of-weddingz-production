@@ -13,6 +13,32 @@ import {
   type QuotationSummary,
 } from '../lib/booking-progress';
 
+export type PriceSource = 'quotation' | 'listed' | 'budget' | 'direct' | null;
+
+const AGREED_WITHOUT_QUOTATION: Record<'listed' | 'budget' | 'direct', string> = {
+  listed: 'listed price, no quotation',
+  budget: 'customer budget accepted, no quotation',
+  direct: 'amount set on the request, no quotation',
+};
+
+/**
+ * How to describe a price agreed without a quotation, or null when the price
+ * came from a quotation or is not agreed yet. Falls back to `listedPrice` for
+ * a server that does not send `priceSource`.
+ */
+export function agreedWithoutQuotation(price: {
+  quoted: string | null;
+  listedPrice?: boolean;
+  priceSource?: PriceSource;
+}): string | null {
+  if (price.quoted) return null;
+  if (price.priceSource === undefined) {
+    return price.listedPrice ? AGREED_WITHOUT_QUOTATION.listed : null;
+  }
+  if (price.priceSource === null || price.priceSource === 'quotation') return null;
+  return AGREED_WITHOUT_QUOTATION[price.priceSource];
+}
+
 /**
  * A booking's price, negotiation and money, from `GET /bookings/:id/summary`
  * (EZ1-I264, EZ1-I265).
@@ -32,6 +58,8 @@ export interface BookingSummaryData {
     quoted: string | null;
     /** Agreed at a listed price rather than through a quotation. */
     listedPrice?: boolean;
+    /** Where the agreed price came from; older servers omit it. */
+    priceSource?: PriceSource;
     base: string | null;
     addonsTotal: string;
     addonsAgreed: number;
@@ -124,13 +152,14 @@ export function BookingProgress({
 export function PriceBreakdown({ summary }: { summary: BookingSummaryData }) {
   const { price } = summary;
   const money = moneyIn(summary.currency);
+  const withoutQuotation = agreedWithoutQuotation(price);
   return (
     <Section title="Price">
       <Row label="Customer budget">{price.budget ? money(price.budget) : 'Not given'}</Row>
-      {price.quoted || !price.listedPrice ? (
-        <Row label="Accepted quotation">{price.quoted ? money(price.quoted) : 'Not agreed yet'}</Row>
+      {withoutQuotation ? (
+        <Row label="Agreed price">{`${money(price.base ?? price.grandTotal)} (${withoutQuotation})`}</Row>
       ) : (
-        <Row label="Agreed price">{`${money(price.base ?? price.grandTotal)} (listed price, no quotation)`}</Row>
+        <Row label="Accepted quotation">{price.quoted ? money(price.quoted) : 'Not agreed yet'}</Row>
       )}
       <Row label="Add-ons agreed">
         {price.addonsAgreed > 0 ? `${money(price.addonsTotal)} (${price.addonsAgreed})` : 'None'}

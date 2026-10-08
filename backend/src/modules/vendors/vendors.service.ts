@@ -23,6 +23,7 @@ import {
   VendorSort,
 } from './dto/vendor.dto';
 import { RedisService } from '../../platform/redis/redis.service';
+import { assertNewMediaUploaded } from '../../platform/storage/kept-media';
 import { BusinessStatus, CaseStatus, ReviewStatus, UserRole } from '../../common/enums';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
@@ -156,6 +157,9 @@ export class VendorsService {
   async create(ownerUserId: string, dto: CreateVendorDto): Promise<Vendor> {
     const categories = await this.resolveCategories(dto);
     if (!categories) throw new BadRequestException('Choose at least one category');
+    // Nothing is stored yet, so every file named here must be an upload.
+    assertNewMediaUploaded('complianceDocuments', dto.complianceDocuments, []);
+    assertNewMediaUploaded('portfolio', dto.portfolio, []);
     // The links are written through resolveSocialLinks, with their mirrors.
     const { socialLinks: _links, ...rest } = dto;
     const fields: Partial<Omit<CreateVendorDto, 'socialLinks'>> = { ...rest };
@@ -231,6 +235,11 @@ export class VendorsService {
     if (vendor.ownerUserId !== ownerUserId) {
       throw new ForbiddenException('This listing does not belong to you');
     }
+
+    // The edit form resends both lists whole. A file the listing already holds
+    // may come back as it is; a new one must be an upload.
+    assertNewMediaUploaded('complianceDocuments', dto.complianceDocuments, vendor.complianceDocuments);
+    assertNewMediaUploaded('portfolio', dto.portfolio, vendor.portfolio);
 
     // Enforced here, not by hiding a button. A vendor who edits their GST
     // number after an officer has been sent to check it has verified nothing,
@@ -371,9 +380,22 @@ export class VendorsService {
     });
   }
 
-  /** The listing as the public sees it. Never the whole row — see PublicVendor. */
-  async findOne(id: string): Promise<PublicVendor> {
-    return publicVendor(await this.loadOrFail(id));
+  /**
+   * The listing as the public sees it. Never the whole row — see PublicVendor.
+   *
+   * Only a live listing exists as far as the public is concerned: one still in
+   * review, sent back or refused answers 404, exactly as if it were absent, so
+   * a direct link cannot surface what search deliberately leaves out (ISS-16).
+   * Its owner and administrators still get the same public view of it — the
+   * owner previewing their own shop window is the reason the route is not
+   * simply filtered.
+   */
+  async findOne(id: string, viewer?: Pick<AuthUser, 'userId' | 'role'> | null): Promise<PublicVendor> {
+    const vendor = await this.loadOrFail(id);
+    const privileged =
+      !!viewer && (viewer.role === UserRole.ADMIN || vendor.ownerUserId === viewer.userId);
+    if (!vendor.isApproved && !privileged) throw new NotFoundException('Vendor not found');
+    return publicVendor(vendor);
   }
 
   /**

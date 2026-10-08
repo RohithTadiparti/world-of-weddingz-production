@@ -2,8 +2,8 @@
  * Account personas on the platform.
  *
  * Three "individual" personas (bride/groom/family) plus four organisational
- * personas. The individual personas are the ones that take part in
- * matchmaking; AGENT/VENDOR/PLANNER are business accounts with their own
+ * personas. Brides and grooms are matched; a family member takes part only
+ * through the relatives they manage; AGENT/VENDOR/PLANNER are business accounts with their own
  * consoles, and ADMIN is never self-registerable.
  */
 export enum UserRole {
@@ -33,7 +33,15 @@ export enum AccountType {
   PLANNER = 'planner',
 }
 
-/** Roles that take part in matchmaking (send/receive interests, be suggested). */
+/**
+ * The consumer personas: the roles an INDIVIDUAL sign-up resolves to, that may
+ * book services and receive shared profiles.
+ *
+ * Not the test for matchmaking. A family account takes part only as the
+ * steward of the relatives it manages; whether a profile can be suggested,
+ * shortlisted, sent or accept an interest, chat as a match or be fixed is
+ * decided by MATCHABLE_ROLES below.
+ */
 export const INDIVIDUAL_ROLES: readonly UserRole[] = [
   UserRole.BRIDE,
   UserRole.GROOM,
