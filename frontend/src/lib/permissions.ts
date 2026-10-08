@@ -81,6 +81,7 @@ export const Permission = {
   ADMIN_DISPUTE_RESOLVE: 'admin:dispute:resolve',
   ADMIN_CONTACT_REVEAL: 'admin:contact:reveal',
   CATALOG_MANAGE: 'catalog:manage',
+  ADMIN_INFRASTRUCTURE_READ: 'admin:infrastructure:read',
 } as const;
 
 export type PermissionValue = (typeof Permission)[keyof typeof Permission];

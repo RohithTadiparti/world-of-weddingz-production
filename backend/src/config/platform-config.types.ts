@@ -21,6 +21,8 @@ export interface PlatformConfig {
   operations: {
     logRetentionDays: number;
     alertReminderHours: number;
+    /** Operational alert email recipients; empty means email is not configured. */
+    alertRecipients: string[];
     consecutiveCountSamples: number;
     sustainedPerformanceMinutes: number;
     measurements: { railwayMonthlyInr: number };

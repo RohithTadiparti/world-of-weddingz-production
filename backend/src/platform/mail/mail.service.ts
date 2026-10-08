@@ -4,6 +4,39 @@ import { AppConfigService } from '../../config/app-config.service';
 import { maskEmail } from '../../common/logging/log-redaction';
 
 /**
+ * The facts an operational alert email may carry, and nothing else: no
+ * credentials, request data, recipient list or personal data.
+ */
+export interface OperationalAlertMail {
+  event: 'opened' | 'promoted' | 'reminder';
+  alertId: string;
+  severity: 'warning' | 'critical';
+  metric: string;
+  observedValue: number;
+  unit: string;
+  thresholdValue: number;
+  source: string;
+  /** ISO-8601. */
+  firstObservedAt: string;
+  recommendedAction: string;
+  correlationId: string;
+}
+
+export interface OperationalAlertMailResult {
+  /** `simulated`: the log transport recorded it and no inbox was reached. */
+  status: 'sent' | 'simulated' | 'failed' | 'not_configured';
+  /** Recipients addressed (attempted), not recipients reached. */
+  recipients: number;
+  provider: string;
+}
+
+const ALERT_EVENT_LABEL: Record<OperationalAlertMail['event'], string> = {
+  opened: 'New alert',
+  promoted: 'Escalated to critical',
+  reminder: 'Reminder: still open',
+};
+
+/**
  * Every transactional email the platform sends.
  *
  * Templates live here rather than in the calling services so the wording, the
@@ -20,6 +53,75 @@ export class MailService {
     @Inject(MAIL_PROVIDER) private readonly provider: MailProvider,
     private readonly cfg: AppConfigService,
   ) {}
+
+  /** The transport actually in use, as delivery evidence records it. */
+  get providerMode(): string {
+    return this.provider.mode ?? this.cfg.mail.provider;
+  }
+
+  /**
+   * An operational alert to the configured operational recipients.
+   *
+   * Unlike the account emails below this reports what happened instead of
+   * swallowing it, because the alert's delivery record has to say whether
+   * anybody was told. One message per recipient, so no recipient sees the
+   * others' addresses. The log transport is reported as `simulated`: it
+   * writes a redacted log line and never reaches an inbox.
+   */
+  async sendOperationalAlert(
+    recipients: readonly string[],
+    alert: OperationalAlertMail,
+  ): Promise<OperationalAlertMailResult> {
+    const provider = this.providerMode;
+    if (recipients.length === 0) return { status: 'not_configured', recipients: 0, provider };
+
+    const severity = alert.severity.toUpperCase();
+    const subject = `[WOW operations] ${severity}: ${alert.metric} at ${alert.observedValue} ${alert.unit}`;
+    const lines = [
+      `Event: ${ALERT_EVENT_LABEL[alert.event]}`,
+      `Severity: ${severity}`,
+      `Metric: ${alert.metric}`,
+      `Observed value: ${alert.observedValue} ${alert.unit}`,
+      `Threshold: ${alert.thresholdValue} ${alert.unit}`,
+      `Source: ${alert.source}`,
+      `First observed: ${alert.firstObservedAt}`,
+      `Recommended action: ${alert.recommendedAction}`,
+      `Alert ID: ${alert.alertId}`,
+      `Correlation ID: ${alert.correlationId}`,
+    ];
+    const heading = `Operational alert: ${alert.metric}`;
+    const closing = 'Review and acknowledge it on the administrator Infrastructure page.';
+    const text = [heading, '', ...lines, '', closing, ''].join('\n');
+    const html = `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#111827">
+                 <h1 style="color:#be185d;font-size:20px">${this.esc(heading)}</h1>
+                 <p style="line-height:1.6">${lines.map((line) => this.esc(line)).join('<br>')}</p>
+                 <p style="color:#6b7280;font-size:12px">${closing}</p>
+               </div>`;
+
+    let failed = 0;
+    for (const to of recipients) {
+      try {
+        await this.provider.send({ to, subject, text, html });
+      } catch {
+        failed += 1;
+      }
+    }
+    if (failed > 0) {
+      this.logger.warn({
+        event: 'operational_alert_mail_failed',
+        correlationId: alert.correlationId,
+        alertId: alert.alertId,
+        failed,
+        recipients: recipients.length,
+      });
+      return { status: 'failed', recipients: recipients.length, provider };
+    }
+    return {
+      status: provider === 'smtp' ? 'sent' : 'simulated',
+      recipients: recipients.length,
+      provider,
+    };
+  }
 
   private link(path: string, token: string): string {
     const base = this.cfg.mail.appBaseUrl.replace(/\/+$/, '');

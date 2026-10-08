@@ -153,6 +153,11 @@ export enum Permission {
    * sell, so it is worth being able to grant one without the other.
    */
   CATALOG_MANAGE = 'catalog:manage',
+  /**
+   * Read capacity, operational alerts and migration readiness, and receive
+   * operational alert notifications. Admin only.
+   */
+  ADMIN_INFRASTRUCTURE_READ = 'admin:infrastructure:read',
 }
 
 /** Everything an individual (bride/groom/family) can do. */

@@ -8,6 +8,14 @@ const threshold = Joi.object({
   critical: Joi.number().greater(Joi.ref('warning')).required(),
 }).unknown(false);
 
+/** Bounded so a mistyped variable cannot fan one alert out to a mailing list. */
+export const MAX_ALERT_RECIPIENTS = 20;
+
+const alertRecipients = Joi.array()
+  .items(Joi.string().max(254).email({ tlds: { allow: false }, minDomainSegments: 2 }))
+  .max(MAX_ALERT_RECIPIENTS)
+  .unique((a: string, b: string) => a.toLowerCase() === b.toLowerCase());
+
 const schema = Joi.object<PlatformConfig>({
   version: Joi.number().valid(1).required(),
   deployment: Joi.object({
@@ -31,6 +39,7 @@ const schema = Joi.object<PlatformConfig>({
   operations: Joi.object({
     logRetentionDays: Joi.number().integer().min(1).max(365).required(),
     alertReminderHours: Joi.number().integer().min(1).required(),
+    alertRecipients: alertRecipients.required(),
     consecutiveCountSamples: Joi.number().integer().min(1).required(),
     sustainedPerformanceMinutes: Joi.number().integer().min(1).required(),
     measurements: Joi.object({
@@ -79,7 +88,7 @@ const schema = Joi.object<PlatformConfig>({
     .required(),
 }).unknown(false);
 
-type Override = [path: string, kind: 'string' | 'number' | 'boolean'];
+type Override = [path: string, kind: 'string' | 'number' | 'boolean' | 'list'];
 const overrides: Record<string, Override> = {
   DEPLOYMENT_TIER: ['deployment.tier', 'string'],
   MAIL_PROVIDER: ['providers.mail', 'string'],
@@ -91,6 +100,9 @@ const overrides: Record<string, Override> = {
   MEDIA_STORAGE_PROVIDER: ['providers.media', 'string'],
   AI_PROVIDER: ['providers.ai', 'string'],
   LOG_RETENTION_DAYS: ['operations.logRetentionDays', 'number'],
+  // Comma-separated. The addresses are per-environment personal data, so they
+  // come from the platform's variables rather than the versioned YAML.
+  OPERATIONS_ALERT_RECIPIENTS: ['operations.alertRecipients', 'list'],
   MIGRATION_ENABLED: ['migration.enabled', 'boolean'],
   MIGRATION_EXECUTOR: ['migration.executor', 'string'],
   MIGRATION_DRY_RUN: ['migration.dryRun', 'boolean'],
@@ -129,7 +141,13 @@ function applyOverrides(target: Record<string, unknown>, env: NodeJS.ProcessEnv)
   for (const [name, [path, kind]] of Object.entries(overrides)) {
     const raw = env[name];
     if (raw === undefined || raw === '') continue;
-    let value: string | number | boolean = raw;
+    let value: string | number | boolean | string[] = raw;
+    if (kind === 'list') {
+      value = raw
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    }
     if (kind === 'number') {
       value = Number(raw);
       if (!Number.isFinite(value)) throw new Error(`${name} must be a number; received ${raw}`);

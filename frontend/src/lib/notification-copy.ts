@@ -58,7 +58,30 @@ export const TYPE_LABEL: Record<string, string> = {
 
   event_changed_by_couple: 'Client updated an event',
   event_changed_by_planner: 'Planner updated an event',
+
+  operational_alert: 'Operational alert',
 };
+
+/** Readable names for the capacity metrics an operational alert can be about. */
+const METRIC_LABEL: Record<string, string> = {
+  accounts: 'Registered accounts',
+  dailyActiveUsers: 'Daily active users',
+  requestsPerDay: 'Requests per day',
+  concurrentUsers: 'Concurrent users',
+  databaseGigabytes: 'Database size',
+  p95LatencyMs: 'P95 latency',
+  errorRatePercent: 'Error rate',
+  cpuPercent: 'CPU utilisation',
+  memoryPercent: 'Memory utilisation',
+  railwayMonthlyInr: 'Hosting cost',
+};
+
+/** Where an operational alert opens: the administrator Infrastructure page. */
+export function operationalAlertLink(alertId: string | null): string {
+  return alertId
+    ? `/admin/infrastructure?alert=${encodeURIComponent(alertId)}`
+    : '/admin/infrastructure';
+}
 
 /** A sentence a person can read, built from whatever the payload carries. */
 export function describe(n: Notification): string {
@@ -176,6 +199,26 @@ export function describe(n: Notification): string {
       return changed
         ? `Your planner updated ${changed} on ${name}.`
         : `Your planner changed ${name}.`;
+    }
+    case 'operational_alert': {
+      const severity = str('severity') === 'critical' ? 'critical' : 'warning';
+      const event = str('event');
+      const lead =
+        event === 'promoted'
+          ? 'Escalated to critical'
+          : event === 'reminder'
+            ? `Still open (${severity})`
+            : severity === 'critical'
+              ? 'Critical'
+              : 'Warning';
+      const metricKey = str('metric') ?? '';
+      const metric = METRIC_LABEL[metricKey] ?? (metricKey || 'A capacity metric');
+      const unit = str('unit');
+      const amount = (key: string) =>
+        [typeof p[key] === 'number' || typeof p[key] === 'string' ? String(p[key]) : '?', unit]
+          .filter(Boolean)
+          .join(' ');
+      return `${lead}: ${metric} is ${amount('observedValue')} (threshold ${amount('thresholdValue')}).`;
     }
     default:
       return '';

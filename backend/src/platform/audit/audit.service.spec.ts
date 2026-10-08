@@ -2,6 +2,31 @@ import { Logger } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { AuditAction, AuditService } from './audit.service';
 import { AuditEvent } from './entities/audit-event.entity';
+import { OPERATIONAL_ALERT_AUDIT_ACTIONS } from '../../modules/operations/alerts/alert-delivery.types';
+
+describe('AuditService write result', () => {
+  it('resolves true once the row is saved', async () => {
+    const repo = {
+      create: jest.fn((value) => value),
+      save: jest.fn(async (value) => value),
+    } as unknown as Repository<AuditEvent>;
+    await expect(
+      new AuditService(repo).record({ action: AuditAction.OPERATIONS_ALERT_OPENED }),
+    ).resolves.toBe(true);
+  });
+
+  it('re-exports the operational alert actions with the contract values', () => {
+    expect({
+      opened: AuditAction.OPERATIONS_ALERT_OPENED,
+      promoted: AuditAction.OPERATIONS_ALERT_PROMOTED,
+      reminded: AuditAction.OPERATIONS_ALERT_REMINDED,
+      acknowledged: AuditAction.OPERATIONS_ALERT_ACKNOWLEDGED,
+      resolved: AuditAction.OPERATIONS_ALERT_RESOLVED,
+      deliveryFailed: AuditAction.OPERATIONS_ALERT_DELIVERY_FAILED,
+    }).toEqual(OPERATIONAL_ALERT_AUDIT_ACTIONS);
+    expect(OPERATIONAL_ALERT_AUDIT_ACTIONS.opened).toBe('operations.alert_opened');
+  });
+});
 
 describe('AuditService observability', () => {
   it('stays fail-open and emits one allowlisted audit failure event', async () => {
@@ -19,7 +44,7 @@ describe('AuditService observability', () => {
         resourceId: null,
         metadata: { password: 'must-not-escape' },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(error).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith({
