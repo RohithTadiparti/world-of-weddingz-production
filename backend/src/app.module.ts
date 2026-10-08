@@ -26,6 +26,7 @@ import { PermissionsGuard } from './common/guards/permissions.guard';
 import { PasswordResetGuard } from './common/guards/password-reset.guard';
 import { pinoHttpOptions } from './common/logging/pino-options';
 import { DeliveryCaptureModule } from './platform/delivery-capture/delivery-capture.module';
+import { ClientErrorsModule } from './platform/client-errors/client-errors.module';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { AgentsModule } from './modules/agents/agents.module';
@@ -75,6 +76,7 @@ import { AiModule } from './modules/ai/ai.module';
     DatabaseModule,
     RedisModule,
     DeliveryCaptureModule,
+    ClientErrorsModule,
     Neo4jModule,
     KafkaModule,
     EventsModule,

@@ -8,10 +8,12 @@ import HeartField from './components/HeartField';
 import './fonts';
 import './index.css';
 import { initTheme } from './store/theme';
+import { installGlobalErrorReporting } from './lib/client-errors';
 
 // Before first paint. Deciding the theme inside a React effect means a
 // dark-mode user gets a white flash on every cold load.
 initTheme();
+installGlobalErrorReporting();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },

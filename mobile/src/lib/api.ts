@@ -1,9 +1,10 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 import { useAuth, type AuthUser } from '@/store/auth';
+import { getApiBaseUrl } from './api-base-url';
+import { newRequestId, reportClientError } from './client-errors';
 
 /**
  * The API client.
@@ -30,16 +31,8 @@ import { useAuth, type AuthUser } from '@/store/auth';
  * here at startup instead of quietly pointing every request, passwords and
  * bank details included, at an address that cannot be right.
  */
-function resolveBaseUrl(): string {
-  const configured = process.env.EXPO_PUBLIC_API_URL;
-  if (configured) return configured;
-  if (__DEV__) {
-    const expoHost = Constants.expoConfig?.hostUri?.split(':')[0] ?? 'localhost';
-    return `http://${expoHost}:3000/api`;
-  }
-  throw new Error('EXPO_PUBLIC_API_URL is not set for this build, so the app has no API to talk to.');
-}
-const BASE_URL = resolveBaseUrl();
+const BASE_URL = getApiBaseUrl();
+export { getApiBaseUrl } from './api-base-url';
 /** Alphanumerics, dot, dash and underscore only: SecureStore rejects the rest. */
 const REFRESH_KEY = 'wow.refreshToken';
 
@@ -92,6 +85,7 @@ const keystore = {
 };
 
 api.interceptors.request.use((config) => {
+  config.headers['X-Request-ID'] = config.headers['X-Request-ID'] || newRequestId();
   const token = useAuth.getState().accessToken;
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
@@ -220,6 +214,16 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${token}`;
         return api(original);
       }
+    }
+
+    const status = error.response?.status;
+    if ((!status || status >= 500) && !url.includes('/telemetry/client-errors')) {
+      reportClientError({
+        category: status ? 'server' : 'network',
+        message: status ? `API request failed with ${status}` : 'API request failed without a response',
+        route: url,
+        requestId: String(original?.headers?.['X-Request-ID'] ?? ''),
+      });
     }
 
     return Promise.reject(error);
