@@ -138,5 +138,5 @@ jobs:
       - name: Verify backend runtime dependencies
         run: docker run --rm --entrypoint node wow-backend:ci -e "require('express')"
       - name: Build frontend production image
-        run: docker build -f docker/Dockerfile.frontend -t wow-frontend:ci ./frontend
+        run: docker build -f docker/Dockerfile.frontend -t wow-frontend:ci .
       # In a real pipeline: scan (Trivy), push to registry, run DB migration job, deploy.

@@ -1,0 +1,113 @@
+name: Railway staging deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type deploy to release the current ref to Railway staging
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: railway-staging
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      RAILWAY_BACKEND_SERVICE_ID: ${{ vars.RAILWAY_BACKEND_SERVICE_ID }}
+      RAILWAY_FRONTEND_SERVICE_ID: ${{ vars.RAILWAY_FRONTEND_SERVICE_ID }}
+      RAILWAY_BACKEND_URL: ${{ vars.RAILWAY_BACKEND_URL }}
+      RAILWAY_FRONTEND_URL: ${{ vars.RAILWAY_FRONTEND_URL }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate protected deployment inputs
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          RAILWAY_SMOKE_PASSWORD: ${{ secrets.RAILWAY_SMOKE_PASSWORD }}
+        run: |
+          test "$CONFIRM" = deploy || { echo 'Confirmation must be exactly: deploy'; exit 1; }
+          for name in RAILWAY_TOKEN RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID RAILWAY_BACKEND_SERVICE_ID RAILWAY_FRONTEND_SERVICE_ID RAILWAY_BACKEND_URL RAILWAY_FRONTEND_URL RAILWAY_SMOKE_PASSWORD; do
+            test -n "${!name:-}" || { echo "$name is not configured"; exit 1; }
+          done
+          case "$RAILWAY_FRONTEND_URL $RAILWAY_BACKEND_URL" in
+            https://*' 'https://*) ;;
+            *) echo 'Railway smoke URLs must both use HTTPS'; exit 1 ;;
+          esac
+
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@5.63.4
+
+      - name: Deploy backend
+        id: backend
+        run: >-
+          railway up --ci --project "$RAILWAY_PROJECT_ID"
+          --environment "$RAILWAY_ENVIRONMENT_ID"
+          --service "$RAILWAY_BACKEND_SERVICE_ID"
+          --message "${GITHUB_REPOSITORY}@${GITHUB_SHA} backend"
+
+      - name: Check backend health
+        run: |
+          for attempt in {1..30}; do
+            curl --fail --silent --show-error "$RAILWAY_BACKEND_URL/api/health" && exit 0
+            sleep 10
+          done
+          exit 1
+
+      - name: Deploy frontend
+        id: frontend
+        run: >-
+          railway up --ci --project "$RAILWAY_PROJECT_ID"
+          --environment "$RAILWAY_ENVIRONMENT_ID"
+          --service "$RAILWAY_FRONTEND_SERVICE_ID"
+          --message "${GITHUB_REPOSITORY}@${GITHUB_SHA} frontend"
+
+      - name: Install browser smoke dependencies
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run Railway smoke suite
+        working-directory: frontend
+        env:
+          RAILWAY_SMOKE: 'true'
+          E2E_BASE_URL: ${{ vars.RAILWAY_FRONTEND_URL }}
+          E2E_API_URL: ${{ vars.RAILWAY_BACKEND_URL }}
+          RAILWAY_SMOKE_PASSWORD: ${{ secrets.RAILWAY_SMOKE_PASSWORD }}
+        run: npx playwright test e2e/railway-smoke.e2e.ts
+
+      - name: Rollback failed smoke deployment
+        if: failure() && steps.backend.outcome == 'success'
+        run: |
+          if [ "${{ steps.frontend.outcome }}" = success ]; then
+            railway down --yes --environment "$RAILWAY_ENVIRONMENT_ID" --service "$RAILWAY_FRONTEND_SERVICE_ID"
+            railway redeploy --yes --environment "$RAILWAY_ENVIRONMENT_ID" --service "$RAILWAY_FRONTEND_SERVICE_ID"
+          fi
+          railway down --yes --environment "$RAILWAY_ENVIRONMENT_ID" --service "$RAILWAY_BACKEND_SERVICE_ID"
+          railway redeploy --yes --environment "$RAILWAY_ENVIRONMENT_ID" --service "$RAILWAY_BACKEND_SERVICE_ID"
+
+      - name: Upload Railway smoke artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: railway-smoke-results
+          path: frontend/e2e-results
+          if-no-files-found: ignore
+          retention-days: 30

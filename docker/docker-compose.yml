@@ -328,11 +328,13 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../docker/Dockerfile.frontend
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
     container_name: wow-frontend
     ports:
       - "${FRONTEND_PORT:-8080}:80"
+    environment:
+      API_UPSTREAM: ${API_UPSTREAM:-backend:3000}
     # Android test builds, served at /downloads/. Git-ignored; drop a new APK
     # in and it is live without rebuilding the image.
     volumes:
