@@ -6,7 +6,7 @@ import { BookingAddon } from './entities/booking-addon.entity';
 import { Payment } from './entities/payment.entity';
 import { Quotation } from './entities/quotation.entity';
 import { BookingsService } from './bookings.service';
-import { paymentBreakup, quotationStage, summariseQuotations } from './booking-summary';
+import { paymentBreakup, priceSource, quotationStage, summariseQuotations } from './booking-summary';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { BookingAddonStatus } from '../../common/enums';
 
@@ -50,6 +50,14 @@ export class BookingSummaryService {
     );
     const hasPrice = Number(booking.amount) > 0;
     const projected = this.bookingsService.splitAmount(booking.amount);
+    const source = priceSource({
+      amount: booking.amount,
+      baseAmount: booking.baseAmount,
+      offeringId: booking.offeringId,
+      estimatedAmount: booking.estimatedAmount,
+      expectedBudget: booking.expectedBudget,
+      hasAcceptedQuotation: Boolean(accepted),
+    });
 
     return {
       bookingId,
@@ -61,10 +69,18 @@ export class BookingSummaryService {
         /** The quotation the booking was struck on. */
         quoted: accepted?.amount ?? null,
         /**
-         * Priced without a quotation: a listed price the customer booked at.
-         * The amount is still agreed, so "Not agreed yet" would be untrue.
+         * Priced at a published service package, without a quotation. Only
+         * true when a package total was actually used: an amount-only request
+         * has no listed price behind it (ISS-18).
          */
-        listedPrice: !accepted && hasPrice,
+        listedPrice: source === 'listed',
+        /**
+         * Where the agreed price came from -- quotation, listed package,
+         * accepted budget, or an amount set on the request. Anything but
+         * `quotation` or null is agreed without a quotation, so "Not agreed
+         * yet" would be untrue for it.
+         */
+        priceSource: source,
         /** The agreed price before add-ons. */
         base: booking.baseAmount ?? accepted?.amount ?? (hasPrice ? booking.amount : null),
         addonsTotal: (addonsMinor / 100).toFixed(2),

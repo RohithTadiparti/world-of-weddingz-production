@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Interest } from './entities/interest.entity';
 import { Profile } from '../users/entities/profile.entity';
 import { ProfileDetails } from '../profile-details/entities/profile-details.entity';
+import { ProfileSibling } from '../profile-details/entities/profile-sibling.entity';
 import { User } from '../auth/entities/user.entity';
 import { MatchmakingService } from './matchmaking.service';
 import { ProfileShortlist } from './entities/shortlist.entity';
@@ -23,6 +24,8 @@ import { AgentsModule } from '../agents/agents.module';
       Profile,
       User,
       ProfileDetails,
+      // Read with ProfileDetails for the biodata completion gate.
+      ProfileSibling,
       ProfileShortlist,
       ProfileShare,
       // Only to read agency names for the source line on a card.

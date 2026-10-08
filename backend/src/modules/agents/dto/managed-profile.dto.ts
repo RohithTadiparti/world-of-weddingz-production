@@ -19,7 +19,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape, IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
 import {
   ConsentMethod,
   ConsentRelation,
@@ -194,7 +194,8 @@ export class CreateManagedProfileDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   @MaxLength(2048, { each: true })
   photos?: string[];
 
@@ -243,7 +244,20 @@ export class ManagedProfileSearchDto extends PaginationDto {
 
 export class AddProfilePhotoDto {
   @ApiProperty({ maxLength: 2048 })
-  @IsUploadedUrl()
+  @IsUploadedUrl({ message: 'That is not an uploaded photo' })
+  @MaxLength(2048)
+  url: string;
+}
+
+/**
+ * A photograph already on the profile, to take off it. Shape only: removal
+ * just filters the list, and one stored before uploads were enforced must
+ * still be removable.
+ */
+export class RemoveProfilePhotoDto {
+  @ApiProperty({ maxLength: 2048 })
+  @IsString()
+  @Matches(/^(https?:\/\/|media:\/\/)/i, { message: 'That is not one of the photos on this profile' })
   @MaxLength(2048)
   url: string;
 }

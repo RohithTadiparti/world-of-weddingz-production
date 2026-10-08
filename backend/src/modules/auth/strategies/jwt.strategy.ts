@@ -57,7 +57,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // A counter rather than a timestamp comparison: two independently sampled
     // clocks only have to disagree once for a revoked token to survive.
     if ((payload.tv ?? 0) !== (user.tokenVersion ?? 0)) {
-      throw new UnauthorizedException('Your password changed. Please sign in again.');
+      throw new UnauthorizedException('Your session has ended. Please sign in again.');
     }
 
     return {

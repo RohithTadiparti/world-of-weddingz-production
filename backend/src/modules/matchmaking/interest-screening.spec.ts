@@ -8,6 +8,7 @@ import { Interest } from './entities/interest.entity';
 import { CompatibilityEngine } from './compatibility.engine';
 import { Profile } from '../users/entities/profile.entity';
 import { ProfileDetails } from '../profile-details/entities/profile-details.entity';
+import { ProfileSibling } from '../profile-details/entities/profile-sibling.entity';
 import { ProfileShortlist } from './entities/shortlist.entity';
 import { ProfileShare } from '../circulation/entities/profile-share.entity';
 import { User } from '../auth/entities/user.entity';
@@ -46,7 +47,8 @@ const profile = (id: string, over: Partial<Profile> = {}): Profile =>
     gender: 'female',
     city: 'Hyderabad',
     dateOfBirth: '1996-04-02',
-    photos: [],
+    photos: ['p1.jpg', 'p2.jpg', 'p3.jpg'],
+    idVerifiedAt: new Date('2026-09-01T10:00:00Z'),
     visibility: ProfileVisibility.MATCHES_ONLY,
     lifecycle: ProfileLifecycle.ACTIVE,
     profileCompleted: true,
@@ -54,6 +56,43 @@ const profile = (id: string, over: Partial<Profile> = {}): Profile =>
     lastActiveAt: null,
     ...over,
   }) as Profile;
+
+/**
+ * A biodata row that clears every completion rule, so the interest gates
+ * (biodata, identity, a ready recipient) stay out of the way of what these
+ * tests are about.
+ */
+const readyBiodata = (profileId: string) =>
+  ({
+    profileId,
+    firstName: 'First',
+    lastName: 'Last',
+    heightCm: 165,
+    complexion: 'Fair',
+    communicationAddress: 'Hyderabad',
+    religion: 'Hindu',
+    caste: 'Kamma',
+    motherTongue: 'Telugu',
+    horoscopeAvailable: false,
+    maritalStatus: 'never_married',
+    father: 'Father',
+    mother: 'Mother',
+    familyType: 'nuclear',
+    familyNetWorth: '10000000',
+    brothers: 0,
+    sisters: 0,
+    highestQualification: 'B.Tech',
+    course: 'CSE',
+    occupationStatus: 'employed',
+    preferredAgeMin: 24,
+    preferredHeightMinCm: 150,
+  }) as unknown as ProfileDetails;
+const biodataRepo = {
+  findOne: jest.fn(async (opts: { where: { profileId: string } }) => readyBiodata(opts.where.profileId)),
+  find: jest.fn(async (opts: { where: { profileId: FindOperator<string[]> } }) =>
+    (opts.where.profileId.value as unknown as string[]).map(readyBiodata),
+  ),
+};
 
 /** Just enough of TypeORM's `where` to run the service's own queries in memory. */
 const matches = (row: object, where: Record<string, unknown>) =>
@@ -110,6 +149,11 @@ describe('Interest screening by the managing agency', () => {
       const role = accounts.get(opts.where.id);
       return role ? ({ id: opts.where.id, role, isActive: true } as User) : null;
     }),
+    find: jest.fn(async (opts: { where: { id: FindOperator<string[]> } }) =>
+      (opts.where.id.value as unknown as string[])
+        .filter((id) => accounts.has(id))
+        .map((id) => ({ id, role: accounts.get(id), isActive: true }) as User),
+    ),
   };
   const empty = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
   const redis = { raw: { keys: jest.fn(async () => []) }, del: jest.fn() };
@@ -145,13 +189,14 @@ describe('Interest screening by the managing agency', () => {
         InterestScreeningService,
         { provide: getRepositoryToken(Interest), useValue: interestsRepo },
         { provide: getRepositoryToken(Profile), useValue: profilesRepo },
-        { provide: getRepositoryToken(ProfileDetails), useValue: empty },
+        { provide: getRepositoryToken(ProfileDetails), useValue: biodataRepo },
+        { provide: getRepositoryToken(ProfileSibling), useValue: empty },
         { provide: getRepositoryToken(ProfileShortlist), useValue: empty },
         { provide: getRepositoryToken(ProfileShare), useValue: empty },
         { provide: getRepositoryToken(User), useValue: usersRepo },
         { provide: getRepositoryToken(AgentProfile), useValue: empty },
         { provide: CompatibilityEngine, useValue: {} },
-        { provide: AppConfigService, useValue: {} },
+        { provide: AppConfigService, useValue: { features: { matchmakingRequiresIdentity: true } } },
         { provide: RedisService, useValue: redis },
         { provide: OutboxService, useValue: outbox },
         { provide: Neo4jService, useValue: { ready: false, recordInterest: jest.fn() } },

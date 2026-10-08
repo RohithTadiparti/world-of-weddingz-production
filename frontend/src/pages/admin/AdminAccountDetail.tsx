@@ -21,6 +21,7 @@ import {
   roleLabel,
 } from '../../lib/labels';
 import { EmptyState, Loading } from '../../components/ui/Feedback';
+import { ContactRevealButton, useContactReveal } from '../../components/AdminContactReveal';
 
 /**
  * One account and everything hanging off it, as a dedicated page (EZ1-I171,
@@ -51,12 +52,15 @@ const KIND: Record<Kind, { title: string; listRoute: string; listLabel: string }
 
 interface AccountUser {
   id: string;
-  email: string;
+  /** Masked by the server (r***@gmail.com) unless revealed. */
+  email: string | null;
   role: string;
   isActive: boolean;
   isVerified: boolean;
   managedByAgentId: string | null;
+  /** Masked by the server (******3210) unless revealed. */
   phone: string | null;
+  contactMasked?: boolean;
   createdAt: string;
 }
 
@@ -243,6 +247,7 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
   const meta = KIND[kind];
   const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
+  const contactReveal = useContactReveal(accountId);
 
   const { data, isLoading, error } = useQuery<AccountDetail>({
     queryKey: ['admin-account-detail', accountId],
@@ -316,7 +321,10 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
     );
 
   const { user } = data;
-  const name = data.profiles[0]?.displayName || user.email;
+  // Masked unless an administrator has explicitly revealed them (ISS-11).
+  const shownEmail = contactReveal.contact ? contactReveal.contact.email : user.email;
+  const shownPhone = contactReveal.contact ? contactReveal.contact.phone : user.phone;
+  const name = data.profiles[0]?.displayName || user.email || 'Account';
   const businessName = data.businesses[0]?.name ?? data.plannerBusinesses[0]?.name ?? 'No business recorded';
   const portalLabel =
     kind === 'vendor' ? 'Vendor Portal' :
@@ -375,8 +383,9 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
             <h1 className="page-title mt-1 truncate text-[2rem] leading-tight">{name}</h1>
             <p className="mt-1 text-base font-medium text-gray-700">{businessName}</p>
             <div className="mt-3 space-y-1 text-sm text-gray-600">
-              <p>{user.email}</p>
-              <p>{user.phone ?? 'Phone not provided'}</p>
+              <p>{shownEmail ?? 'Email not provided'}</p>
+              <p>{shownPhone ?? 'Phone not provided'}</p>
+              <ContactRevealButton state={contactReveal} />
             </div>
           </div>
 
@@ -437,8 +446,8 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
           <Row label="Account ID">
             <span className="font-mono text-xs">{user.id.slice(0, 8)}</span>
           </Row>
-          <Row label="Email">{user.email}</Row>
-          <Row label="Mobile">{user.phone ?? '—'}</Row>
+          <Row label="Email">{shownEmail ?? '—'}</Row>
+          <Row label="Mobile">{shownPhone ?? '—'}</Row>
           <Row label="Role">{roleLabel(user.role)}</Row>
           <Row label="Registered">{formatDate(user.createdAt)}</Row>
           {user.managedByAgentId && (

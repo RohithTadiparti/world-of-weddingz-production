@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { AppConfigService } from '../../../config/app-config.service';
 import { UserRole } from '../../../common/enums';
 import { User } from '../entities/user.entity';
@@ -62,5 +62,45 @@ describe('JwtStrategy administrator SSO policy', () => {
       userId: 'user-1',
       role: UserRole.BRIDE,
     });
+  });
+});
+
+describe('JwtStrategy token generation', () => {
+  const users = { findOne: jest.fn() };
+  const cfg = {
+    auth: { jwtSecret: 'test-jwt-secret-at-least-32-characters', adminLoginProvider: 'password' },
+  } as unknown as AppConfigService;
+  const payload: JwtPayload = {
+    sub: 'user-1',
+    email: 'bride@example.com',
+    role: UserRole.BRIDE,
+    managedByAgentId: null,
+    tv: 0,
+  };
+  const account = (overrides: Partial<User> = {}) =>
+    ({
+      id: 'user-1',
+      email: 'bride@example.com',
+      role: UserRole.BRIDE,
+      isActive: true,
+      managedByAgentId: null,
+      mustResetPassword: false,
+      tokenVersion: 0,
+      ...overrides,
+    }) as User;
+
+  it('refuses a token minted before a suspension, after the account is reactivated', async () => {
+    // Suspension bumped the generation; reactivation alone does not revive it.
+    users.findOne.mockResolvedValue(account({ tokenVersion: 1 }));
+    const strategy = new JwtStrategy(cfg, users as never);
+
+    await expect(strategy.validate(payload)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('accepts a token from the current generation', async () => {
+    users.findOne.mockResolvedValue(account());
+    const strategy = new JwtStrategy(cfg, users as never);
+
+    await expect(strategy.validate(payload)).resolves.toMatchObject({ userId: 'user-1' });
   });
 });

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CaretLeft, CaretRight, X } from '@phosphor-icons/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, apiMessage } from '../lib/api';
+import { api, apiMessage, isConflict } from '../lib/api';
 import ProfilePreview from '../components/ProfilePreview';
 import MatchCard, { PublicProfile, Suggestion } from '../components/MatchCard';
 import { PersonPhoto } from '../components/ProfileSilhouette';
@@ -21,7 +21,7 @@ import {
 } from '../lib/permissions';
 import ProfileSelector from '../components/ProfileSelector';
 import ChoiceField from '../components/ChoiceField';
-import { matchmakingGate } from '../lib/matchmaking-gate';
+import { interestGate, matchmakingGate } from '../lib/matchmaking-gate';
 import {
   CASTES_BY_RELIGION,
   CITIES,
@@ -71,6 +71,7 @@ interface MatchStatus {
   servicesUnlocked: boolean;
   identitySubmitted: boolean;
   identityVerified: boolean;
+  identityRequired?: boolean;
 }
 
 interface Filters {
@@ -337,16 +338,19 @@ export default function Matches() {
     setError('');
     try {
       await fn();
-      qc.invalidateQueries({ queryKey: ['suggestions'] });
-      qc.invalidateQueries({ queryKey: ['recommended'] });
-      qc.invalidateQueries({ queryKey: ['shortlist'] });
-      qc.invalidateQueries({ queryKey: ['interest-board'] });
-      qc.invalidateQueries({ queryKey: ['accepted-matches'] });
-      qc.invalidateQueries({ queryKey: ['match-status'] });
-      qc.invalidateQueries({ queryKey: ['viewable-profile'] });
     } catch (err) {
       setError(apiMessage(err, 'That action was rejected.'));
+      // A conflict means it was already done (an interest already sent or
+      // accepted), so the cards are stale and are refreshed like a success.
+      if (!isConflict(err)) return;
     }
+    qc.invalidateQueries({ queryKey: ['suggestions'] });
+    qc.invalidateQueries({ queryKey: ['recommended'] });
+    qc.invalidateQueries({ queryKey: ['shortlist'] });
+    qc.invalidateQueries({ queryKey: ['interest-board'] });
+    qc.invalidateQueries({ queryKey: ['accepted-matches'] });
+    qc.invalidateQueries({ queryKey: ['match-status'] });
+    qc.invalidateQueries({ queryKey: ['viewable-profile'] });
   }
 
   const sendInterest = (toProfileId: string) =>
@@ -450,16 +454,15 @@ export default function Matches() {
    * disabled button with no explanation is its own defect. The reason travels
    * with the button rather than being written out beside each list.
    */
-  // Identity verification is no longer a matchmaking gate for individual users
-  // (EZ1-I70): in-person verification is not part of their flow, so it must not
-  // block sending, accepting or fixing an interest.
+  // Identity closes these where the platform requires it (identityRequired),
+  // while browsing above stays open to an unverified profile.
   const gate = !status
     ? undefined
     : !status.profileCompleted
       ? 'Fill in the profile first: basic details, preferences and a photo.'
       : fixed
         ? 'This profile has a fixed match, so matchmaking is closed.'
-        : undefined;
+        : interestGate(status);
 
   const interestHandler = gate ? undefined : sendInterest;
 

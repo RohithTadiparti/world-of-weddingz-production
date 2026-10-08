@@ -80,6 +80,19 @@ export class PublicProfileView {
   @ApiPropertyOptional({ example: 'ABC Marriage Agency' })
   sourceAgency?: string | null;
 
+  /**
+   * Who answers for a managed profile, ready to print on a card.
+   *
+   * `managed`, `managedByRelation` and `sourceAgency` each said part of it, and
+   * a card built from whichever happened to be set showed nothing at all for an
+   * agency-built profile with no relation recorded. `label` is the whole line
+   * ("Managed by a family member", "Managed by ABC Marriage Agency"), so a
+   * client prints it as it is rather than adding its own prefix. Null for a
+   * self-run profile.
+   */
+  @ApiPropertyOptional()
+  stewardship?: StewardshipHint | null;
+
   /** The short code a family can read out. */
   @ApiProperty({ example: 'WOW10231' })
   profileCode?: string;
@@ -103,6 +116,42 @@ export class PublicProfileView {
    */
   @ApiPropertyOptional()
   card?: ProfileCardFacts;
+}
+
+export interface StewardshipHint {
+  kind: 'family' | 'agency' | 'steward';
+  /** The full line, "Managed by" included. */
+  label: string;
+  /** A family steward's relation to the subject, when one was recorded. */
+  relation: string | null;
+}
+
+/**
+ * The stewardship line for a profile.
+ *
+ * `stewardRole` is the managing account's role when the caller knows it; when
+ * it does not, an agency name means an agency and a recorded relation means a
+ * family member (an agency never records one). A self-run profile — nobody
+ * managing it, or managed by its own account — has no line.
+ */
+export function stewardshipHint(
+  profile: Pick<Profile, 'userId' | 'managedByUserId' | 'stewardRelation'>,
+  opts: { stewardRole?: string | null; agencyName?: string | null } = {},
+): StewardshipHint | null {
+  if (!profile.managedByUserId || profile.managedByUserId === profile.userId) return null;
+  const relation = profile.stewardRelation?.trim() || null;
+  const agencyName = opts.agencyName?.trim() || null;
+  if (opts.stewardRole === 'family' || (!opts.stewardRole && !agencyName && relation)) {
+    return { kind: 'family', label: 'Managed by a family member', relation };
+  }
+  if (opts.stewardRole === 'agent' || agencyName) {
+    return {
+      kind: 'agency',
+      label: agencyName ? `Managed by ${agencyName}` : 'Managed by an agency',
+      relation: null,
+    };
+  }
+  return { kind: 'steward', label: 'Managed on their behalf', relation };
 }
 
 export interface ProfileCardFacts {
@@ -331,8 +380,18 @@ export function profilePhotoOf(
  */
 export function toPublicProfile(
   profile: Profile,
-  opts: ProfileAccessRelationship & { matched?: boolean; card?: ProfileCardFacts; sourceAgency?: string | null } = {},
+  opts: ProfileAccessRelationship & {
+    matched?: boolean;
+    card?: ProfileCardFacts;
+    sourceAgency?: string | null;
+    /** The managing account's role, when the caller has it; sharpens the stewardship line. */
+    stewardRole?: string | null;
+  } = {},
 ): PublicProfileView {
+  const stewardship = stewardshipHint(profile, {
+    stewardRole: opts.stewardRole,
+    agencyName: opts.sourceAgency,
+  });
   // `matched` is the older spelling of an accepted interest; both unlock.
   const related = Boolean(opts.owner || opts.fixed || opts.accepted || opts.matched);
   const full = hasFullProfileAccess(profile.visibility, {
@@ -344,6 +403,7 @@ export function toPublicProfile(
   if (!full) {
     return {
       sourceAgency: opts.sourceAgency ?? null,
+      stewardship,
       id: profile.id,
       displayName: profile.displayName,
       gender: profile.gender,
@@ -386,6 +446,7 @@ export function toPublicProfile(
 
   return {
     sourceAgency: opts.sourceAgency ?? null,
+    stewardship,
     id: profile.id,
     displayName: profile.displayName,
     gender: profile.gender,

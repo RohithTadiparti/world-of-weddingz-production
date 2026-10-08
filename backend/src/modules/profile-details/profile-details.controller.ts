@@ -15,6 +15,7 @@ import {
   ReligionDetailsDto,
   ProfilePhotoDto,
   SetPrimaryPhotoDto,
+  StoredPhotoDto,
   SiblingDto,
 } from './dto/profile-details.dto';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -102,6 +103,13 @@ export class ProfileDetailsController {
     return this.details.saveMarital(actor, id, dto);
   }
 
+  @ApiOperation({
+    summary: 'Save the family section',
+    description:
+      'Family net worth is required on a groom biodata and is never kept on a bride biodata. A ' +
+      'bride-side save that sends it still succeeds; the response then lists the fields that were ' +
+      'not kept in `ignoredFields`, with a `notice` saying why.',
+  })
   @Put('details/family')
   family(
     @CurrentUser() actor: AuthUser,
@@ -217,7 +225,7 @@ export class ProfileDetailsController {
   removePhoto(
     @CurrentUser() actor: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: ProfilePhotoDto,
+    @Body() dto: StoredPhotoDto,
   ) {
     return this.details.removePhoto(actor, id, dto.url);
   }

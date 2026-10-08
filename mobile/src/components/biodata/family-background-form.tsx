@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View } from 'react-native';
+import { Alert as NativeAlert, View } from 'react-native';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { api, apiMessage } from '@/lib/api';
@@ -9,6 +9,7 @@ import { PROFESSIONS } from '@/shared/reference';
 import { space } from '@/theme';
 import { ChoiceField, DependentLocation, canonical } from './choice-field';
 import { capitalizeWords } from '@/lib/format';
+import type { FamilySaveResult } from '@/lib/match-gender';
 import { FAMILY_TYPES, FAMILY_STATUSES, LIFE_STATUSES, stored } from './constants';
 
 interface Form {
@@ -104,12 +105,21 @@ export function FamilyBackgroundForm({
         nriCity: nri ? form.nriCity.trim() || undefined : undefined,
         nriCountry: nri ? form.nriCountry.trim() || undefined : undefined,
       };
-      await api.put(`/profiles/${profileId}/details/family`, payload);
+      return (await api.put(`/profiles/${profileId}/details/family`, payload)).data as FamilySaveResult | undefined;
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await qc.invalidateQueries({ queryKey: ['biodata-details', profileId] });
       await qc.invalidateQueries({ queryKey: ['biodata-completion', profileId] });
       setError('');
+      // The section was saved, but the server may have dropped fields it does
+      // not keep for this side (a bride's net worth). Say so rather than let
+      // the family believe the figure is on the biodata.
+      if (result?.notice || result?.ignoredFields?.length) {
+        NativeAlert.alert(
+          'Saved with a change',
+          result.notice ?? `These fields were not saved: ${result.ignoredFields?.join(', ')}.`,
+        );
+      }
       onSaved();
     },
     onError: (err) => setError(apiMessage(err, 'Family background could not be saved.')),

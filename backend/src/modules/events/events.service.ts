@@ -25,6 +25,7 @@ import {
   SetWeddingInvitationCardDto,
 } from './dto/event.dto';
 import { WeddingInvitation } from './entities/wedding-invitation.entity';
+import { assertMediaValueUploaded } from '../../platform/storage/kept-media';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Quotation } from '../bookings/entities/quotation.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
@@ -242,6 +243,8 @@ export class EventsService {
    */
   async updateEvent(actor: AuthUser, eventId: string, dto: UpdateEventDto) {
     const event = await this.ownedEvent(actor.userId, eventId);
+    // The edit form sends the picture back unchanged; only a new one must be an upload.
+    assertMediaValueUploaded('imageUrl', dto.imageUrl, event.imageUrl);
     this.assertTimeOrder(
       dto.startTime ?? event.startTime,
       dto.endTime ?? event.endTime,

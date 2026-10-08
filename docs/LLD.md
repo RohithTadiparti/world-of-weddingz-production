@@ -138,7 +138,8 @@ B/G = bride and groom, F = family, O = in-person officer.
 | `session:manage:own` / `mfa:manage:own` | ● | ● | ● | ● | ● | ● | ● |
 | `dispute:raise` | ● | ● | ● | ● | ● | · | ● |
 | `case:raise` | ● | ● | ● | ● | ● | ● | ● |
-| `verification:process` / `decide` | · | · | · | · | · | ● | ● |
+| `verification:process` | · | · | · | · | · | ● | ● |
+| `verification:decide` | · | · | · | · | · | · | ● |
 | `verification:allocate` | · | · | · | · | · | · | ● |
 | `case:investigate` / `settle` | · | · | · | · | · | ● | ● |
 | `case:allocate` | · | · | · | · | · | · | ● |

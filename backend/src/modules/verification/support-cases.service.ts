@@ -44,6 +44,7 @@ import { BookingsService } from '../bookings/bookings.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
+import { maskPii } from '../../common/util/pii-mask';
 import {
   BookingStatus,
   BusinessStatus,
@@ -1322,7 +1323,19 @@ export class SupportCasesService {
       .take(q.limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return paginate(await this.withContext(data), total, q.page, q.limit);
+    const rows = await this.withContext(data);
+    /*
+     * The all-cases view is an administrator list, so every contact detail on
+     * it — the raiser's email, a name that fell back to an email, a business
+     * phone — is masked like on every other (ISS-11). The case detail keeps
+     * them. An officer's queue and a raiser's own cases are unchanged.
+     */
+    return paginate(
+      actor.role === UserRole.ADMIN ? rows.map((row) => maskPii(row)) : rows,
+      total,
+      q.page,
+      q.limit,
+    );
   }
 
   async findOne(actor: AuthUser, id: string): Promise<SupportCase> {

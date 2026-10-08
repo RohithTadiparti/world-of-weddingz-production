@@ -38,13 +38,29 @@ import { ageBand, ageOf, toCardFacts } from '../users/dto/public-profile.dto';
 import { AiService } from '../ai/ai.service';
 import { StorageService } from '../../platform/storage/storage.service';
 import { parseKey } from '../../platform/storage/storage-keys';
+import { assertMediaValueUploaded } from '../../platform/storage/kept-media';
 import { BIODATA_DOCUMENT_EXTENSIONS, BIODATA_IMAGE_EXTENSIONS } from '../media/dto/media.dto';
 import { matchGender } from '../matchmaking/match-gender';
 import { CLOSED_ENGAGEMENT_MESSAGE, stewardMayEditBiodata } from '../users/stewardship';
+import {
+  CompletionReport,
+  REQUIRED_PHOTOS,
+  REQUIRED_SECTIONS,
+  completionReport,
+  isBiodataReady,
+  missingBiodataLabels,
+} from './biodata-completion';
+
+export { REQUIRED_SECTIONS } from './biodata-completion';
+export type { CompletionReport, MissingField, ProfileSection } from './biodata-completion';
 
 /** Why a family account cannot write a biodata on its own profile. */
 export const FAMILY_OWN_BIODATA_MESSAGE =
   'A biodata belongs to the person you are finding a match for. Open it from Family Profiles for your son, daughter or relative.';
+
+/** Said back when a bride-side family save carried a net worth it cannot keep. */
+export const FAMILY_NET_WORTH_GROOM_ONLY =
+  "Family net worth is recorded on a groom's biodata only, so it was not saved on this bride's biodata.";
 
 /** The most brothers and sisters a profile may list (EZ1-I102). */
 export const SIBLING_LIMIT = 10;
@@ -52,54 +68,6 @@ export const SIBLING_LIMIT = 10;
 /** A biodata file the extractor can read, judged by the extension in its key. */
 const BIODATA_FILE = new RegExp(`\\.(${BIODATA_IMAGE_EXTENSIONS})$`, 'i');
 const BIODATA_DOCUMENT = new RegExp(`\\.(${BIODATA_DOCUMENT_EXTENSIONS})$`, 'i');
-
-/** The sections a profile has to complete before it is considered ready. */
-export const REQUIRED_SECTIONS = [
-  'personal',
-  'religion',
-  'horoscope',
-  'marital',
-  'family',
-  'education',
-  'occupation',
-  'preferences',
-  'identity',
-] as const;
-
-export type ProfileSection = (typeof REQUIRED_SECTIONS)[number];
-
-export interface CompletionReport {
-  profileId: string;
-  complete: boolean;
-  /** Fraction complete, for the progress bar. */
-  percent: number;
-  sections: {
-    section: ProfileSection;
-    complete: boolean;
-    label: string;
-    /** The required fields still empty, so a client can name them. */
-    missingFields: MissingField[];
-  }[];
-  missing: ProfileSection[];
-}
-
-/** A required biodata field that has not been filled in yet. */
-export interface MissingField {
-  key: string;
-  label: string;
-}
-
-const SECTION_LABEL: Record<ProfileSection, string> = {
-  personal: 'Personal details',
-  religion: 'Religion and community',
-  horoscope: 'Horoscope',
-  marital: 'Marital status',
-  family: 'Family',
-  education: 'Education',
-  occupation: 'Occupation',
-  preferences: 'Partner preferences',
-  identity: 'Identity verification',
-};
 
 /**
  * The occupation fields of an education or occupation save.
@@ -148,7 +116,7 @@ export class ProfileDetailsService {
   // ------------------------------------------------------------- sections
 
   /** How many photographs a profile needs before the rest can be filled in. */
-  private static readonly REQUIRED_PHOTOS = 3;
+  private static readonly REQUIRED_PHOTOS = REQUIRED_PHOTOS;
 
   async savePersonal(actor: AuthUser, profileId: string, dto: PersonalDetailsDto) {
     const row = await this.editable(actor, profileId);
@@ -282,6 +250,8 @@ export class ProfileDetailsService {
   async saveHoroscope(actor: AuthUser, profileId: string, dto: HoroscopeDetailsDto) {
     const row = await this.editable(actor, profileId);
     const { horoscopeAvailable, horoscopeDocumentUrl, birthPlace, timeOfBirth, ...chart } = dto;
+    // The section sends the attached chart back on every save; only a new one must be an upload.
+    assertMediaValueUploaded('horoscopeDocumentUrl', horoscopeDocumentUrl, row.horoscopeDocumentUrl);
 
     row.horoscopeAvailable = horoscopeAvailable;
 
@@ -373,11 +343,36 @@ export class ProfileDetailsService {
       ...(isGroom
         ? {
             familyNetWorth: String(dto.familyNetWorth),
-            familyNetWorthVisible: dto.familyNetWorthVisible === true,
+            // Not sent is not "hide it": the app's form has no visibility
+            // switch, and saving there must not undo the one set on the web.
+            familyNetWorthVisible:
+              dto.familyNetWorthVisible === undefined
+                ? row.familyNetWorthVisible === true
+                : dto.familyNetWorthVisible === true,
           }
         : { familyNetWorth: null, familyNetWorthVisible: false }),
     });
-    return this.persist(row);
+    const saved = await this.persist(row);
+
+    /*
+     * Net worth belongs to the groom's biodata only, and a bride's is always
+     * stored empty. That rule stays, but it is no longer silent: a bride-side
+     * save that carried a figure (or asked for it to be shown) gets the save
+     * and a plain statement that those fields were not kept. Refusing the
+     * whole section instead would break any client that decides "groom"
+     * differently from matchGender and sends the field for a bride.
+     */
+    const ignoredFields = isGroom
+      ? []
+      : [
+          ...(dto.familyNetWorth !== undefined && dto.familyNetWorth !== null ? ['familyNetWorth'] : []),
+          ...(dto.familyNetWorthVisible === true ? ['familyNetWorthVisible'] : []),
+        ];
+    if (ignoredFields.length === 0) return saved;
+    return Object.assign(saved, {
+      ignoredFields,
+      notice: FAMILY_NET_WORTH_GROOM_ONLY,
+    });
   }
 
   async saveEducation(actor: AuthUser, profileId: string, dto: EducationDetailsDto) {
@@ -429,6 +424,7 @@ export class ProfileDetailsService {
 
   async savePreferences(actor: AuthUser, profileId: string, dto: PartnerPreferencesDto) {
     const row = await this.editable(actor, profileId);
+    assertMediaValueUploaded('horoscopeDocumentUrl', dto.horoscopeDocumentUrl, row.horoscopeDocumentUrl);
 
     const packageMin = dto.preferredPackageMin === undefined ? row.preferredPackageMin : dto.preferredPackageMin;
     const packageMax = dto.preferredPackageMax === undefined ? row.preferredPackageMax : dto.preferredPackageMax;
@@ -855,7 +851,7 @@ export class ProfileDetailsService {
       siblings,
       assets,
       contact: await this.contactFor(profile),
-      completion: this.report(profileId, profile, details, siblings),
+      completion: completionReport(profileId, profile, details, siblings),
       // The managed profile's *own* date of birth, so the biodata form can seed
       // the field from what this profile has saved rather than from the logged-in
       // family member's account DOB (EZ1-I182). This is the same column
@@ -971,6 +967,18 @@ export class ProfileDetailsService {
 
     if (!controlsIt && profile.lifecycle !== ProfileLifecycle.ACTIVE) {
       throw new NotFoundException('That profile is not available');
+    }
+    // A family account's own profile holds the parent's or guardian's details.
+    // It is never shown as a candidate, so nobody else opens it as one either —
+    // the relatives that family manages are the profiles others see.
+    if (!controlsIt && actor.role !== UserRole.IN_PERSON && profile.userId) {
+      const owner = await this.users.findOne({
+        where: { id: profile.userId },
+        select: ['id', 'role'],
+      });
+      if (owner?.role === UserRole.FAMILY) {
+        throw new NotFoundException('That profile is not available');
+      }
     }
     const basicOnly = !(await this.canSeeFull(actor, profile));
     // Explicitly PRIVATE stays fully shut to anyone who does not control it,
@@ -1140,114 +1148,7 @@ export class ProfileDetailsService {
       this.details.findOne({ where: { profileId } }),
       this.siblings.find({ where: { profileId } }),
     ]);
-    return this.report(profileId, profile, details, siblings);
-  }
-
-  /**
-   * Computed from the stored data every time it is asked for.
-   *
-   * A stored "complete" flag drifts the moment anything is edited or a rule
-   * changes, and a profile that claims to be complete when it is not is worse
-   * than one that admits it is not.
-   */
-  private report(
-    profileId: string,
-    profile: Profile,
-    details: ProfileDetails | null,
-    siblings: ProfileSibling[],
-  ): CompletionReport {
-    const has = (value: unknown) =>
-      value !== null && value !== undefined && value !== '' &&
-      !(typeof value === 'object' && Object.keys(value as object).length === 0);
-
-    // A profile with no biodata row yet is missing every field the row holds.
-    const d: Partial<ProfileDetails> = details ?? {};
-    /** The required fields of a section that are still empty, in form order. */
-    const lacking = (checks: [filled: boolean, field: MissingField][]): MissingField[] =>
-      checks.filter(([filled]) => !filled).map(([, field]) => field);
-
-    /*
-     * Field by field rather than one yes/no per section, so the biodata wizard
-     * can say exactly what is holding a step back instead of only refusing to
-     * move on. A section is complete exactly when nothing is listed for it.
-     */
-    const missingFields: Record<ProfileSection, MissingField[]> = {
-      // Native place moved to the family section and place of birth is no
-      // longer collected, so neither can be a condition of this one being
-      // complete — every existing profile would otherwise become incomplete on
-      // deploy, and the fix would look like data loss.
-      personal: lacking([
-        [
-          (profile.photos?.length ?? 0) >= ProfileDetailsService.REQUIRED_PHOTOS,
-          { key: 'photos', label: `${ProfileDetailsService.REQUIRED_PHOTOS} profile photographs` },
-        ],
-        [has(d.firstName), { key: 'firstName', label: 'First name' }],
-        [has(d.lastName), { key: 'lastName', label: 'Last name' }],
-        [has(profile.gender), { key: 'gender', label: 'Gender' }],
-        [has(profile.dateOfBirth), { key: 'dateOfBirth', label: 'Date of birth' }],
-        [has(d.heightCm), { key: 'heightCm', label: 'Height' }],
-        [has(d.complexion), { key: 'complexion', label: 'Complexion' }],
-        [has(d.communicationAddress), { key: 'communicationAddress', label: 'Communication address' }],
-      ]),
-      religion: lacking([
-        [has(d.religion), { key: 'religion', label: 'Religion' }],
-        [has(d.caste), { key: 'caste', label: 'Caste' }],
-        [has(d.motherTongue), { key: 'motherTongue', label: 'Mother tongue' }],
-      ]),
-      // Answering "no horoscope" completes the section: the question has been
-      // answered, which is all the profile needs.
-      horoscope: lacking([
-        [
-          d.horoscopeAvailable === false || has(d.horoscope),
-          { key: 'horoscope', label: 'Horoscope details, or that there is no horoscope' },
-        ],
-      ]),
-      marital: lacking([[has(d.maritalStatus), { key: 'maritalStatus', label: 'Marital status' }]]),
-      // The native place is asked here now.
-      family: lacking([
-        [has(d.father), { key: 'father', label: "Father's name" }],
-        [has(d.mother), { key: 'mother', label: "Mother's name" }],
-        [has(d.familyType), { key: 'familyType', label: 'Family type' }],
-        [
-          matchGender(profile) !== 'male' || has(d.familyNetWorth),
-          { key: 'familyNetWorth', label: 'Family net worth' },
-        ],
-        // Counts and records have to agree, or the family section is telling
-        // two different stories.
-        [d.brothers !== null && siblings.length >= 0, { key: 'brothers', label: 'Brothers' }],
-        [d.sisters !== null, { key: 'sisters', label: 'Sisters' }],
-      ]),
-      education: lacking([
-        [has(d.highestQualification), { key: 'highestQualification', label: 'Highest qualification' }],
-        [has(d.course), { key: 'course', label: 'Course' }],
-      ]),
-      occupation: lacking([
-        [has(d.occupationStatus), { key: 'occupationStatus', label: 'Occupation status' }],
-      ]),
-      preferences: lacking([
-        [has(d.preferredAgeMin), { key: 'preferredAgeMin', label: 'Preferred age' }],
-        [has(d.preferredHeightMinCm), { key: 'preferredHeightMinCm', label: 'Preferred height' }],
-      ]),
-      identity: lacking([
-        [Boolean(profile.governmentIdHash), { key: 'governmentId', label: 'Government ID' }],
-      ]),
-    };
-
-    const sections = REQUIRED_SECTIONS.map((section) => ({
-      section,
-      complete: missingFields[section].length === 0,
-      label: SECTION_LABEL[section],
-      missingFields: missingFields[section],
-    }));
-    const missing = sections.filter((s) => !s.complete).map((s) => s.section);
-
-    return {
-      profileId,
-      complete: missing.length === 0,
-      percent: Math.round(((sections.length - missing.length) / sections.length) * 100),
-      sections,
-      missing,
-    };
+    return completionReport(profileId, profile, details, siblings);
   }
 
   // --------------------------------------------------------------- guards
@@ -1357,8 +1258,7 @@ export class ProfileDetailsService {
       this.details.findOne({ where: { profileId } }),
       this.siblings.find({ where: { profileId } }),
     ]);
-    const report = this.report(profileId, profile, details, siblings);
-    return report.missing.every((section) => section === 'identity');
+    return isBiodataReady(completionReport(profileId, profile, details, siblings));
   }
 
   /** The sections still missing, for a message that says what to go and fill in. */
@@ -1370,8 +1270,6 @@ export class ProfileDetailsService {
       this.details.findOne({ where: { profileId } }),
       this.siblings.find({ where: { profileId } }),
     ]);
-    return this.report(profileId, profile, details, siblings)
-      .sections.filter((s) => !s.complete && s.section !== 'identity')
-      .map((s) => s.label);
+    return missingBiodataLabels(completionReport(profileId, profile, details, siblings));
   }
 }

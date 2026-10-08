@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, apiMessage } from '../lib/api';
+import { api, apiMessage, isConflict } from '../lib/api';
 import { useMatchmakingGate } from '../lib/matchmaking-gate';
 import BiodataCard, { Biodata } from '../components/BiodataCard';
 import ProfileSelector from '../components/ProfileSelector';
@@ -81,6 +81,8 @@ export default function SharedWithMe() {
       setSentFor((list) => [...list, row.shareId]);
       qc.invalidateQueries({ queryKey: ['interest-board'] });
     } catch (err) {
+      // Already sent (409): show it as sent rather than as a failure.
+      if (isConflict(err)) setSentFor((list) => [...list, row.shareId]);
       setError(apiMessage(err));
     }
   }

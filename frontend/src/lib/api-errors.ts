@@ -39,6 +39,15 @@ export function apiMessage(err: unknown, fallback = 'Something went wrong.'): st
   return fallback;
 }
 
+/**
+ * Whether the server refused the request as a conflict (409): the thing asked
+ * for is already the case, such as an interest that was already sent or
+ * accepted. Callers treat it as "already done", not as a failure.
+ */
+export function isConflict(err: unknown): boolean {
+  return (err as ErrorWithResponse | null | undefined)?.response?.status === 409;
+}
+
 const NETWORK_MESSAGE = 'Could not reach the server. Check your connection and try again.';
 
 /** An HTTP client's error for a request that went out and got no answer. */
@@ -65,7 +74,7 @@ interface ApiErrorBody {
  * needs is that a shared module resolves nothing at all.
  */
 interface ErrorWithResponse {
-  response?: { data?: ApiErrorBody };
+  response?: { data?: ApiErrorBody; status?: number };
   /** Set by axios on every error it raises. */
   isAxiosError?: boolean;
   /** The request that was sent, present when it went out but got no answer. */

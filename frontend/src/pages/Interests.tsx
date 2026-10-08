@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { api, apiMessage } from '../lib/api';
+import { api, apiMessage, isConflict } from '../lib/api';
 import { useAuth, usePermissions } from '../store/auth';
 import { Permission, can } from '../lib/permissions';
 import AgencyInterests from '../components/AgencyInterests';
@@ -20,6 +20,7 @@ import {
 import { Loading } from '../components/ui/Feedback';
 import { PersonPhoto } from '../components/ProfileSilhouette';
 import { formatShortDate, relativeToToday } from '../lib/dates';
+import { tabCount } from '../lib/interest-tabs';
 
 interface Counterpart {
   id: string;
@@ -78,7 +79,7 @@ interface Board {
   counts: Record<string, number>;
 }
 
-type TabKey = 'received' | 'sent' | 'pending' | 'accepted' | 'declined';
+type TabKey = 'received' | 'sent' | 'pending' | 'accepted' | 'declined' | 'blocked';
 
 const TABS: { key: TabKey; label: string; empty: string }[] = [
   {
@@ -105,6 +106,17 @@ const TABS: { key: TabKey; label: string; empty: string }[] = [
     key: 'declined',
     label: 'Declined',
     empty: 'Nothing declined. It is kept here rather than deleted, so the same profile is not asked twice by mistake.',
+  },
+  /*
+   * Blocked profiles. The board always returned them and no tab showed them,
+   * so a block was a decision nobody could look back at. A block is permanent
+   * by design — the pair stay out of each other's lists — so this is a record
+   * to read, not a list to undo from.
+   */
+  {
+    key: 'blocked',
+    label: 'Blocked',
+    empty: 'Nobody blocked. A profile you block stays out of both your lists and is listed here.',
   },
 ];
 
@@ -197,6 +209,8 @@ export default function Interests() {
       qc.invalidateQueries({ queryKey: ['conversations'] });
     } catch (err) {
       setError(apiMessage(err));
+      // Already answered (409): the row on screen is stale, so refresh it.
+      if (isConflict(err)) qc.invalidateQueries({ queryKey: ['interest-board'] });
     } finally {
       setBusy(false);
     }
@@ -212,7 +226,7 @@ export default function Interests() {
     setShown(PAGE_SIZE);
   }
 
-  const allRows = board ? board[tab] : [];
+  const allRows = board ? (board[tab] ?? []) : [];
 
   // Distinct cities and age bands actually present in this tab, so the filters
   // only ever offer choices that can return something.
@@ -306,7 +320,9 @@ export default function Interests() {
               ? 'Review each interest before responding. Only the server-provided actions below are available.'
               : tab === 'accepted'
                 ? 'Accepted interests can continue privately in Messages when the existing conversation is available.'
-                : 'Every status shows whether you are waiting, deciding, or have chosen not to continue.'}
+                : tab === 'blocked'
+                  ? 'Blocked profiles do not appear in your matches or interests again, and they are not told. A block cannot be undone.'
+                  : 'Every status shows whether you are waiting, deciding, or have chosen not to continue.'}
           </p>
         </section>
       )}
@@ -371,7 +387,7 @@ export default function Interests() {
         <>
           <nav className="flex flex-wrap gap-1 border-b border-gray-200">
             {TABS.map((t) => {
-              const count = board?.counts[t.key] ?? 0;
+              const count = board ? tabCount(board as unknown as Record<string, unknown>, t.key) : 0;
               const isActive = tab === t.key;
               return (
                 <button
@@ -487,9 +503,11 @@ export default function Interests() {
                 icon={HandHeart}
                 title={`No ${(activeTab?.label ?? '').toLowerCase()} interests`}
                 action={
-                  <Link className="btn" to="/matches">
-                    Explore matches
-                  </Link>
+                  tab === 'blocked' ? undefined : (
+                    <Link className="btn" to="/matches">
+                      Explore matches
+                    </Link>
+                  )
                 }
               >
                 {activeTab?.empty}

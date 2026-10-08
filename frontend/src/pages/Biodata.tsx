@@ -55,6 +55,7 @@ import SavedBiodata from '../components/SavedBiodata';
 import ProfileCard from '../components/ProfileCard';
 import BiodataImport from '../components/BiodataImport';
 import { formatDate } from '../lib/dates';
+import { profileSideLabel } from '../lib/profile-labels';
 import RequiredMark, { RequiredNote } from '../components/ui/RequiredMark';
 import IndividualPageMasthead from '../components/individual/IndividualPageMasthead';
 
@@ -99,7 +100,7 @@ interface SharedProfile {
   address: string | null;
   bio: string | null;
   visibility: 'public' | 'matches_only' | 'private' | null;
-  managingFor?: 'bride' | 'groom' | null;
+  managingFor?: string | null;
   photos?: string[];
 }
 
@@ -148,6 +149,9 @@ export default function Biodata() {
   const [profileId, setProfileId] = useState(params.get('profileId') ?? '');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // What the server said it did not keep from the last save (a bride's net
+  // worth). Shown apart from the green "Saved" line, which it qualifies.
+  const [caution, setCaution] = useState('');
   const [step, setStep] = useState<StepName>('photos');
   const [direction, setDirection] = useState<'next' | 'prev'>('next');
   // Why the wizard stayed where it is, when a later step was asked for.
@@ -271,10 +275,15 @@ export default function Biodata() {
   ): Promise<boolean> {
     setError('');
     setNotice('');
+    setCaution('');
     try {
+      const dropped: string[] = [];
       for (const [section, body] of sections) {
-        await api.put(`/profiles/${targetId}/details/${section}`, body);
+        const { data: result } = await api.put(`/profiles/${targetId}/details/${section}`, body);
+        const said = savedWithNotice(result);
+        if (said) dropped.push(said);
       }
+      setCaution(dropped.join(' '));
       await qc.invalidateQueries({ queryKey: ['biodata', targetId] });
       // Preferences and income feed the match suggestions.
       if (sections.some(([section]) => section === 'preferences' || section === 'education')) {
@@ -427,6 +436,7 @@ export default function Biodata() {
 
       {error && <p className="alert-critical">{error}</p>}
       {notice && <p className="alert-positive">{notice}</p>}
+      {caution && <p className="alert-caution">{caution}</p>}
 
       {targetId && (
         <BiodataImport onImported={importDocument} />
@@ -576,9 +586,10 @@ export default function Biodata() {
         {current === 'family' && (
           <FamilyForm
             initial={details}
+            // The server's rule for the net worth: managingFor, then gender.
             isGroom={
-              sharedProfile?.managingFor === 'groom' ||
-              (!sharedProfile?.managingFor && String(sharedProfile?.gender ?? data?.gender ?? '').toLowerCase() === 'male')
+              profileSideLabel(sharedProfile?.managingFor, sharedProfile?.gender ?? data?.gender) ===
+              'Groom'
             }
             siblings={siblings}
             assets={assets}
@@ -643,6 +654,22 @@ const IMPORT_REQUIRED: Record<StepName, { key: string; label: string }[]> = {
   horoscope: [{ key: 'horoscopeAvailable', label: 'Whether a horoscope is available' }],
   preferences: [{ key: 'preferences', label: 'Partner preferences' }],
 };
+
+/**
+ * What a section save said it did not keep, if anything.
+ *
+ * The family save still succeeds when it is sent a net worth for a bride, but
+ * answers with `ignoredFields` and a `notice` explaining why.
+ */
+function savedWithNotice(result: unknown): string {
+  if (!result || typeof result !== 'object') return '';
+  const { notice, ignoredFields } = result as { notice?: unknown; ignoredFields?: unknown };
+  if (typeof notice === 'string' && notice.trim()) return notice.trim();
+  if (Array.isArray(ignoredFields) && ignoredFields.length > 0) {
+    return `These fields were not saved: ${ignoredFields.join(', ')}.`;
+  }
+  return '';
+}
 
 function valueAt(source: Draft, key: string): unknown {
   if (key === 'horoscopeAvailable') return source.horoscopeAvailable;

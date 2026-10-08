@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { FindOperator } from 'typeorm';
 import { ProfileDetailsService } from './profile-details.service';
 import { ProfileDetailsController } from './profile-details.controller';
@@ -56,7 +56,8 @@ describe.each(Object.values(ProfileVisibility))('profile visibility %s', visibil
         { find: async () => [] } as never,
         { find: async () => [] } as never,
         { findOne: async () => target, find: async () => [viewer] } as never,
-        {} as never, {} as never, {} as never,
+        { findOne: async () => ({ id: target.userId, role: UserRole.GROOM }) } as never,
+        {} as never, {} as never,
         { findOne: async ({ where }: { where: Record<string, unknown>[] }) =>
           state !== 'none' && where.some(w => matches(interest, w)) ? interest : null } as never,
         {} as never, {} as never,
@@ -109,6 +110,29 @@ describe.each(Object.values(ProfileVisibility))('profile visibility %s', visibil
       // The editor endpoint remains owner/steward/admin only, even for PUBLIC.
       await expect(service.findFull(actor, target.id)).rejects.toThrow();
     });
+  });
+
+  it('does not open a family account own profile to anybody else', async () => {
+    const target = {
+      id: 'fam-own', userId: 'family-user', managedByUserId: null, visibility,
+      lifecycle: ProfileLifecycle.ACTIVE, displayName: 'Lakshmi', dateOfBirth: '1970-01-01',
+      photos: [],
+    } as unknown as Profile;
+    const service = new ProfileDetailsService(
+      { findOne: async () => null, find: async () => [] } as never,
+      { find: async () => [] } as never,
+      { find: async () => [] } as never,
+      { findOne: async () => target, find: async () => [] } as never,
+      { findOne: async () => ({ id: 'family-user', role: UserRole.FAMILY }) } as never,
+      {} as never, {} as never,
+      { findOne: async () => null } as never,
+      {} as never, {} as never,
+    );
+    const groom = { userId: 'groom-user', role: UserRole.GROOM } as AuthUser;
+    await expect(service.findViewable(groom, 'fam-own')).rejects.toBeInstanceOf(NotFoundException);
+    // The family member still reads their own row.
+    const self = { userId: 'family-user', role: UserRole.FAMILY } as AuthUser;
+    await expect(service.findViewable(self, 'fam-own')).resolves.toMatchObject({ profileId: 'fam-own' });
   });
 
   it('keeps shared links basic for private profiles without a viewer relationship', () => {

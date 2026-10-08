@@ -40,7 +40,6 @@ interface Planner {
   /** Read only for the View Instagram button; see `listingInstagramUrl`. */
   socialLinks?: SocialLink[] | null;
   instagramUrl?: string | null;
-  contactPerson?: string | null;
   createdAt?: string;
 }
 

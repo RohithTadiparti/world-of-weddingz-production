@@ -34,7 +34,7 @@ import {
   UpdateSlotDto,
 } from './dto/availability.dto';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { OptionalAuth, Public } from '../../common/decorators/public.decorator';
 import {
   RequireAnyPermission,
   RequirePermissions,
@@ -409,11 +409,14 @@ export class VendorsController {
       'The subtractive view. This route and /search are unauthenticated, so what they return ' +
       'is the definition of public: no tax numbers, no PAN, no mobile number, no compliance ' +
       'documents, no payout account, no decision reasoning. The registered business address ' +
-      'is shown, so a buyer can see where the vendor trades from (EZ1-I197).',
+      'is shown, so a buyer can see where the vendor trades from (EZ1-I197). A listing that ' +
+      'is not live (still in review, sent back, refused) is a 404 to everyone but its owner ' +
+      'and administrators, the same set of listings /search shows.',
   })
+  @OptionalAuth()
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.vendors.findOne(id);
+  findOne(@CurrentUser() viewer: AuthUser | undefined, @Param('id', ParseUUIDPipe) id: string) {
+    return this.vendors.findOne(id, viewer);
   }
 
   /**

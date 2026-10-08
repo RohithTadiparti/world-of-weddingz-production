@@ -23,20 +23,50 @@ api.interceptors.request.use((config) => {
  */
 let refreshing: Promise<string | null> | null = null;
 
+/** The server's code for "another request rotated this token a moment ago". */
+const REFRESH_SUPERSEDED = 'REFRESH_SUPERSEDED';
+
+function postRefresh() {
+  // A bare axios call, so this request does not recurse through the
+  // interceptor with the stale access token attached. The cookie travels
+  // automatically.
+  return axios.post(`${api.defaults.baseURL}/auth/refresh`, {}, { withCredentials: true });
+}
+
+function isSuperseded(err: unknown): boolean {
+  const e = err as AxiosError<{ error?: { code?: string } }>;
+  return e?.response?.status === 401 && e.response.data?.error?.code === REFRESH_SUPERSEDED;
+}
+
+/**
+ * Tabs share one cookie, so two tabs refreshing at once would present the same
+ * token twice. Where the browser has Web Locks the refreshes are serialised
+ * across tabs: the second runs after the first has stored the new cookie.
+ */
+function acrossTabs<T>(work: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  return locks ? (locks.request('wow-auth-refresh', work) as Promise<T>) : work();
+}
+
 async function refreshAccessToken(): Promise<string | null> {
   const { setAuth, clear } = useAuth.getState();
   try {
-    // A bare axios call, so this request does not recurse through the
-    // interceptor with the stale access token attached. The cookie travels
-    // automatically.
-    const { data } = await axios.post(
-      `${api.defaults.baseURL}/auth/refresh`,
-      {},
-      { withCredentials: true },
-    );
-    setAuth(data);
-    return data.accessToken as string;
+    let response;
+    try {
+      response = await acrossTabs(postRefresh);
+    } catch (err) {
+      // Lost a race the lock could not see (an older browser, or a reload
+      // mid-refresh). The server refused without ending the login, and the
+      // winner's cookie should be in the jar now, so try once more with it.
+      if (!isSuperseded(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      response = await acrossTabs(postRefresh);
+    }
+    setAuth(response.data);
+    return response.data.accessToken as string;
   } catch {
+    // Refused (expired, revoked, or reuse detected): sign out here cleanly so
+    // the next screen is the login page, not a loop of failing requests.
     clear();
     return null;
   }
@@ -93,4 +123,4 @@ api.interceptors.response.use(
   },
 );
 
-export { apiMessage } from './api-errors';
+export { apiMessage, isConflict } from './api-errors';

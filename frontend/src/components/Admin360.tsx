@@ -33,10 +33,10 @@ export default function Admin360() {
     queryKey: ['admin-directory', query],
     queryFn: async () =>
       (await api.get('/admin/directory', { params: { q: query } })).data as {
-        id: string;
-        email: string;
-        role: string;
-      }[],
+        // Paginated, with email and mobile masked (ISS-11); the search itself
+        // matches the stored values.
+        data: { id: string; email: string | null; phone?: string | null; role: string }[];
+      },
     enabled: query.trim().length >= 2,
     retry: false,
   });
@@ -55,7 +55,7 @@ export default function Admin360() {
     retry: false,
   });
 
-  const results = Array.isArray(directory) ? directory : [];
+  const results = directory?.data ?? [];
 
   return (
     <div className="card space-y-4">
@@ -76,7 +76,7 @@ export default function Admin360() {
           />
           <input
             className="input w-full py-1.5 pl-8 text-sm"
-            placeholder="Email, or paste a booking id"
+            placeholder="Email, mobile, or paste a booking id"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -103,7 +103,9 @@ export default function Admin360() {
                 className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-surface-sunken"
                 onClick={() => setSubject({ kind: 'account', id: row.id })}
               >
-                <span className="truncate text-gray-900">{row.email}</span>
+                <span className="truncate text-gray-900">
+                  {row.email ?? row.phone ?? 'No email on file'}
+                </span>
                 <span className="shrink-0 text-xs uppercase tracking-wide text-gray-400">
                   {row.role}
                 </span>

@@ -1,8 +1,9 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, LessThan, MoreThan, Repository } from 'typeorm';
+import { EntityManager, IsNull, LessThan, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { RefreshSession } from './entities/refresh-session.entity';
+import { User } from './entities/user.entity';
 import { hashSecretToken } from '../../common/util/tokens';
 import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { AppConfigService } from '../../config/app-config.service';
@@ -22,6 +23,31 @@ export interface SessionView {
   current: boolean;
 }
 
+/** Error code on a 401 from /auth/refresh when another request already rotated the token. */
+export const REFRESH_SUPERSEDED = 'REFRESH_SUPERSEDED';
+
+/**
+ * Ends every way an account is currently signed in: bumps the token generation
+ * (so access tokens already issued stop working) and revokes every refresh
+ * session (so none can be renewed).
+ *
+ * A free function over an EntityManager rather than a SessionsService method,
+ * so the modules that suspend accounts (admin, agencies, officers, erasure) can
+ * call it inside their own transaction without importing the auth module.
+ */
+export async function revokeAllAccess(
+  manager: EntityManager,
+  userId: string,
+  reason: string,
+): Promise<void> {
+  await manager
+    .getRepository(User)
+    .update(userId, { tokenVersion: () => '"tokenVersion" + 1' });
+  await manager
+    .getRepository(RefreshSession)
+    .update({ userId, revokedAt: IsNull() }, { revokedAt: new Date(), revokedReason: reason });
+}
+
 /**
  * Refresh-token sessions: one row per signed-in device, rotated on every use.
  *
@@ -34,12 +60,15 @@ export interface SessionView {
  *    leaked — so the entire family (that login and all its rotations) is
  *    revoked rather than just the row, and the event is audited.
  *
- * One exception to reuse detection: a token replaced within the last few
- * seconds (`REFRESH_REUSE_GRACE_SECONDS`). A browser reloading while its
- * refresh is in flight, or a second tab, can present the old cookie before the
- * new one lands; that is a lost race, not theft. Within the window the
- * family's live session is rotated instead, so the login carries on and still
- * has exactly one live token. Outside it, reuse revokes the family as before.
+ * A spent token never mints anything. The one concession to real browsers is a
+ * few seconds (`REFRESH_REUSE_GRACE_SECONDS`) after a rotation during which a
+ * replay of the token just replaced is refused with `REFRESH_SUPERSEDED`
+ * instead of revoking the family: a second tab or a reload can present the old
+ * cookie before the new one lands, and that lost race should not sign the
+ * person out everywhere. The replay still gets nothing; the client retries
+ * with the cookie it now holds. An earlier version continued the login from
+ * the family's live session inside that window, which let a stolen token keep
+ * minting sessions for as long as it was replayed promptly.
  */
 @Injectable()
 export class SessionsService {
@@ -77,8 +106,9 @@ export class SessionsService {
   /**
    * Validates a presented refresh token and rotates it.
    *
-   * Returns the family id the replacement should join. Throws — after revoking
-   * the family — when the token is unknown, expired, or already used.
+   * Returns the replacement session, in the same family. Throws when the token
+   * is unknown, expired, or already used; for a used token outside the grace
+   * window the whole family is revoked first.
    */
   async rotate(
     userId: string,
@@ -94,48 +124,56 @@ export class SessionsService {
       throw new UnauthorizedException('Session not recognised');
     }
 
-    if (existing.revokedAt) {
-      // Replaced a moment ago: a reload or another tab lost the race. Carry
-      // the login on from its live session rather than ending it.
-      if (this.withinReuseGrace(existing)) {
-        const live = await this.sessions.findOne({
-          where: { familyId: existing.familyId, revokedAt: IsNull(), expiresAt: MoreThan(new Date()) },
-          order: { createdAt: 'DESC' },
-        });
-        if (live) {
-          live.revokedAt = new Date();
-          live.revokedReason = 'rotated';
-          live.lastUsedAt = new Date();
-          await this.sessions.save(live);
-          return this.create(userId, newToken, newExpiresAt, ctx, existing.familyId);
-        }
-      }
-
-      // Already rotated away, yet presented again: treat as compromise.
-      await this.revokeFamily(existing.familyId, 'refresh token reuse detected');
-      await this.audit.record({
-        action: AuditAction.AUTH_REFRESH_REUSE_DETECTED,
-        actor: { userId, role: 'unknown' as never },
-        resourceType: 'refresh_session',
-        resourceId: existing.id,
-        metadata: { familyId: existing.familyId },
-        ip: ctx.ip ?? null,
-      });
-      this.logger.warn(`Refresh token reuse for user ${userId}; family ${existing.familyId} revoked`);
-      throw new UnauthorizedException('Session expired, please sign in again');
-    }
+    if (existing.revokedAt) return this.rejectSpent(existing, userId, ctx);
 
     if (existing.expiresAt.getTime() <= Date.now()) {
       await this.revoke(existing.id, 'expired');
       throw new UnauthorizedException('Session expired, please sign in again');
     }
 
-    existing.revokedAt = new Date();
-    existing.revokedReason = 'rotated';
-    existing.lastUsedAt = new Date();
-    await this.sessions.save(existing);
+    // Consume the token with a conditional write, so two requests presenting
+    // it at the same moment cannot both pass the check above and both rotate.
+    const now = new Date();
+    const claimed = await this.sessions.update(
+      { id: existing.id, revokedAt: IsNull() },
+      { revokedAt: now, revokedReason: 'rotated', lastUsedAt: now },
+    );
+    if (!claimed.affected) {
+      const spent = await this.sessions.findOne({ where: { id: existing.id } });
+      return this.rejectSpent(
+        spent ?? { ...existing, revokedAt: now, revokedReason: 'rotated' },
+        userId,
+        ctx,
+      );
+    }
 
     return this.create(userId, newToken, newExpiresAt, ctx, existing.familyId);
+  }
+
+  /** A token that was already rotated or revoked has been presented again. */
+  private async rejectSpent(
+    spent: RefreshSession,
+    userId: string,
+    ctx: SessionContext,
+  ): Promise<never> {
+    if (this.withinReuseGrace(spent)) {
+      throw new UnauthorizedException({
+        message: 'This session was refreshed by another request. Please retry.',
+        code: REFRESH_SUPERSEDED,
+      });
+    }
+
+    await this.revokeFamily(spent.familyId, 'refresh token reuse detected');
+    await this.audit.record({
+      action: AuditAction.AUTH_REFRESH_REUSE_DETECTED,
+      actor: { userId, role: 'unknown' as never },
+      resourceType: 'refresh_session',
+      resourceId: spent.id,
+      metadata: { familyId: spent.familyId },
+      ip: ctx.ip ?? null,
+    });
+    this.logger.warn(`Refresh token reuse for user ${userId}; family ${spent.familyId} revoked`);
+    throw new UnauthorizedException('Session expired, please sign in again');
   }
 
   /** Rotated (not revoked for any other reason) within the grace window. */
@@ -163,7 +201,7 @@ export class SessionsService {
     );
   }
 
-  /** Sign out everywhere. Used by logout-all, password change and suspension. */
+  /** Sign out everywhere. Used by logout-all and password change. */
   async revokeAllForUser(userId: string, reason: string): Promise<void> {
     await this.sessions.update(
       { userId, revokedAt: IsNull() },
@@ -171,11 +209,15 @@ export class SessionsService {
     );
   }
 
-  async revokeByToken(token: string, reason: string): Promise<void> {
-    await this.sessions.update(
-      { tokenHash: this.hashRefreshToken(token), revokedAt: IsNull() },
-      { revokedAt: new Date(), revokedReason: reason },
-    );
+  /**
+   * Sign-out of one device: ends the login the token belongs to, every
+   * rotation of it included, so an earlier copy of the token cannot outlive it.
+   */
+  async revokeFamilyByToken(token: string, reason: string): Promise<void> {
+    const session = await this.sessions.findOne({
+      where: { tokenHash: this.hashRefreshToken(token) },
+    });
+    if (session) await this.revokeFamily(session.familyId, reason);
   }
 
   async listActive(userId: string, currentToken?: string): Promise<SessionView[]> {

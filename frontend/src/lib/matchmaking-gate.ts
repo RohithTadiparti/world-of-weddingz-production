@@ -25,6 +25,8 @@ export interface MatchStatus {
   matchFixedState: MatchFixedState;
   identitySubmitted: boolean;
   identityVerified: boolean;
+  /** Whether verification is a condition of sending, accepting and fixing. */
+  identityRequired?: boolean;
 }
 
 export function matchmakingGate(status?: MatchStatus): string | undefined {
@@ -32,10 +34,27 @@ export function matchmakingGate(status?: MatchStatus): string | undefined {
   if (!status.profileCompleted) {
     return 'Fill in the profile first: basic details, preferences and a photo.';
   }
-  // Identity verification is no longer a matchmaking gate (EZ1-I70): in-person
-  // verification is not part of the individual-user flow.
   if (status.matchFixedState === 'confirmed') {
     return 'This profile has a fixed match, so matchmaking is closed.';
+  }
+  return undefined;
+}
+
+/**
+ * Why the committing actions — sending, accepting, fixing — are closed.
+ *
+ * Everything that closes browsing, plus identity where the platform requires
+ * it. Kept apart from matchmakingGate because browsing stays open to an
+ * unverified profile: it is the step that commits another family that waits
+ * for the Aadhaar check.
+ */
+export function interestGate(status?: MatchStatus): string | undefined {
+  const closed = matchmakingGate(status);
+  if (closed || !status) return closed;
+  if (status.identityRequired && !status.identityVerified) {
+    return status.identitySubmitted
+      ? 'Finish identity verification (the Aadhaar OTP on the biodata) before sending, accepting or fixing an interest.'
+      : 'Verify identity with an Aadhaar OTP on the biodata before sending, accepting or fixing an interest.';
   }
   return undefined;
 }
@@ -64,5 +83,5 @@ export function useMatchmakingGate(
     retry: false,
     enabled: enabled && (!needsProfile || Boolean(profileId)),
   });
-  return { status: data, gate: matchmakingGate(data) };
+  return { status: data, gate: interestGate(data) };
 }

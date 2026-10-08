@@ -22,6 +22,7 @@ import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { OutboxService } from '../../platform/events/outbox.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { generateTemporaryPassword } from '../../common/util/passwords';
+import { NOT_A_CANDIDATE_MESSAGE, nonMatchableProfileIds } from './matchable-profiles';
 import {
   CaseSubject,
   InterestStatus,
@@ -221,9 +222,15 @@ export class MatchLifecycleService {
     interestId: string,
     requestedSide?: 'from' | 'to',
   ): Promise<MatchFixedResult> {
-    const { interest, sides } = await this.mySide(actor, interestId);
+    const { interest, sides, profiles } = await this.mySide(actor, interestId);
     if (interest.status !== InterestStatus.ACCEPTED) {
       throw new BadRequestException('Only an accepted match can be fixed');
+    }
+    // A match is fixed between a bride and a groom. A family account's own
+    // profile describes the parent, and one accepted before that was refused
+    // can be ended, never fixed.
+    if ((await nonMatchableProfileIds(this.users, profiles)).size > 0) {
+      throw new BadRequestException(NOT_A_CANDIDATE_MESSAGE);
     }
 
     if (interest.matchFixedState === MatchFixedState.CONFIRMED) {
@@ -265,6 +272,13 @@ export class MatchLifecycleService {
     if (confirmed(side)) {
       throw new BadRequestException('You have already confirmed. Waiting on the other side.');
     }
+    // Fixing a match is the point at which two families act on it. Whichever
+    // side is confirming, the profile it confirms for must be verified — the
+    // subject profile, not the agent or relative acting for it (ISS-02).
+    const confirming = profiles.find(
+      (p) => p.id === (side === 'from' ? interest.fromProfileId : interest.toProfileId),
+    );
+    if (confirming) this.matchmaking.assertIdentityVerified(confirming, 'confirm a match as fixed');
 
     const now = new Date();
     if (side === 'from') interest.fixedConfirmedFromAt = now;
@@ -539,6 +553,7 @@ export class MatchLifecycleService {
     servicesUnlocked: boolean;
     identitySubmitted: boolean;
     identityVerified: boolean;
+    identityRequired: boolean;
   }> {
     const me = await this.matchmaking.resolveSubject(actor, profileId);
 
@@ -590,6 +605,10 @@ export class MatchLifecycleService {
       // the eight sections is the one holding up the buttons.
       identitySubmitted: Boolean(me.idSubmittedAt),
       identityVerified: Boolean(me.idVerifiedAt),
+      // Whether that verification is a condition of sending, accepting and
+      // fixing (MATCHMAKING_REQUIRES_IDENTITY), so a client can say so before
+      // the button is pressed rather than after the refusal.
+      identityRequired: this.cfg.features.matchmakingRequiresIdentity,
     };
   }
 

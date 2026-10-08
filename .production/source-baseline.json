@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "2ddc2e53a73e2992a46fb9671c3c0e8eadd42d55",
+  "reviewedCommit": "2bd8eaa40013eb694ef44aa103e1b7b89c4d59b3",
   "snapshotDate": "2026-10-08",
   "historyImported": false,
-  "notes": "Reviewed through WOW-MD PR 60 at 2ddc2e5. DEP-002 accepts the peer-compatible dependency rollup, Express 5 mock-storage adaptation, patched mobile shell-quote chain and React 19/Zustand selector fix. DEP-003 accepts the exact glob 10.5.0 backend lockfile update. DEP-004 restores and verifies explicit Express 4 in the runtime image. SYNC-004 accepts the committed profile validation, biodata progression and mock-storage proxy fixes. OBS-004 moves Vector's delivery buffer to Docker-managed storage while retaining host-readable JSONL logs. SYNC-005 accepts the reviewed biodata caste, parent courtesy-title, saved-biodata and positive-income changes with aligned regression coverage. QA-004 accepts the fresh-account username, bounded registration response wait, captionless-wrapper audit handling and accessible matching-journey fixes. SYNC-006 accepts the reviewed QA-sheet fixes across navigation, uploads, calls, biodata, profiles and family-account boundaries. Remaining uncommitted source changes still require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 63 at 2bd8eaa. RLY-001, S3-001 and QA-001 record the intervening Railway contract, private-media guardrail and capacity-harness merges. SYNC-007 accepts the reviewed live E2E fixes, session and PII hardening, media-origin controls, maintenance utilities, two documented migrations and their regression coverage. Remaining uncommitted source changes still require separate intake review."
 }

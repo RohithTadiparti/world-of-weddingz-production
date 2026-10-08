@@ -83,7 +83,9 @@ export function ActivityFeed() {
 
 interface DirectoryRow {
   id: string;
-  email: string;
+  /** Masked by the server (ISS-11); the account detail has the audited reveal. */
+  email: string | null;
+  phone?: string | null;
   role: string;
   isActive: boolean;
   isVerified: boolean;
@@ -149,7 +151,7 @@ export function Directory({
       <div className="mb-3 flex flex-wrap gap-2">
         <input
           className="input flex-1"
-          placeholder="Search by email"
+          placeholder="Search by email or mobile"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -179,7 +181,9 @@ export function Directory({
               }
             >
               <span className="min-w-0">
-                <span className="block truncate text-sm font-medium text-gray-900">{u.email}</span>
+                <span className="block truncate text-sm font-medium text-gray-900">
+                  {u.email ?? u.phone ?? 'No email on file'}
+                </span>
                 <span className="text-xs text-gray-500">
                   {roleLabel(u.role)} · joined{' '}
                   {new Date(u.createdAt).toLocaleDateString()}

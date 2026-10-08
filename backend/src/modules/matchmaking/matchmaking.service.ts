@@ -1,11 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, In, IsNull, Not, Repository } from 'typeorm';
+import { ILike, In, IsNull, Like, Not, Repository } from 'typeorm';
 import { Interest } from './entities/interest.entity';
 import { Profile } from '../users/entities/profile.entity';
 import { User } from '../auth/entities/user.entity';
@@ -37,11 +38,19 @@ import {
 import { ProfileShortlist } from './entities/shortlist.entity';
 import { ProfileShare } from '../circulation/entities/profile-share.entity';
 import { ProfileDetails } from '../profile-details/entities/profile-details.entity';
+import { ProfileSibling } from '../profile-details/entities/profile-sibling.entity';
+import {
+  completionReport,
+  isBiodataReady,
+  missingBiodataLabels,
+} from '../profile-details/biodata-completion';
+import { likeEscape } from '../../common/util/like';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { SuggestionsQueryDto } from './dto/matchmaking.dto';
 import { genderWhere, matchGender, soughtGender } from './match-gender';
 import { MatchViewCounts, inView, viewCounts } from './suggestion-views';
 import { heldFromClient, screeningAgentFor, visibleTo } from './interest-screening.service';
+import { NOT_A_CANDIDATE_MESSAGE, nonMatchableProfileIds, stewardRolesFor } from './matchable-profiles';
 
 /**
  * Where the viewer already stands with a candidate.
@@ -149,6 +158,7 @@ export class MatchmakingService {
     @InjectRepository(Interest) private readonly interests: Repository<Interest>,
     @InjectRepository(Profile) private readonly profiles: Repository<Profile>,
     @InjectRepository(ProfileDetails) private readonly details: Repository<ProfileDetails>,
+    @InjectRepository(ProfileSibling) private readonly siblings: Repository<ProfileSibling>,
     @InjectRepository(ProfileShortlist)
     private readonly shortlists: Repository<ProfileShortlist>,
     @InjectRepository(ProfileShare) private readonly shares: Repository<ProfileShare>,
@@ -239,6 +249,96 @@ export class MatchmakingService {
         'This match has been fixed. Matchmaking is closed for this profile.',
       );
     }
+  }
+
+  /**
+   * The full biodata, before this profile approaches anybody (ISS-03).
+   *
+   * `profileCompleted` only asks for the basics, which is enough to browse: a
+   * family deciding whether to fill in a biodata at all wants to see who is on
+   * the other side first. An interest is different — it puts this biodata in
+   * front of another family, and an empty one is a request they cannot judge.
+   * So sending asks the same question the biodata wizard and circulation ask,
+   * from the same rules, and names what is missing.
+   */
+  private async assertBiodataReady(profile: Profile): Promise<void> {
+    const [details, siblings] = await Promise.all([
+      this.details.findOne({ where: { profileId: profile.id } }),
+      this.siblings.find({ where: { profileId: profile.id } }),
+    ]);
+    const report = completionReport(profile.id, profile, details, siblings);
+    if (isBiodataReady(report)) return;
+    const missing = missingBiodataLabels(report);
+    throw new ForbiddenException(
+      'Complete the biodata before sending an interest.' +
+        (missing.length ? ` Still needed: ${missing.join(', ')}.` : ''),
+    );
+  }
+
+  /**
+   * Identity, before anything that binds two families together (ISS-02).
+   *
+   * Browsing is deliberately left open: somebody who has not verified yet still
+   * needs to see what is on the other side of the step. What is closed is
+   * everything that commits — sending an interest, accepting one, and
+   * confirming a match as fixed.
+   *
+   * It is a fact about the *subject profile*, not about the account making the
+   * call. An agent or a family member acting for a relative is not the person
+   * the other family is relying on; the relative is. So a steward is held to
+   * the managed profile's verification, never their own, which is the same
+   * subject `resolveSubject` hands every other matchmaking rule. A steward may
+   * run the Aadhaar check on that profile themselves.
+   *
+   * Switchable (MATCHMAKING_REQUIRES_IDENTITY) because EZ1-I70 once turned it
+   * off; it is on by default.
+   */
+  assertIdentityVerified(profile: Profile, action: string): void {
+    if (!this.cfg.features.matchmakingRequiresIdentity || profile.idVerifiedAt) return;
+    throw new ForbiddenException(
+      profile.idSubmittedAt
+        ? `Identity verification is not finished for this profile, so you cannot ${action} yet. ` +
+          'Complete the Aadhaar OTP on the biodata.'
+        : `Identity verification is required before you can ${action}. ` +
+          'Verify the profile with an Aadhaar OTP on the biodata.',
+    );
+  }
+
+  /**
+   * Which of these profiles may be put in front of another family — suggested,
+   * or sent an interest — as far as their own readiness goes (ISS-08).
+   *
+   * The same bar a profile has to clear to send an interest: the basics and a
+   * complete biodata. A profile that could not answer an interest with
+   * anything is not one to offer, and is not one to send to either. One read
+   * of the biodata and siblings for the whole set, so a fifty-profile pool is
+   * two queries rather than a hundred. `loaded` lets a caller that already has
+   * the biodata rows pass them in rather than read them twice.
+   */
+  private async readyProfileIds(
+    candidates: Profile[],
+    loaded?: Map<string, ProfileDetails>,
+  ): Promise<Set<string>> {
+    const basics = candidates.filter((c) => c.profileCompleted);
+    if (basics.length === 0) return new Set();
+    const ids = basics.map((c) => c.id);
+    const [details, siblings] = await Promise.all([
+      loaded ?? this.detailsFor(ids),
+      this.siblings.find({ where: { profileId: In(ids) } }),
+    ]);
+    const siblingsOf = new Map<string, ProfileSibling[]>();
+    for (const sibling of siblings) {
+      siblingsOf.set(sibling.profileId, [...(siblingsOf.get(sibling.profileId) ?? []), sibling]);
+    }
+    return new Set(
+      basics
+        .filter((c) =>
+          isBiodataReady(
+            completionReport(c.id, c, details.get(c.id) ?? null, siblingsOf.get(c.id) ?? []),
+          ),
+        )
+        .map((c) => c.id),
+    );
   }
 
   /** Has this profile settled on someone? Gates matchmaking and unlocks services. */
@@ -407,14 +507,22 @@ export class MatchmakingService {
          * code has that profile in mind, and it is almost certainly not among
          * the fifty most recent. So a search widens the query instead — same
          * eligibility rules, different starting set.
+         *
+         * A profile code matches on its beginning (ISS-19), so "WOW1015" finds
+         * WOW10153 the way a family half-remembering a code expects. Codes are
+         * stored upper-case, so the term is upper-cased and compared with an
+         * anchored, case-sensitive LIKE, which the unique index on the code can
+         * serve. Wildcards the person typed are escaped in every pattern.
          */
         const term = q.q?.trim();
+        const codePrefix = term ? likeEscape(term.replace(/\s+/g, '').toUpperCase()) : '';
+        const anywhere = term ? `%${likeEscape(term)}%` : '';
         candidates = term
           ? await this.profiles.find({
               where: bases.flatMap((b) => [
-                { ...b, profileCode: term.replace(/\s+/g, '').toUpperCase() },
-                { ...b, displayName: ILike(`%${term}%`) },
-                { ...b, city: ILike(`%${term}%`) },
+                { ...b, profileCode: Like(`${codePrefix}%`) },
+                { ...b, displayName: ILike(anywhere) },
+                { ...b, city: ILike(anywhere) },
               ]),
               order: { createdAt: 'DESC' },
               take: this.cfg.matchmaking.maxSuggestions,
@@ -436,6 +544,12 @@ export class MatchmakingService {
       candidates = candidates.filter(
         (c) => eligible.has(c.id) && !excluded.has(c.id) && !fixedElsewhere.has(c.id),
       );
+
+      // The biodata is read once, here, for the whole pool: it decides who is
+      // ready to be offered at all, and the same rows are scored below.
+      const pool = await this.detailsFor([me.id, ...candidates.map((c) => c.id)]);
+      const ready = await this.readyProfileIds(candidates, pool);
+      candidates = candidates.filter((c) => ready.has(c.id));
 
       // What the viewer may see of each candidate depends on whether the two
       // sides have already matched.
@@ -483,7 +597,6 @@ export class MatchmakingService {
 
       // Scored from the biodata, which is where religion, caste, mother tongue,
       // qualification and the partner preferences actually live.
-      const pool = await this.detailsFor([me.id, ...candidates.map((c) => c.id)]);
       const mine = { profile: me, details: pool.get(me.id) ?? null };
 
       const scored = candidates
@@ -509,10 +622,11 @@ export class MatchmakingService {
       // profile — both fetched for the page rather than the pool, because a
       // biodata row per candidate over a fifty-profile pool is fifty rows read
       // to render ten.
-      const [facts, interactions, agencies] = await Promise.all([
+      const [facts, interactions, agencies, stewards] = await Promise.all([
         this.cardFactsFor(window.map((w) => w.profile.id)),
         this.interactionsFor(me.id, window.map((w) => w.profile.id)),
         this.agencyNamesFor(window.map((w) => w.profile)),
+        stewardRolesFor(this.users, window.map((w) => w.profile)),
       ]);
 
       const pageItems = window.map((s) => ({
@@ -520,6 +634,7 @@ export class MatchmakingService {
           ...acceptedWith.get(s.profile.id),
           card: facts.get(s.profile.id),
           sourceAgency: agencies.get(s.profile.id) ?? null,
+          stewardRole: stewards.get(s.profile.id) ?? null,
         }),
         score: s.score,
         breakdown: s.breakdown,
@@ -651,6 +766,11 @@ export class MatchmakingService {
     }
     const target = await this.profiles.findOne({ where: { id: targetProfileId } });
     if (!target) throw new NotFoundException('That profile is unavailable');
+    // A family account's own row (the parent's details), an agency's or a
+    // provider's is never a candidate, so it is never somebody to keep either.
+    if ((await nonMatchableProfileIds(this.users, [target])).has(target.id)) {
+      throw new BadRequestException(NOT_A_CANDIDATE_MESSAGE);
+    }
 
     const existing = await this.shortlists.findOne({
       where: { ownerProfileId: me.id, profileId: targetProfileId },
@@ -694,11 +814,16 @@ export class MatchmakingService {
     });
     if (rows.length === 0) return [];
 
-    const profiles = await this.profiles.find({ where: { id: In(rows.map((r) => r.profileId)) } });
+    const found = await this.profiles.find({ where: { id: In(rows.map((r) => r.profileId)) } });
+    // Kept before that row stopped being a candidate (a family account's own
+    // profile, say): not somebody to show back as a match.
+    const dropped = await nonMatchableProfileIds(this.users, found);
+    const profiles = found.filter((p) => !dropped.has(p.id));
     const byId = new Map(profiles.map((p) => [p.id, p]));
     const acceptedWith = await this.counterpartAccess(me.id);
-    const [agencies, facts, interactions, pool] = await Promise.all([
+    const [agencies, stewards, facts, interactions, pool] = await Promise.all([
       this.agencyNamesFor(profiles),
+      stewardRolesFor(this.users, profiles),
       this.cardFactsFor(profiles.map((p) => p.id)),
       this.interactionsFor(me.id, profiles.map((p) => p.id)),
       this.detailsFor([me.id, ...profiles.map((p) => p.id)]),
@@ -718,6 +843,7 @@ export class MatchmakingService {
             ...acceptedWith.get(profile.id),
             card: facts.get(profile.id),
             sourceAgency: agencies.get(profile.id) ?? null,
+            stewardRole: stewards.get(profile.id) ?? null,
           }),
           score,
           breakdown,
@@ -757,18 +883,23 @@ export class MatchmakingService {
     const fromFamily = shares.filter((row) => familyUserIds.has(row.sharedByUserId));
     if (fromFamily.length === 0) return [];
 
-    const profiles = await this.profiles.find({
+    const shared = await this.profiles.find({
       where: {
         id: In(fromFamily.map((row) => row.profileId)),
         lifecycle: ProfileLifecycle.ACTIVE,
       },
     });
+    // A relative's suggestion has to be a bride or groom: never the sharer's
+    // own profile, which holds the parent's details.
+    const dropped = await nonMatchableProfileIds(this.users, shared);
+    const profiles = shared.filter((p) => !dropped.has(p.id));
     if (profiles.length === 0) return [];
 
     const byId = new Map(profiles.map((p) => [p.id, p]));
     const acceptedWith = await this.counterpartAccess(me.id);
-    const [agencies, facts, interactions, pool, shortlisted] = await Promise.all([
+    const [agencies, stewards, facts, interactions, pool, shortlisted] = await Promise.all([
       this.agencyNamesFor(profiles),
+      stewardRolesFor(this.users, profiles),
       this.cardFactsFor(profiles.map((p) => p.id)),
       this.interactionsFor(me.id, profiles.map((p) => p.id)),
       this.detailsFor([me.id, ...profiles.map((p) => p.id)]),
@@ -793,6 +924,7 @@ export class MatchmakingService {
             ...acceptedWith.get(profile.id),
             card: facts.get(profile.id),
             sourceAgency: agencies.get(profile.id) ?? null,
+            stewardRole: stewards.get(profile.id) ?? null,
           }),
           score,
           breakdown,
@@ -888,17 +1020,19 @@ export class MatchmakingService {
     /*
      * The one box that searches everything.
      *
-     * A profile code is exact — it is a code, and a family typing one has one
-     * specific profile in mind, so a partial match on it would be noise. A name
-     * is not: people search "anitha" for "Anitha Reddy". Both go in the same
-     * box because that is how the person typing thinks about it.
+     * A profile code matches on its beginning: a family typing one has one
+     * specific profile in mind, and typing "WOW1015" for WOW10153 is how a code
+     * is half-remembered (ISS-19). Only the beginning, though — "015" matching
+     * every code with those digits somewhere in it would be noise. A name is
+     * searched anywhere in it: people search "anitha" for "Anitha Reddy". Both
+     * go in the same box because that is how the person typing thinks about it.
      */
     if (q.q) {
       const term = q.q.trim().toLowerCase();
       const asCode = term.replace(/\s+/g, '');
       pool = pool.filter(
         (p) =>
-          p.profileCode.toLowerCase() === asCode ||
+          (asCode.length > 0 && p.profileCode.toLowerCase().startsWith(asCode)) ||
           p.displayName.toLowerCase().includes(term) ||
           (p.city ?? '').toLowerCase().includes(term) ||
           (p.bio ?? '').toLowerCase().includes(term),
@@ -1050,6 +1184,8 @@ export class MatchmakingService {
     }
     const from = await this.resolveSubject(actor, fromProfileId);
     await this.assertMatchmakingOpen(from);
+    await this.assertBiodataReady(from);
+    this.assertIdentityVerified(from, 'send an interest');
     if (from.id === toProfileId) throw new BadRequestException('Cannot send interest to yourself');
 
     const target = await this.profiles.findOne({ where: { id: toProfileId } });
@@ -1077,6 +1213,13 @@ export class MatchmakingService {
         throw new BadRequestException('Interests can only be sent to individual profiles');
       }
     }
+    // The same readiness the suggestions apply (ISS-08): a profile that is not
+    // offered because its biodata is incomplete cannot be reached by id or
+    // profile code either. Answered like a private profile, so the refusal
+    // does not tell a stranger how far somebody has got with their biodata.
+    if (!(await this.readyProfileIds([target])).has(target.id)) {
+      throw new ForbiddenException('That profile is not accepting interests');
+    }
 
     if (await this.isMatchFixed(toProfileId)) {
       throw new BadRequestException('That profile has fixed a match and is no longer matchmaking');
@@ -1093,8 +1236,16 @@ export class MatchmakingService {
     const screening = (await screeningAgentFor(this.users, target, actor.userId))
       ? InterestScreening.WITH_AGENCY
       : null;
-    // An interest that is still live (pending or accepted) needs nothing done —
-    // and, crucially, no cache-busting or re-notification either.
+    // An interest that is still live (pending or accepted) is refused as a
+    // conflict (ISS-17) — and, crucially, with no cache-busting or
+    // re-notification. It used to answer 201 with the existing row, which read
+    // as a second interest having been sent when nothing had happened.
+    if (existing?.status === InterestStatus.PENDING) {
+      throw new ConflictException('You have already sent an interest to this profile.');
+    }
+    if (existing?.status === InterestStatus.ACCEPTED) {
+      throw new ConflictException('This interest has already been accepted.');
+    }
     if (
       existing &&
       existing.status !== InterestStatus.WITHDRAWN &&
@@ -1169,9 +1320,8 @@ export class MatchmakingService {
     const interest = await this.interests.findOne({ where: { id: interestId } });
     if (!interest) throw new NotFoundException('Interest not found');
 
-    // Throws unless the caller controls the recipient profile. Called for that
-    // refusal alone — nothing here needs the profile it resolves.
-    await this.resolveSubject(actor, interest.toProfileId);
+    // Throws unless the caller controls the recipient profile.
+    const recipient = await this.resolveSubject(actor, interest.toProfileId);
 
     // Nobody answers an interest the agency has not passed on — not the client,
     // who has not been told of it, and not the agent, whose answers are Forward
@@ -1199,6 +1349,25 @@ export class MatchmakingService {
     // that. Both ends are checked: the requests either side is holding are as
     // closed as the ones nobody has sent yet.
     if (accept) {
+      // Saying yes twice is not a second decision (ISS-17). It used to answer
+      // 200 and re-run the accept side effects — another outbox event, another
+      // notification — for a match that already existed.
+      if (interest.status === InterestStatus.ACCEPTED) {
+        throw new ConflictException('This interest has already been accepted.');
+      }
+      // Neither end may be somebody who is not a candidate. An interest sent to
+      // or from a family account's own profile before that was refused is
+      // still in some queues; it can be declined, never accepted.
+      const ends = await this.profiles.find({
+        where: { id: In([interest.fromProfileId, interest.toProfileId]) },
+      });
+      if ((await nonMatchableProfileIds(this.users, ends)).size > 0) {
+        throw new BadRequestException(NOT_A_CANDIDATE_MESSAGE);
+      }
+      // The recipient is who the other family will be relying on, so it is
+      // the recipient profile that must be verified — a steward answering for
+      // it is held to that profile's verification, not their own (ISS-02).
+      this.assertIdentityVerified(recipient, 'accept an interest');
       const settled =
         (await this.isMatchFixed(interest.toProfileId)) ||
         (await this.isMatchFixed(interest.fromProfileId));

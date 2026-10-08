@@ -226,5 +226,5 @@ api.interceptors.response.use(
   },
 );
 
-export { apiMessage } from '@/shared/api-errors';
+export { apiMessage, isConflict } from '@/shared/api-errors';
 

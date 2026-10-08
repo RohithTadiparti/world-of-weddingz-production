@@ -62,94 +62,14 @@ body_has() { grep -q "$1" /tmp/body && assert "$2" 1 || assert "$2" 0; }
 # Identity verification now gates sending an interest, accepting one and
 # fixing a match. Every persona that does any of those has to go through it
 # first — the gate itself is asserted in verify-phase2.
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 
 # Precise extraction; jq is present in the runner image.
 field() { jq -r ".$2 // empty" "$1"; }
 
-# A business now has a life rather than a boolean, so getting one live means
-# walking the path a vendor actually walks: fill in the catalog, look it over,
-# submit, then allocate, visit and decide. Skipping to "approved" is refused,
-# which is the point of the state machine.
-#
-#   go_live <businessToken> <businessId> <adminToken> <officerId> <officerToken>
-FINDINGS_JSON='{"visited":true,"observations":"Attended the address; the business is as described.","issues":[],"recommendation":"approve"}'
-
-# The catalog is configuration, so a service asks whatever an administrator
-# decided it should ask. The helper therefore reads the form and answers it,
-# rather than assuming a shape — which is the same reason the form exists.
-answers_for() { # answers_for <serviceForm json on stdin>
-  jq -c '[.[] | select(.required)] | map({(.key): (
-      if   .type == "boolean"       then true
-      elif .type == "single_select" then (.constraints.options[0].value // "other")
-      elif .type == "multi_select"  then [(.constraints.options[0].value // "other")]
-      elif .type == "date"          then "2027-01-01"
-      elif .type == "time"          then "10:00"
-      elif .type == "date_time"     then "2027-01-01T10:00:00.000Z"
-      elif .type == "url"           then "https://example.com/portfolio"
-      elif (.type == "number" or .type == "decimal" or .type == "currency"
-            or .type == "duration" or .type == "range")
-                                    then (.constraints.min // 1)
-      else "Not specified" end)}) | add // {}'
-}
-
-seed_catalog() { # seed_catalog <token> <businessId>
-  req GET /catalog/categories "" "$1" >/dev/null
-  cat_ids=$(jq -r '.[].id' /tmp/body)
-  # An empty catalog is a setup problem, not a test failure, and it used to
-  # look like one six assertions later: this returned quietly, the business got
-  # no priced service, and the suite reported "Finish these first: Catalog
-  # services" from somewhere else entirely. Say it here, where it is true.
-  if [ -z "$cat_ids" ]; then
-    echo "  FAIL  the service catalog is empty — run the catalog seed first:" >&2
-    echo "        docker compose -f docker/docker-compose.yml --profile seed run --rm seed-catalog" >&2
-    FAIL=$((FAIL + 1))
-    return 1
-  fi
-
-  for cat_id in $cat_ids; do
-    req GET "/catalog/categories/$cat_id/services" "" "$1" >/dev/null
-    def_ids=$(jq -r '.[].id' /tmp/body)
-    for def_id in $def_ids; do
-      req GET "/catalog/services/$def_id" "" "$1" >/dev/null
-      def_json=$(cat /tmp/body)
-      attrs=$(echo "$def_json" | jq -c '.serviceForm' | answers_for)
-      req POST "/vendors/$2/services" "{\"definitionId\":\"$def_id\",\"attributes\":$attrs}" "$1" >/dev/null
-      svc_id=$(jq -r '.id // empty' /tmp/body)
-      [ -z "$svc_id" ] && continue
-
-      # The definition decides which pricing models a service may use, so the
-      # price is built from that rather than assumed. Quote-only models carry
-      # no amount; everything else does.
-      model=$(echo "$def_json" | jq -r '.definition.allowedPricingModels[0] // "fixed"')
-      case "$model" in
-        custom_quote|no_public_price) price_json="" ;;
-        *) price_json=',"price":"25000"' ;;
-      esac
-      req POST "/vendors/$2/services/$svc_id/offerings" \
-        "{\"name\":\"Standard\",\"pricingModel\":\"$model\"$price_json,\"active\":true}" "$1" >/dev/null
-      [ "$(jq -r '.id // empty' /tmp/body)" != "" ] && return 0
-    done
-  done
-  return 1
-}
-
-go_live() { # go_live <vendorToken> <businessId> <adminToken> <officerId> <officerToken>
-  seed_catalog "$1" "$2" || return 1
-  req POST "/vendors/$2/first-review" "" "$1" >/dev/null
-  req POST "/vendors/$2/submit-verification" "" "$1" >/dev/null
-
-  req GET "/verification/requests?applicantType=vendor&limit=100" "" "$3" >/dev/null
-  vreq=$(jq -r --arg id "$2" '(.data // .)[] | select(.subjectId == $id) | .id' /tmp/body | head -1)
-  [ -z "$vreq" ] && return 1
-
-  req PUT "/verification/requests/$vreq/allocate" "{\"officerUserId\":\"$4\"}" "$3" >/dev/null
-  req PUT "/verification/requests/$vreq/start" "" "$5" >/dev/null
-  req PUT "/verification/requests/$vreq/findings" "$FINDINGS_JSON" "$5" >/dev/null
-  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$5" >/dev/null
-  return 0
-}
 
 # Intake now records how the family gave permission, so every profile the agent
 # builds carries a consent block. Defined once and appended to each body below.
@@ -188,13 +108,13 @@ OFFICER_TOKEN=""
 OFFICER_USER_ID=""
 ensure_officer() {
   [ -n "$OFFICER_TOKEN" ] && return 0
-  req POST /verification/officers "{\"email\":\"officer-$STAMP@wow.local\",\"name\":\"Officer $STAMP\"}" "$ADMIN" >/dev/null
+  req POST /verification/officers "{\"email\":\"officer-$STAMP@t.com\",\"phone\":\"$(fixture_phone)\",\"name\":\"Officer $STAMP\"}" "$ADMIN" >/dev/null
   OFFICER_USER_ID=$(field /tmp/body id)
   temp=$(field /tmp/body devPassword)
-  req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"$temp\"}" >/dev/null
+  req POST /auth/login "{\"email\":\"officer-$STAMP@t.com\",\"password\":\"$temp\"}" >/dev/null
   t=$(field /tmp/body accessToken)
   req POST /auth/password/change "{\"currentPassword\":\"$temp\",\"newPassword\":\"OfficerPass1\"}" "$t" >/dev/null
-  req POST /auth/login "{\"email\":\"officer-$STAMP@wow.local\",\"password\":\"OfficerPass1\"}" >/dev/null
+  req POST /auth/login "{\"email\":\"officer-$STAMP@t.com\",\"password\":\"OfficerPass1\"}" >/dev/null
   OFFICER_TOKEN=$(field /tmp/body accessToken)
 }
 
@@ -209,7 +129,8 @@ verify_applicant() {
   # An approval rests on a visit somebody wrote up. Without the findings the
   # decision is refused, which is the point of having a verification step.
   req PUT "/verification/requests/$vreq/findings" "$FINDINGS_JSON" "$OFFICER_TOKEN" >/dev/null
-  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$OFFICER_TOKEN" >/dev/null
+  # The officer recommends; only an administrator decides (ISS-20).
+  req PUT "/verification/requests/$vreq/decide" '{"status":"approved"}' "$ADMIN" >/dev/null
 }
 
 # A vendor listing has to be walked to live rather than flipped: complete the
@@ -363,8 +284,13 @@ GROOM_PROFILE=$(field /tmp/body id)
 c=$(req GET /users/me "" "$BRIDE")
 BRIDE_PROFILE=$(field /tmp/body id)
 
-verify_identity "$GROOM_PROFILE" "$GROOM" >/dev/null
-verify_identity "$BRIDE_PROFILE" "$BRIDE" >/dev/null
+# Interests need a complete biodata on both sides and a verified identity on
+# the sending (and accepting) one. The agency client starts private, so the
+# agent makes it matchable before anybody approaches it in section 6.
+ready_for_interests "$GROOM_PROFILE" "$GROOM" Groom Reddy
+ready_for_interests "$BRIDE_PROFILE" "$BRIDE" Bride Kumari
+complete_biodata "$MANAGED" "$AGENT" Client Kumari
+agency_matchable "$MANAGED" "$AGENT"
 verify_identity "$MANAGED" "$AGENT" >/dev/null
 
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GROOM_PROFILE\",\"profileId\":\"$MANAGED\"}" "$AGENT2")
@@ -390,7 +316,8 @@ else
 fi
 
 echo "== 6. Independent user may approach any user or agent =="
-c=$(req POST /matches/interest "{\"toProfileId\":\"$MANAGED\"}" "$BRIDE")
+# Matches are bride to groom, so the agency's bride is approached by a groom.
+c=$(req POST /matches/interest "{\"toProfileId\":\"$MANAGED\"}" "$GROOM")
 check "independent user approaches an agent-built profile" "$c" 201
 c=$(req POST /chat/messages "{\"toUserId\":\"$AGENT_ID\",\"body\":\"Hello, can you help?\"}" "$BRIDE")
 check "independent user messages any agent" "$c" 201
@@ -517,6 +444,8 @@ else
   c=$(req POST /agents/profiles "{\"displayName\":\"Partner\",\"contactEmail\":\"partner-$STAMP@t.com\",\"contactPhone\":\"$(phone 005)\",\"gender\":\"male\",\"dateOfBirth\":\"1995-05-05\",\"city\":\"Hyderabad\",$CONSENT}" "$AGENT")
   check "agent builds the counterpart profile" "$c" 201
   PARTNER=$(field /tmp/body id)
+  complete_biodata "$PARTNER" "$AGENT" Partner Rao
+  agency_matchable "$PARTNER" "$AGENT"
   verify_identity "$PARTNER" "$AGENT" >/dev/null
 
   c=$(req POST /bookings "{\"providerType\":\"vendor\",\"providerId\":\"$LISTING\",\"amount\":2500,\"onBehalfOfUserId\":\"$CLIENT_ID\"}" "$AGENT")
@@ -632,8 +561,23 @@ check "missing token rejected" "$c" 401
 grep -q "$(printf 'wow_rt')" "$JAR" && { echo "  PASS  refresh token is set as an httpOnly cookie"; PASS=$((PASS+1)); } || { echo "  FAIL  no refresh cookie was set"; FAIL=$((FAIL+1)); }
 jq -e 'has("refreshToken") | not' /tmp/bride.json >/dev/null && { echo "  PASS  refresh token is NOT returned in the JSON body"; PASS=$((PASS+1)); } || { echo "  FAIL  refresh token leaked into the response body"; FAIL=$((FAIL+1)); }
 
+cp "$JAR" /tmp/cookies-before-refresh.txt
 c=$(req POST /auth/refresh '{}')
 check "refresh works from the cookie alone, with no access token" "$c" 200
+
+# A refresh token is single use (ISS-04). Presenting the one just rotated is
+# refused even inside the short grace window kept for two tabs racing, and
+# outside it the whole session family is revoked as a stolen token.
+c=$(curl -s -o /tmp/body -w '%{http_code}' -X POST "$API/auth/refresh" \
+      -b /tmp/cookies-before-refresh.txt -H 'Content-Type: application/json' -d '{}')
+check "a spent refresh token never mints new tokens" "$c" 401
+echo "-- waiting 6s to pass the refresh reuse grace window --"
+sleep 6
+c=$(curl -s -o /tmp/body -w '%{http_code}' -X POST "$API/auth/refresh" \
+      -b /tmp/cookies-before-refresh.txt -H 'Content-Type: application/json' -d '{}')
+check "replaying it after the grace window is refused" "$c" 401
+c=$(req POST /auth/refresh '{}')
+check "and revokes the family, so the current token is dead too" "$c" 401
 # Explicit body token beats the cookie, so a tampered one is still rejected.
 c=$(curl -s -o /tmp/body -w '%{http_code}' -X POST "$API/auth/refresh" \
       -H 'Content-Type: application/json' -d '{"refreshToken":"tampered.token.value.here"}')
@@ -644,6 +588,13 @@ c=$(req GET /auth/me/permissions "" "$BRIDE")
 check "deactivated user blocked on an existing token" "$c" 403
 c=$(req PUT "/admin/users/$BRIDE_ID/status" '{"isActive":true}' "$ADMIN")
 check "admin reinstates the account" "$c" 200
+# Suspension ends every session it caught (ISS-09): the old token stays dead
+# after reinstatement, and signing in again is what restores access.
+c=$(req GET /auth/me/permissions "" "$BRIDE")
+check "a token issued before the suspension stays revoked" "$c" 401
+c=$(req POST /auth/login "{\"email\":\"bride-$STAMP@t.com\",\"password\":\"Password123\"}")
+check "the reinstated user signs in again" "$c" 200
+BRIDE=$(field /tmp/body accessToken)
 c=$(req GET /auth/me/permissions "" "$BRIDE")
 check "reinstated user works again" "$c" 200
 

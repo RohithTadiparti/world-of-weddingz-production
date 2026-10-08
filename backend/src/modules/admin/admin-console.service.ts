@@ -23,6 +23,9 @@ import { CaseStatus, UserRole, VerificationStatus } from '../../common/enums';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
 import { serviceNamesByIds } from '../catalog/service-names';
 import { AdminBookingsService } from './admin-bookings.service';
+import { maskEmail, maskPhone } from '../../common/util/pii-mask';
+import { contactMatches, contactSearchClause } from '../../common/util/contact-search';
+import { likeEscape } from '../../common/util/like';
 
 /**
  * Businesses and staff on the admin console.
@@ -208,6 +211,10 @@ export class AdminConsoleService {
    * A vendor's *account* and their *businesses* are different rows, and this
    * lists the businesses — which is what a question like "how many listings are
    * stuck in first review" is actually about.
+   *
+   * The search box takes the business name or the owner's email or mobile,
+   * matched on the raw columns; the owner's email and the listing's phone come
+   * back masked (ISS-11).
    */
   async businesses(q: DirectoryQueryDto): Promise<
     PaginatedResult<
@@ -216,15 +223,22 @@ export class AdminConsoleService {
   > {
     const qb = this.vendors.createQueryBuilder('v');
     if (q.status) qb.andWhere('v.status = :status', { status: q.status });
-    if (q.q) qb.andWhere('LOWER(v.name) LIKE :needle', { needle: `%${q.q.toLowerCase()}%` });
+    const needle = q.q?.trim();
+    if (q.active !== undefined || needle) {
+      qb.leftJoin(User, 'owner', 'owner.id = v.ownerUserId');
+    }
+    if (needle) {
+      const contact = contactSearchClause({ email: 'owner.email', phone: 'owner.phone' }, needle);
+      qb.andWhere(`(LOWER(v.name) LIKE :needle OR ${contact.clause})`, {
+        needle: `%${likeEscape(needle.toLowerCase())}%`,
+        ...contact.params,
+      });
+    }
     if (q.city) qb.andWhere('LOWER(v.city) = LOWER(:city)', { city: q.city });
     // Filtered here, against every owner, rather than by the client against
     // whichever page of accounts it happened to load.
     if (q.active !== undefined) {
-      qb.innerJoin(User, 'owner', 'owner.id = v.ownerUserId').andWhere(
-        'owner.isActive = :active',
-        { active: q.active === true },
-      );
+      qb.andWhere('owner.isActive = :active', { active: q.active === true });
     }
 
     qb.orderBy('v.createdAt', 'DESC')
@@ -246,8 +260,9 @@ export class AdminConsoleService {
     const rows = data.map((v) => {
       const owner = ownerById.get(v.ownerUserId);
       return Object.assign(v, {
+        contactPhone: maskPhone(v.contactPhone),
         owner: owner
-          ? { email: owner.email, isActive: owner.isActive, createdAt: owner.createdAt }
+          ? { email: maskEmail(owner.email), isActive: owner.isActive, createdAt: owner.createdAt }
           : null,
       });
     });
@@ -269,8 +284,9 @@ export class AdminConsoleService {
       select: ['id', 'email', 'isActive', 'createdAt'],
       order: { createdAt: 'DESC' },
     });
+    // Masked like every administrator list (ISS-11).
     if (kind === 'admin') {
-      return rows.map((u) => ({ ...u, role, openCases: 0, openVisits: 0 }));
+      return rows.map((u) => ({ ...u, email: maskEmail(u.email), role, openCases: 0, openVisits: 0 }));
     }
 
     const ids = rows.map((u) => u.id);
@@ -301,6 +317,7 @@ export class AdminConsoleService {
 
     return rows.map((u) => ({
       ...u,
+      email: maskEmail(u.email),
       role,
       // Deliberately two numbers rather than one total: a queue of six visits
       // and a queue of six disputes are different amounts of work, and an
@@ -326,13 +343,19 @@ export class AdminConsoleService {
    * (EZ1-I210) that introduces the field. Until it lands every officer reads as
    * `available`, so the column and its filter exist now and start telling the
    * truth the day the field arrives — no second pass on this screen.
+   *
+   * Emails come back masked (ISS-11), so the roster's search is answered here:
+   * `search` matches the raw email or mobile, the name, the id or a coverage
+   * label, and only matching officers are returned.
    */
-  async officers() {
-    const rows = await this.users.find({
+  async officers(search?: string) {
+    const all = await this.users.find({
       where: { role: UserRole.IN_PERSON },
-      select: ['id', 'email', 'isActive', 'createdAt'],
+      select: ['id', 'email', 'phone', 'isActive', 'createdAt'],
       order: { createdAt: 'DESC' },
     });
+    if (all.length === 0) return [];
+    const rows = search?.trim() ? await this.officersMatching(all, search) : all;
     const ids = rows.map((u) => u.id);
     if (ids.length === 0) return [];
 
@@ -446,9 +469,9 @@ export class AdminConsoleService {
 
       return {
         id: u.id,
-        email: u.email,
-        // Officers rarely have a profile; the email still says who they are.
-        name: profileFor.get(u.id)?.displayName ?? u.email,
+        email: maskEmail(u.email),
+        // Officers rarely have a profile; the (masked) email still says who they are.
+        name: profileFor.get(u.id)?.displayName ?? maskEmail(u.email),
         city: profileFor.get(u.id)?.city ?? null,
         isActive: u.isActive,
         // Real leave state from EZ1-I210: an officer with no row has never set
@@ -466,5 +489,35 @@ export class AdminConsoleService {
         joinedAt: u.createdAt,
       };
     });
+  }
+
+  /**
+   * The officers a roster search names: raw email or mobile, display name, id
+   * or coverage label. The roster is a few dozen people, so it is matched in
+   * memory with two small reads rather than a join per field.
+   */
+  private async officersMatching<T extends { id: string; email: string | null; phone: string | null }>(
+    officers: T[],
+    search: string,
+  ): Promise<T[]> {
+    const needle = search.trim().toLowerCase();
+    const ids = officers.map((o) => o.id);
+    const [profiles, areas] = await Promise.all([
+      this.profiles.find({ where: { userId: In(ids) }, select: ['userId', 'displayName'] }),
+      this.serviceAreas.find({ where: { officerUserId: In(ids) }, select: ['officerUserId', 'label'] }),
+    ]);
+    const words = new Map<string, string[]>();
+    const add = (id: string | null, value: string | null | undefined) => {
+      if (!id || !value) return;
+      words.set(id, [...(words.get(id) ?? []), value.toLowerCase()]);
+    };
+    for (const p of profiles) add(p.userId, p.displayName);
+    for (const a of areas) add(a.officerUserId, a.label);
+    return officers.filter(
+      (o) =>
+        contactMatches(o, needle) ||
+        o.id.toLowerCase().includes(needle) ||
+        (words.get(o.id) ?? []).some((value) => value.includes(needle)),
+    );
   }
 }

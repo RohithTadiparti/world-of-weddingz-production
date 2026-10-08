@@ -21,6 +21,7 @@ import { User } from '../auth/entities/user.entity';
 import { ProfileDetails } from '../profile-details/entities/profile-details.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { ModerationService } from '../../platform/moderation/moderation.service';
+import { assertNewMediaUploaded } from '../../platform/storage/kept-media';
 import { normaliseMobile } from '../../common/util/identity-fields';
 
 /**
@@ -98,6 +99,9 @@ export class UsersService {
     // point like the biodata gallery: a photograph that is new to this profile
     // is checked for AI generation before anything is saved.
     if (dto.photos) {
+      // Photos already on the profile may be resent as they are, even one
+      // stored before uploads were enforced; a new one must be an upload.
+      assertNewMediaUploaded('photos', dto.photos, profile?.photos);
       await this.moderation.assertGenuinePhotos(dto.photos, profile?.photos, { userId, kind: 'profile' });
     }
     if (!profile) {

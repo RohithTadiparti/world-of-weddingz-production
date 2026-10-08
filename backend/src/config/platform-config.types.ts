@@ -30,6 +30,7 @@ export interface PlatformConfig {
     individualUserEnabled: boolean;
     chatRedactContacts: boolean;
     servicesRequireMatchFixed: boolean;
+    matchmakingRequiresIdentity: boolean;
     catalogReviewThresholdPercent: number;
   };
   migration: {

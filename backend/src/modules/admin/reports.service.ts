@@ -24,6 +24,7 @@ import {
   ProviderType,
   VerificationStatus,
 } from '../../common/enums';
+import { maskEmail } from '../../common/util/pii-mask';
 
 /**
  * The payment states at which a buyer's money was actually taken.
@@ -422,7 +423,8 @@ export class ReportsService {
           this.profiles.find({ where: { userId: In([...load.keys()]) } }),
         ])
       : [[], []];
-    const emailOf = new Map(officers.map((o) => [o.id, o.email]));
+    // Masked, as on every administrator list (ISS-11).
+    const emailOf = new Map(officers.map((o) => [o.id, maskEmail(o.email)]));
     const profileNameOf = new Map(officerProfiles.map((p) => [p.userId, p.displayName]));
 
     return {

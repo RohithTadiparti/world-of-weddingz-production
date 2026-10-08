@@ -5,6 +5,7 @@ import { AuditEvent } from './entities/audit-event.entity';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
 import { errorType } from '../../common/logging/log-redaction';
+import { maskIp, maskPii } from '../../common/util/pii-mask';
 
 /** Stable action names. Grep-able, and safe to build dashboards on. */
 export const AuditAction = {
@@ -99,6 +100,9 @@ export const AuditAction = {
   DATA_ERASED: 'data.erased',
   AUTH_MFA_RECOVERY_USED: 'auth.mfa_recovery_used',
   AUTH_MFA_RECOVERY_REGENERATED: 'auth.mfa_recovery_regenerated',
+
+  /** An administrator read an account's unmasked email and mobile number. */
+  ADMIN_CONTACT_REVEALED: 'admin.contact_revealed',
 
   USER_SUSPENDED: 'user.suspended',
   USER_REINSTATED: 'user.reinstated',
@@ -223,6 +227,21 @@ export class AuditService {
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return paginate(data, total, page, limit);
+    return paginate(data.map(maskAuditEvent), total, page, limit);
   }
+}
+
+/**
+ * An audit row as an administrator reads it.
+ *
+ * The row is stored whole -- an investigation may need the exact address --
+ * but the list is read far more often than anybody investigates, so it shows
+ * the network rather than the host, and contact details as `r***@gmail.com`.
+ */
+export function maskAuditEvent(event: AuditEvent): AuditEvent {
+  return {
+    ...event,
+    ip: maskIp(event.ip),
+    metadata: maskPii(event.metadata ?? {}),
+  };
 }

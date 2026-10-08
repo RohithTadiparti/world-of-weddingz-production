@@ -122,6 +122,7 @@ export const configValidationSchema = Joi.object({
   INDIVIDUAL_USER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
   CHAT_REDACT_CONTACTS: Joi.boolean().truthy('true').falsy('false').default(true),
   SERVICES_REQUIRE_MATCH_FIXED: Joi.boolean().truthy('true').falsy('false').default(false),
+  MATCHMAKING_REQUIRES_IDENTITY: Joi.boolean().truthy('true').falsy('false').default(true),
   CATALOG_REVIEW_THRESHOLD_PERCENT: Joi.number().min(0).max(1000).default(0),
 
   PUSH_PROVIDER: Joi.string().valid('log', 'fcm').default('log'),
@@ -212,7 +213,7 @@ export const configValidationSchema = Joi.object({
   COOKIE_DOMAIN: Joi.string().allow('').optional(),
   MAX_FAILED_LOGINS: Joi.number().min(3).max(100).default(8),
   LOCKOUT_MINUTES: Joi.number().min(1).max(1440).default(15),
-  REFRESH_REUSE_GRACE_SECONDS: Joi.number().integer().min(0).max(60).default(10),
+  REFRESH_REUSE_GRACE_SECONDS: Joi.number().integer().min(0).max(30).default(5),
   INVITATION_TTL_HOURS: Joi.number().min(1).max(2160).default(168),
   EMAIL_VERIFY_TTL_HOURS: Joi.number().min(1).max(720).default(48),
   PASSWORD_RESET_TTL_MINUTES: Joi.number().min(5).max(1440).default(30),
@@ -322,6 +323,10 @@ export const configValidationSchema = Joi.object({
     }
     if (Number(value.SMTP_PORT) === 587 && value.SMTP_SECURE === true) {
       violations.push('SMTP_SECURE must be false when SMTP_PORT is 587');
+    }
+    // The capture endpoint hands back delivered messages, reset links included.
+    if (value.TEST_DELIVERY_CAPTURE_ENABLED === true) {
+      violations.push('TEST_DELIVERY_CAPTURE_ENABLED must be false');
     }
     if (value.COOKIE_SECURE !== true) violations.push('COOKIE_SECURE must be true');
     if (value.SWAGGER_ENABLED !== false) violations.push('SWAGGER_ENABLED must be false');

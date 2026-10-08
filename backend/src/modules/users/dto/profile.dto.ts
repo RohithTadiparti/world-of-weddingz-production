@@ -19,7 +19,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape } from '../../../common/decorators/uploaded-url.decorator';
 import { IsStrictString } from '../../../common/decorators/strict-type.decorator';
 import { Transform } from 'class-transformer';
 import { ProfileVisibility } from '../../../common/enums';
@@ -117,7 +117,8 @@ export class CreateProfileDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
-  @IsUploadedUrl({ each: true })
+  // New entries must be uploads; ones already stored may be resent (kept-media.ts).
+  @IsMediaUrlShape({ each: true })
   @MaxLength(2048, { each: true })
   photos?: string[];
 

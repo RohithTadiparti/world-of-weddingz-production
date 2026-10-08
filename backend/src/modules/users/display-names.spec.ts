@@ -45,6 +45,22 @@ describe('the name shown for an account', () => {
     });
   });
 
+  it('masks only the email fallback when an administrator list asks it to (ISS-11)', async () => {
+    const repo = <T>(rows: T[]) => ({ find: jest.fn(async () => rows) }) as unknown as never;
+    const names = await displayNamesByUserIds(
+      {
+        users: repo([
+          { id: 'u1', email: 'bride@x.in' },
+          { id: 'o', email: 'officer@x.in' },
+        ]),
+        profiles: repo([{ userId: 'u1', displayName: 'Meera' }]),
+      },
+      ['u1', 'o'],
+      { maskEmail: true },
+    );
+    expect(Object.fromEntries(names)).toEqual({ u1: 'Meera', o: 'o***@x.in' });
+  });
+
   it('asks nothing when there is nobody to name', async () => {
     const find = jest.fn();
     const repo = { find } as unknown as never;

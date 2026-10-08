@@ -23,6 +23,10 @@ import {
 } from '../../common/enums';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
 import { AdminBookingsService } from './admin-bookings.service';
+import { AuditAction, AuditService } from '../../platform/audit/audit.service';
+import { AuthUser } from '../../common/decorators/current-user.decorator';
+import { maskEmail, maskPhone } from '../../common/util/pii-mask';
+import { contactSearchClause } from '../../common/util/contact-search';
 
 function uniqueById<T extends { id: string }>(rows: T[]): T[] {
   return [...new Map(rows.map((row) => [row.id, row])).values()];
@@ -53,7 +57,36 @@ export class AdminAccountsService {
     // Read-only, for the matchmaking half of an individual's history.
     @InjectRepository(Interest) private readonly interests: Repository<Interest>,
     private readonly adminBookings: AdminBookingsService,
+    private readonly audit: AuditService,
   ) {}
+
+  /**
+   * An account's email and mobile number, unmasked, for the administrator who
+   * has to actually contact the person.
+   *
+   * The detail page shows both masked; this is the one read that returns them
+   * whole, it sits behind its own permission, and every call leaves an audit
+   * row naming who looked and whose details they saw.
+   */
+  async revealContact(
+    actor: AuthUser,
+    userId: string,
+  ): Promise<{ id: string; email: string | null; phone: string | null }> {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: ['id', 'email', 'phone'],
+    });
+    if (!user) throw new NotFoundException('Account not found');
+
+    await this.audit.record({
+      action: AuditAction.ADMIN_CONTACT_REVEALED,
+      actor,
+      resourceType: 'user',
+      resourceId: user.id,
+      metadata: { fields: ['email', 'phone'] },
+    });
+    return { id: user.id, email: user.email ?? null, phone: user.phone ?? null };
+  }
 
   /**
    * The accounts directory, filtered the way an administrator actually looks.
@@ -61,6 +94,11 @@ export class AdminAccountsService {
    * `listUsers` already pages by role. What it could not do is answer "show me
    * the suspended ones" or "find this email", which is how somebody arrives
    * here — from a complaint naming a person, not from a wish to browse.
+   *
+   * The search runs on the raw email and mobile columns, so a full or partial
+   * address or number still finds the account; the rows that come back carry
+   * both masked (ISS-11). The whole value is one click away on the account
+   * detail, behind the audited reveal.
    */
   async directory(q: DirectoryQueryDto): Promise<PaginatedResult<Record<string, unknown>>> {
     const qb = this.users
@@ -68,6 +106,7 @@ export class AdminAccountsService {
       .select([
         'u.id',
         'u.email',
+        'u.phone',
         'u.role',
         'u.isActive',
         'u.isVerified',
@@ -80,8 +119,9 @@ export class AdminAccountsService {
       qb.andWhere('u.isActive = :active', { active: q.active === true });
     }
     if (q.agentId) qb.andWhere('u.managedByAgentId = :agentId', { agentId: q.agentId });
-    if (q.q) {
-      qb.andWhere('LOWER(u.email) LIKE :needle', { needle: `%${q.q.toLowerCase()}%` });
+    if (q.q?.trim()) {
+      const search = contactSearchClause({ email: 'u.email', phone: 'u.phone' }, q.q);
+      qb.andWhere(search.clause, search.params);
     }
 
     qb.orderBy('u.createdAt', 'DESC')
@@ -89,7 +129,13 @@ export class AdminAccountsService {
       .take(q.limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return paginate(data as unknown as Record<string, unknown>[], total, q.page, q.limit);
+    const rows = data.map((user) => ({
+      ...user,
+      email: maskEmail(user.email),
+      phone: maskPhone(user.phone),
+      contactMasked: true,
+    }));
+    return paginate(rows as unknown as Record<string, unknown>[], total, q.page, q.limit);
   }
 
   /**
@@ -292,7 +338,17 @@ export class AdminAccountsService {
       : null;
 
     return {
-      user,
+      /*
+       * Contact details masked by default (ISS-11). An administrator needs to
+       * recognise the account far more often than to dial it; the full values
+       * are a separate, audited read (`revealContact`).
+       */
+      user: {
+        ...user,
+        email: maskEmail(user.email),
+        phone: maskPhone(user.phone),
+        contactMasked: true,
+      },
       profiles: distinctProfiles.map((p) => ({
         id: p.id,
         displayName: p.displayName,
@@ -361,7 +417,10 @@ export class AdminAccountsService {
       agency:
         user.role === UserRole.AGENT
           ? {
-              clients: agencyClients,
+              clients: agencyClients.map((client) => ({
+                ...client,
+                email: maskEmail(client.email),
+              })),
               charges: await this.charges.find({
                 where: { agentUserId: userId },
                 order: { createdAt: 'DESC' },

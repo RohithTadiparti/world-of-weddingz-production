@@ -4,6 +4,7 @@ import { Profile } from './entities/profile.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { PlannerProfile } from '../wedding-planners/entities/planner-profile.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
+import { maskEmail } from '../../common/util/pii-mask';
 
 /** Where a person's name can come from, strongest first. */
 export interface NameSources {
@@ -41,10 +42,15 @@ export interface NameRepositories {
  * name, else the business the account owns (vendor, planner agency, then
  * matchmaking agency), else the email. One read per source for the whole set.
  * A source whose repository is not passed is simply not consulted.
+ *
+ * `maskEmail` is for administrator lists (ISS-11): the email fallback is then
+ * shown masked, so a nameless account still reads as somebody recognisable
+ * without the list printing its address.
  */
 export async function displayNamesByUserIds(
   repos: NameRepositories,
   ids: (string | null | undefined)[],
+  options: { maskEmail?: boolean } = {},
 ): Promise<Map<string, string>> {
   const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
   if (unique.length === 0) return new Map();
@@ -84,7 +90,7 @@ export async function displayNamesByUserIds(
     const name = pickDisplayName({
       profileName: profileName.get(id),
       businessName: vendorName.get(id) ?? plannerName.get(id) ?? agencyName.get(id),
-      email: emailOf.get(id),
+      email: options.maskEmail ? maskEmail(emailOf.get(id)) : emailOf.get(id),
     });
     if (name) names.set(id, name);
   }

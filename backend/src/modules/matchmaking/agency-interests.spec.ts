@@ -5,6 +5,7 @@ import { Interest } from './entities/interest.entity';
 import { CompatibilityEngine } from './compatibility.engine';
 import { Profile } from '../users/entities/profile.entity';
 import { ProfileDetails } from '../profile-details/entities/profile-details.entity';
+import { ProfileSibling } from '../profile-details/entities/profile-sibling.entity';
 import { ProfileShortlist } from './entities/shortlist.entity';
 import { ProfileShare } from '../circulation/entities/profile-share.entity';
 import { User } from '../auth/entities/user.entity';
@@ -88,6 +89,7 @@ describe('MatchmakingService.agencyInterests', () => {
         { provide: getRepositoryToken(Interest), useValue: interestsRepo },
         { provide: getRepositoryToken(Profile), useValue: profilesRepo },
         { provide: getRepositoryToken(ProfileDetails), useValue: bare },
+        { provide: getRepositoryToken(ProfileSibling), useValue: bare },
         { provide: getRepositoryToken(ProfileShortlist), useValue: bare },
         { provide: getRepositoryToken(ProfileShare), useValue: bare },
         { provide: getRepositoryToken(User), useValue: bare },

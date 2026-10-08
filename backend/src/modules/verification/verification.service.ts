@@ -37,6 +37,7 @@ import { VendorServicesService } from '../catalog/vendor-services.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { Permission, roleHasPermission } from '../../common/authz/permissions';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
+import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 import {
   ApplicantType,
   NotificationType,
@@ -342,7 +343,7 @@ export class VerificationService {
     return saved;
   }
 
-  // ----------------------------------------------------------- officer side
+  // ------------------------------------------------------------- admin side
 
   /**
    * Records the decision and, on approval, activates the applicant.
@@ -350,17 +351,22 @@ export class VerificationService {
    * Activation happens here rather than in a separate admin step so there is
    * exactly one place where "verified" becomes true, and it always carries the
    * request that justified it.
+   *
+   * An administrator's call only: the officer visits and recommends (findings),
+   * the administrator decides. `verification:decide` is admin-only, so an
+   * officer never reaches this; the role check below is defence in depth, not
+   * a second path. It replaces an "allocated officer may decide" branch that
+   * could not be reached once the permission was split (ISS-20).
    */
   async decide(
     actor: AuthUser,
     requestId: string,
     dto: DecideVerificationDto,
   ): Promise<VerificationRequest> {
-    const request = await this.loadOrFail(requestId);
-
-    if (actor.role !== UserRole.ADMIN && request.assignedToUserId !== actor.userId) {
-      throw new ForbiddenException('That request is not allocated to you');
+    if (actor.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only an administrator records a verification decision');
     }
+    const request = await this.loadOrFail(requestId);
     if (request.status === VerificationStatus.APPROVED) {
       throw new BadRequestException('That request has already been approved');
     }
@@ -454,17 +460,23 @@ export class VerificationService {
    * keeps a snapshot of what they held, so the officer re-reviewing sees previous
    * against updated. Reuses ADDITIONAL_REVIEW as the request status — no new
    * enum value, and the request goes back on the officer's queue the same way.
+   *
+   * An administrator's call only, like `decide`: the route needs
+   * `verification:decide`, which officers do not hold, so the role check below
+   * is defence in depth, not a second path. It replaces an "allocated officer
+   * may ask for a correction" branch that the guard made unreachable (ISS-20).
+   * An officer who wants fields corrected says so in their findings.
    */
   async requestCorrection(
     actor: AuthUser,
     requestId: string,
     dto: RequestCorrectionDto,
   ): Promise<VerificationRequest> {
+    if (actor.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only an administrator asks for a correction');
+    }
     const request = await this.loadOrFail(requestId);
 
-    if (actor.role !== UserRole.ADMIN && request.assignedToUserId !== actor.userId) {
-      throw new ForbiddenException('That request is not allocated to you');
-    }
     if (request.applicantType !== ApplicantType.VENDOR || !request.subjectId) {
       throw new BadRequestException('A field correction only applies to a vendor business.');
     }
@@ -785,7 +797,20 @@ export class VerificationService {
       .take(q.limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return paginate(await this.withIdentity(data), total, q.page, q.limit);
+    const rows = await this.withIdentity(data);
+    /*
+     * The whole-queue view is an administrator list, so the applicant's
+     * contact is masked there like on every other (ISS-11); the request detail
+     * still carries it. An officer's own queue keeps it whole: they have to
+     * ring the applicant to arrange the visit.
+     */
+    if (allocatesWork) {
+      for (const row of rows) {
+        row.applicantEmail = maskEmail(row.applicantEmail);
+        row.applicantPhone = maskPhone(row.applicantPhone);
+      }
+    }
+    return paginate(rows, total, q.page, q.limit);
   }
 
   /** Counts for the officer dashboard, always restricted to that officer's workload. */

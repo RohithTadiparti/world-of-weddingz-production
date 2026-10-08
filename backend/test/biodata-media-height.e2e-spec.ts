@@ -143,6 +143,33 @@ describe('Family Photo and centimeter height end to end', () => {
     expect((await db.getRepository(ProfileDetails).findOneByOrFail({ profileId: target.profile.id })).familyPhotoUrl).toBe(target.url);
   });
 
+  it('accepts only uploaded photographs, never an outside link', async () => {
+    const actor = actors[0];
+    const route = `/api/profiles/${actor.profile.id}/details`;
+    for (const url of ['https://evil.example.com/x.jpg', 'javascript:alert(1)']) {
+      const refused = await http().put(`${route}/family-photo`).set('Authorization', `Bearer ${actor.token}`)
+        .send({ url }).expect(400);
+      expect(JSON.stringify(refused.body)).toContain('That is not an uploaded photo');
+    }
+    // The photograph the platform itself handed out still saves.
+    const own = await upload(actor.token);
+    await http().put(`${route}/family-photo`).set('Authorization', `Bearer ${actor.token}`).send({ url: own }).expect(200);
+    actor.url = own;
+  });
+
+  it('does not let thread housekeeping create a conversation with a stranger', async () => {
+    const [bride, groom] = actors;
+    const auth = { Authorization: `Bearer ${bride.token}` };
+    const missing = '00000000-0000-4000-8000-000000000000';
+    await http().put('/api/chat/mute').set(auth).send({ withUserId: groom.user.id, muted: true }).expect(404);
+    await http().put('/api/chat/clear').set(auth).send({ withUserId: groom.user.id }).expect(404);
+    await http().put('/api/chat/delete-conversation').set(auth).send({ withUserId: groom.user.id }).expect(404);
+    await http().put('/api/chat/messages/read').query({ withUserId: groom.user.id }).set(auth).expect(404);
+    await http().put('/api/chat/mute').set(auth).send({ withUserId: missing, muted: true }).expect(404);
+    const conversations = await http().get('/api/chat/conversations').set(auth).expect(200);
+    expect(JSON.stringify(conversations.body)).not.toContain(groom.user.id);
+  });
+
   it('rejects invalid and inverted height filters through HTTP', async () => {
     for (const heightMinCm of ['abc', '-168', '168.5', '1.68e2', '0xA8', '', '245']) {
       await http().get('/api/matches/suggestions').set('Authorization', `Bearer ${actors[0].token}`)

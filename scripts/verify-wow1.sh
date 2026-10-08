@@ -46,7 +46,9 @@ assert() {
 
 jqok() { jq -e "$1" /tmp/body >/dev/null 2>&1 && echo 1 || echo 0; }
 field() { jq -r ".$2 // empty" "$1"; }
-. /scripts/lib-identity.sh
+SCRIPTS_DIR=${SCRIPTS_DIR:-/scripts}
+. "$SCRIPTS_DIR/lib-identity.sh"
+. "$SCRIPTS_DIR/lib/verify-helpers.sh"
 
 if command -v redis-cli >/dev/null 2>&1; then
   KEYS=$(redis-cli -h "${REDIS_HOST:-redis}" --scan --pattern 'throttle:*' 2>/dev/null)
@@ -108,7 +110,7 @@ for f in "photo.jpg" "WhatsApp Image 2026-08-26 at 5.28.11 PM.jpeg" "IMG_2026082
   check "presign accepts $f" "$c" 201
 done
 assert "and the key it builds has no spaces or brackets in it" \
-  "$(jqok '.key | test("^uploads/[^ ()]+$")')"
+  "$(jqok '.key | test("^users/[^ ()]+$")')"
 
 c=$(req POST /media/profile-photo/presign '{"filename":"../escape.jpg"}' "$BRIDE")
 check "a path segment is still refused" "$c" 400
@@ -133,9 +135,19 @@ check "and the status says why the buttons will be off" "$c" 200
 assert "reporting the document as not submitted" "$(jqok '.identitySubmitted == false')"
 assert "and not verified" "$(jqok '.identityVerified == false')"
 
+# The biodata comes first: an interest carries the biodata to the other
+# family, so an incomplete one cannot be sent, verified or not.
 c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\"}" "$BRIDE")
-check "sending an interest is refused" "$c" 403
-assert "and says what is missing" "$(jqok '.error.message | test("[Ii]dentity verification")')"
+check "sending an interest with an incomplete biodata is refused" "$c" 403
+assert "and says the biodata is what is missing" "$(jqok '.error.message | test("Complete the biodata")')"
+
+# Both biodatas complete, neither identity confirmed yet. The target has to be
+# complete too: an incomplete one is answered like a private profile.
+complete_biodata "$BP" "$BRIDE" Anitha Reddy
+complete_biodata "$GP" "$GROOM" Pardhu Rao
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\"}" "$BRIDE")
+check "with the biodata complete, sending is still refused" "$c" 403
+assert "and says identity is what is missing" "$(jqok '.error.message | test("[Ii]dentity verification")')"
 
 verify_identity "$BP" "$BRIDE" >/dev/null
 c=$(req GET /matches/status "" "$BRIDE")
@@ -144,6 +156,10 @@ c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\"}" "$BRIDE")
 check "and the interest goes" "$c" 201
 INTEREST=$(field /tmp/body id)
 
+# A second send is a conflict, not a quiet 201 that reads as a new interest.
+c=$(req POST /matches/interest "{\"toProfileId\":\"$GP\"}" "$BRIDE")
+check "sending it again is refused as a conflict" "$c" 409
+
 # The receiving side is gated too, and declining is deliberately not — a person
 # may always say no.
 c=$(req PUT "/matches/$INTEREST/accept" '{}' "$GROOM")
@@ -151,6 +167,8 @@ check "an unverified profile cannot accept" "$c" 403
 verify_identity "$GP" "$GROOM" >/dev/null
 c=$(req PUT "/matches/$INTEREST/accept" '{}' "$GROOM")
 check "and can once the document is confirmed" "$c" 200
+c=$(req PUT "/matches/$INTEREST/accept" '{}' "$GROOM")
+check "accepting it a second time is a conflict" "$c" 409
 
 echo
 echo "== 6. A card with enough on it to judge =="
@@ -158,14 +176,14 @@ verify_identity "$OP" "$OTHER" >/dev/null
 # The personal section will not save until three photographs are on the
 # profile, so nothing else in the biodata can be filled in without them —
 # which is the whole of the six-report biodata cluster from the last round.
-for n in 1 2 3; do
-  req POST "/profiles/$OP/details/photos" "{\"url\":\"https://cdn.example.com/w1-$OP-$n.jpg\"}" "$OTHER" >/dev/null
-done
+# Only a complete biodata is suggested at all, so every section is filled in
+# first and the ones the card reads are then given values worth asserting.
+complete_biodata "$OP" "$OTHER" Pardhu Varma
 c=$(req PUT "/profiles/$OP/details/personal" \
   '{"firstName":"Pardhu","lastName":"Varma","heightCm":175,"complexion":"fair","communicationAddress":"1 Station Road, Warangal","residence":{"city":"Warangal"}}' "$OTHER")
 check "the personal section saves" "$c" 200
 c=$(req PUT "/profiles/$OP/details/religion" \
-  '{"religion":"hindu","caste":"Reddy","subCaste":"Ontari","motherTongue":"Telugu"}' "$OTHER")
+  '{"religion":"hindu","caste":"Reddy","subCaste":"Pakanati Reddy","motherTongue":"Telugu"}' "$OTHER")
 check "and so does religion and community" "$c" 200
 req PUT "/profiles/$OP/details/marital" '{"maritalStatus":"never_married"}' "$OTHER" >/dev/null
 req PUT "/profiles/$OP/details/education" \
@@ -176,10 +194,12 @@ check "suggestions read" "$c" 200
 ROW=".data[] | select(.profile.id == \"$OP\")"
 assert "the card names a profile code" "$(jqok "[$ROW] | length == 1 and (.[0].profile.profileCode | test(\"^WOW\"))")"
 assert "says whether an officer has met them" "$(jqok "[$ROW][0].profile.verified == true")"
-assert "carries their height" "$(jqok "[$ROW][0].profile.card.heightCm == 175")"
+# Height and marital history stay on the biodata until there is a match: the
+# basic card a stranger sees carries the community, studies and profession.
+assert "keeps their height for the full profile" "$(jqok "[$ROW][0].profile.card | has(\"heightCm\") | not")"
+assert "and their marital history too" "$(jqok "[$ROW][0].profile.card | has(\"maritalStatus\") | not")"
 assert "what they studied" "$(jqok "[$ROW][0].profile.card.highestQualification == \"masters\"")"
 assert "what they do" "$(jqok "[$ROW][0].profile.card.profession == \"Data Analyst\"")"
-assert "whether they have been married before" "$(jqok "[$ROW][0].profile.card.maritalStatus == \"never_married\"")"
 assert "their community" "$(jqok "[$ROW][0].profile.card.caste == \"Reddy\"")"
 assert "a score with the dimensions it came from" "$(jqok "[$ROW][0] | .score >= 0 and (.breakdown | type == \"object\")")"
 assert "and where the two of you already stand" "$(jqok "[$ROW][0].interaction == \"none\"")"
@@ -322,13 +342,32 @@ assert "which survives the round trip" \
   "$(jqok '[.assets[] | select((.estimatedValue | tonumber) == 4500000)] | length == 1')"
 assert "along with the area it sits on" "$(jqok '[.assets[] | select(.area == "2400 sq yd")] | length == 1')"
 
+# On a groom's biodata the figure is required, so a save without it is
+# refused rather than taken as "clear it".
 c=$(req PUT "/profiles/$OP/details/family" \
   '{"father":{"name":"Ramesh"},"mother":{"name":"Sita"},"familyType":"nuclear","familyStatus":"middle_class","brothers":1,"sisters":0}' "$OTHER")
-check "saving the section again without the figure is allowed" "$c" 200
+check "a groom's family section without the figure is refused" "$c" 400
 c=$(req GET "/profiles/$OP/details" "" "$OTHER")
-# Omitting a field means "not mentioned", not "set it to nothing" — the same
-# rule the rest of this form follows.
-assert "and does not wipe the net worth already entered" "$(jqok '(.details.familyNetWorth | tonumber) == 7500000')"
+assert "and the net worth already entered is untouched" "$(jqok '(.details.familyNetWorth | tonumber) == 7500000')"
+
+# Omitting the visibility switch means "not mentioned": the app's form has no
+# switch, and saving there must not hide what was chosen on the web.
+c=$(req PUT "/profiles/$OP/details/family" \
+  '{"father":{"name":"Ramesh"},"mother":{"name":"Sita"},"familyType":"nuclear","familyStatus":"middle_class","brothers":1,"sisters":0,"familyNetWorth":7500000}' "$OTHER")
+check "saving again with the figure and no visibility is allowed" "$c" 200
+c=$(req GET "/profiles/$OP/details" "" "$OTHER")
+assert "and keeps the visibility already chosen" "$(jqok '.details.familyNetWorthVisible == true')"
+
+# A bride's biodata never stores one. The save still succeeds, and says which
+# fields it did not keep and why, rather than dropping them silently.
+c=$(req PUT "/profiles/$BP/details/family" \
+  '{"father":{"name":"Ravi Reddy"},"mother":{"name":"Uma Reddy"},"familyType":"nuclear","familyStatus":"middle_class","brothers":0,"sisters":1,"familyNetWorth":9000000,"familyNetWorthVisible":true}' "$BRIDE")
+check "a bride's family section with a net worth saves" "$c" 200
+assert "naming the fields it did not keep" \
+  "$(jqok '(.ignoredFields | index("familyNetWorth")) != null and (.ignoredFields | index("familyNetWorthVisible")) != null')"
+assert "with a notice saying why" "$(jqok '.notice | test("groom")')"
+c=$(req GET "/profiles/$BP/details" "" "$BRIDE")
+assert "and no figure is stored on her biodata" "$(jqok '.details.familyNetWorth == null')"
 
 echo
 echo "== 14. Matchmaking closes on a fixed match, as before =="
@@ -362,8 +401,8 @@ for who in BRIDE FAMILY; do
   check "and the RSVP dashboard reads" "$c" 200
   assert "with a total to show on a card" "$(jqok '.totalInvited == 1')"
   assert "how many are coming" "$(jqok '.categories.coming.invitations == 0')"
-  assert "how many have not answered" "$(jqok '.categories.notResponded.invitations == 1')"
-  assert "how many are not coming" "$(jqok '.categories | has("notComing")')"
+  assert "how many have not answered" "$(jqok '.categories.not_responded.invitations == 1')"
+  assert "how many are not coming" "$(jqok '.categories | has("not_coming")')"
   # Heads, not invitations: a family of five is one invitation and five chairs.
   assert "and heads as well as invitations" "$(jqok '.totalInvitedHeadcount == 3')"
 

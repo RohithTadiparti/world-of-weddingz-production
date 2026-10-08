@@ -22,7 +22,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
+import { IsMediaUrlShape, IsUploadedUrl } from '../../../common/decorators/uploaded-url.decorator';
 import { StrictBoolean } from '../../../common/decorators/strict-boolean.decorator';
 import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
 import { IsAdultDate } from '../../../common/decorators/adult-date.decorator';
@@ -252,7 +252,8 @@ export class HoroscopeDetailsDto {
 
   @ApiPropertyOptional({ description: 'Uploaded chart' })
   @IsOptional()
-  @IsUploadedUrl()
+  // A new value must be an upload; the stored one may be resent (kept-media.ts).
+  @IsMediaUrlShape()
   horoscopeDocumentUrl?: string;
 }
 
@@ -804,16 +805,28 @@ export class PartnerPreferencesDto {
    */
   @ApiPropertyOptional({ maxLength: 2048 })
   @IsOptional()
-  @IsUploadedUrl()
+  // A new value must be an upload; the stored one may be resent (kept-media.ts).
+  @IsMediaUrlShape()
   @MaxLength(2048)
   horoscopeDocumentUrl?: string;
 }
 
-export class SetPrimaryPhotoDto {
-  @ApiProperty({ description: 'One of the photos already on the profile' })
-  @IsUploadedUrl()
+/**
+ * A photograph already on the profile, named so it can be moved or removed.
+ *
+ * Shape only, not IsUploadedUrl: the service checks it is one of this
+ * profile's photos, and a photo stored before uploads were enforced (an
+ * outside link) must still be removable by its owner.
+ */
+export class StoredPhotoDto {
+  @ApiProperty({ description: 'One of the photos already on the profile', maxLength: 2000 })
+  @IsString()
+  @Matches(/^(https?:\/\/|media:\/\/)/i, { message: 'That is not one of the photos on this profile' })
+  @MaxLength(2000)
   url: string;
 }
+
+export class SetPrimaryPhotoDto extends StoredPhotoDto {}
 
 /** One photograph, addressed by the URL it was uploaded to. */
 /**

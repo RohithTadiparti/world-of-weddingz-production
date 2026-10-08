@@ -24,7 +24,7 @@ import {
   type IconProps,
 } from 'phosphor-react-native';
 
-import { api, apiMessage } from '@/lib/api';
+import { api, apiMessage, isConflict } from '@/lib/api';
 import { ageFrom, GENDER_LABEL, labelFor, stewardshipLine, type Stewardship } from '@/lib/labels';
 import { isChartImage } from '@/shared/horoscope';
 import { formatDate } from '@/shared/dates';
@@ -177,7 +177,14 @@ export default function MatchProfile() {
       void qc.invalidateQueries({ queryKey: ['suggestions'] });
       void qc.invalidateQueries({ queryKey: ['interest-board'] });
     },
-    onError: (e) => setError(apiMessage(e, 'That interest could not be sent.')),
+    onError: (e) => {
+      // Already sent or accepted (409): the button should stop offering it.
+      if (isConflict(e)) {
+        void qc.invalidateQueries({ queryKey: ['interest-board'] });
+        void qc.invalidateQueries({ queryKey: ['suggestions'] });
+      }
+      setError(apiMessage(e, 'That interest could not be sent.'));
+    },
   });
 
   const header = (

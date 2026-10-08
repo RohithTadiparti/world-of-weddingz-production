@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import { User } from '../auth/entities/user.entity';
+import { revokeAllAccess } from '../auth/sessions.service';
 import { Profile } from '../users/entities/profile.entity';
 import { Interest } from '../matchmaking/entities/interest.entity';
 import { Booking } from '../bookings/entities/booking.entity';
@@ -347,8 +348,14 @@ export class AgentsService {
     if (client.managedByAgentId !== agentId) {
       throw new ForbiddenException('That client is not on your books');
     }
+    const wasActive = client.isActive;
     client.isActive = isActive;
-    await this.users.save(client);
+    await this.users.manager.transaction(async (manager) => {
+      await manager.save(client);
+      // Deactivation signs the client out everywhere; reactivation then needs
+      // a fresh sign-in rather than reviving the old tokens.
+      if (wasActive && !isActive) await revokeAllAccess(manager, client.id, 'account deactivated');
+    });
     const profile = await this.profiles.findOne({ where: { userId: client.id } });
     if (!profile) throw new NotFoundException('That client has no profile');
     return this.toView(profile, client);

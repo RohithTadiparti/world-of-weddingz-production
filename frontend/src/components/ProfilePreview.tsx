@@ -10,6 +10,7 @@ import { formatPlace } from '../lib/locations';
 import { COMPLEXION_LABEL, LIFE_STATUS_LABEL } from '../lib/permissions';
 import { Loading } from './ui/Feedback';
 import { PersonPhoto } from './ProfileSilhouette';
+import { profileSideLabel, stewardshipLine } from '../lib/profile-labels';
 
 interface Viewable {
   profileId: string;
@@ -39,7 +40,7 @@ interface Viewable {
     managingFor?: string | null;
     /** Null when the person runs their own profile, which needs no label. */
     stewardship: {
-      kind: 'family' | 'agency';
+      kind: 'family' | 'agency' | 'steward';
       label: string;
       relation: string | null;
     } | null;
@@ -434,19 +435,15 @@ export default function ProfilePreview({
                 {/* The name is the heading above; this line names what the
                     profile is and who runs it, without repeating the name
                     (EZ1-I97, EZ1-I115) or printing it twice (EZ1-I91). */}
-                {data.profile.managingFor && (
-                  <span className="font-medium text-gray-800">
-                    {data.profile.managingFor === 'bride' ? 'Bride' : 'Groom'} profile
-                  </span>
-                )}
-                {data.profile.stewardship && (
-                  <span>
-                    {data.profile.managingFor ? ' · ' : ''}
-                    Managed by{' '}
-                    {data.profile.stewardship.relation
-                      ? `their ${data.profile.stewardship.relation}`
-                      : data.profile.stewardship.label}
-                  </span>
+                {/* The side from managingFor when it is a real side, else
+                    the gender, else neutral: an agency-built profile has no
+                    managingFor and used to read "Groom" whatever it was. The
+                    server's stewardship label already says "Managed by". */}
+                <span className="font-medium text-gray-800">
+                  {profileSideLabel(data.profile.managingFor, data.profile.gender)} profile
+                </span>
+                {data.profile.stewardship && stewardshipLine(data.profile.stewardship) && (
+                  <span> · {stewardshipLine(data.profile.stewardship)}</span>
                 )}
               </div>
             )}
