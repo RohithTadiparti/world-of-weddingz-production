@@ -30,6 +30,9 @@ export function storageConfigProblems(s: StorageSettings): string[] {
     problems.push(`MEDIA_STORAGE_PROVIDER must be mock or s3, got "${s.storageProvider}"`);
   }
   if (!(s.maxFileSizeBytes > 0)) problems.push('MAX_FILE_SIZE must be a positive number of bytes');
+  if (s.maxFileSizeBytes > 10 * 1024 * 1024) {
+    problems.push('MAX_FILE_SIZE cannot exceed the 10 MiB public upload ceiling');
+  }
   if (s.storageProvider !== 's3') return problems;
 
   if (!s.s3Bucket) problems.push('MEDIA_STORAGE_PROVIDER=s3 needs S3_BUCKET');
