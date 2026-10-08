@@ -16,6 +16,9 @@ operations:
   alertReminderHours: 24
   consecutiveCountSamples: 2
   sustainedPerformanceMinutes: 15
+  measurements:
+    # Local/Railway estimate until the Railway billing API adapter is enabled.
+    railwayMonthlyInr: 0
   thresholds:
     accounts: { warning: 5000, critical: 10000 }
     dailyActiveUsers: { warning: 500, critical: 1000 }
