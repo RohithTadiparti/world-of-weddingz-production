@@ -1,0 +1,8 @@
+[
+  { "role": "bride", "email": "qa-bride-001@example.invalid", "password": "REPLACE_IN_PROTECTED_FIXTURE" },
+  { "role": "groom", "email": "qa-groom-001@example.invalid", "password": "REPLACE_IN_PROTECTED_FIXTURE" },
+  { "role": "vendor", "email": "qa-vendor-001@example.invalid", "password": "REPLACE_IN_PROTECTED_FIXTURE" },
+  { "role": "wedding_planner", "email": "qa-planner-001@example.invalid", "password": "REPLACE_IN_PROTECTED_FIXTURE" },
+  { "role": "admin", "email": "qa-admin-001@example.invalid", "password": "REPLACE_IN_PROTECTED_FIXTURE" }
+]
+

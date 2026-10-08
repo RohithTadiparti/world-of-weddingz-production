@@ -1,0 +1,16 @@
+{
+  "minimumHeadroomPercent": 30,
+  "plannedOperatingConcurrentUsers": 30,
+  "breakpointConcurrentUsers": 75,
+  "thresholds": {
+    "http_req_failed": ["rate<0.01"],
+    "operation_duration": ["p(95)<400", "p(99)<750"],
+    "checks": ["rate>0.99"]
+  },
+  "resourcePassCriteria": {
+    "maximumCpuPercent": 70,
+    "maximumMemoryPercent": 70,
+    "maximumPostgresConnectionsPercent": 70,
+    "maximumRedisMemoryPercent": 70
+  }
+}

@@ -16,3 +16,4 @@ DOC-014,SEC-001 implementation plan,docs/superpowers/plans/2026-10-04-sec-001-ad
 DOC-015,Zoho SSO and mail operating guide,docs/operations/zoho-mail.md,Security and operations,Approved candidate,Quarterly or provider change,2026-10-05,SEC-001 AUTH-001 OPS-003
 DOC-016,Dependency remediation record,docs/security/dependency-remediation-2026-10-04.md,Security,Approved candidate,Each dependency change,2026-10-05,DEP-001
 DOC-017,Private S3 media runbook,docs/runbooks/s3-media.md,Engineering and operations,Active,Each storage or credential change,2026-10-08,S3-001 GATE-005
+DOC-018,Railway capacity baseline,docs/reports/railway-capacity-baseline.md,Quality,Not Run,Each candidate size or performance change,2026-10-08,QA-001 GATE-006
