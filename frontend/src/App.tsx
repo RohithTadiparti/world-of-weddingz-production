@@ -396,7 +396,6 @@ const NAV: NavEntry[] = [
   { to: '/media', label: 'Media', requires: [Permission.MEDIA_MANAGE_OWN], group: 'wedding', icon: Images },
   { to: '/matches', label: 'Find matches', requires: [Permission.MATCH_BROWSE], group: 'quick', icon: Sparkle },
   { to: '/profile', label: 'Complete profile', requires: [Permission.PROFILE_MANAGE_OWN], group: 'quick', icon: IdentificationCard },
-  { to: '/support', label: 'Get support', requires: [Permission.CASE_RAISE], group: 'quick', icon: Lifebuoy },
   { to: '/genie', label: 'WOW Genie', requires: [Permission.AI_ASSIST], group: 'quick', icon: MagicWand },
   {
     to: '/verification',

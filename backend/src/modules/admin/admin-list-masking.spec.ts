@@ -110,6 +110,35 @@ describe('AdminConsoleService.officers', () => {
     expect(await ids('hyderabad')).toEqual([OFFICERS[0].id]);
     expect(await ids('nobody')).toEqual([]);
   });
+
+  /*
+   * A roster that answers "Available" for an officer who has never set the
+   * field is asserting something nobody said; the administrator sees that it is
+   * unset instead (and allocation is unchanged — see availabilityView).
+   */
+  it('shows an officer who has never set availability as not set', async () => {
+    const users = repo({ find: jest.fn().mockResolvedValue([OFFICERS[0]]) });
+    const availability = repo({ find: jest.fn().mockResolvedValue([]) });
+    const rows = await consoleService({ users, availability }).officers();
+    expect(rows[0].availability).toBe('not_set');
+  });
+
+  it('still reports the status an officer set for themselves', async () => {
+    const users = repo({ find: jest.fn().mockResolvedValue([OFFICERS[0]]) });
+    const availability = repo({
+      find: jest.fn().mockResolvedValue([
+        {
+          officerUserId: OFFICERS[0].id,
+          status: 'on_leave',
+          leaveFrom: '2026-10-01',
+          leaveTo: '2026-10-31',
+          leaveReason: null,
+        },
+      ]),
+    });
+    const rows = await consoleService({ users, availability }).officers();
+    expect(rows[0].availability).toBe('on_leave');
+  });
 });
 
 describe('AdminConsoleService.businesses', () => {

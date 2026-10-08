@@ -58,7 +58,15 @@ function useAuthGate() {
     const inAuthFlow = segments[0] === 'login' || segments[0] === 'register';
     // A guest answering their invitation has no account; the link is their key.
     const isPublic = (segments[0] as string) === 'rsvp';
+    /*
+     * An account still holding its emailed temporary password can reach
+     * exactly one screen. The server refuses everything else anyway; sending
+     * them straight there, as the web app's guard does, saves a wall of
+     * rejections on the way to the same place.
+     */
+    const onSetPassword = segments[0] === 'set-password';
     if (!user && !inAuthFlow && !isPublic) router.replace('/login');
+    else if (user?.mustResetPassword && !onSetPassword) router.replace('/set-password');
     else if (user && inAuthFlow) router.replace('/');
   }, [ready, user, segments, router]);
 }
@@ -158,6 +166,9 @@ function Routes() {
     >
       <Stack.Screen name="login" options={{ title: '' }} />
       <Stack.Screen name="register" options={{ title: '' }} />
+      {/* Reached by the gate rather than chosen: an account on its temporary
+          password is brought here and kept here until it sets a real one. */}
+      <Stack.Screen name="set-password" options={{ headerShown: true, title: 'Set password' }} />
       {/* The child tab navigator supplies the one shared header for its routes. */}
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 

@@ -467,6 +467,8 @@ export class AdminConsoleService {
         completed: tally(caseRows, u.id, C_DONE),
       };
 
+      const availability = availabilityView(availabilityFor.get(u.id));
+
       return {
         id: u.id,
         email: maskEmail(u.email),
@@ -474,9 +476,10 @@ export class AdminConsoleService {
         name: profileFor.get(u.id)?.displayName ?? maskEmail(u.email),
         city: profileFor.get(u.id)?.city ?? null,
         isActive: u.isActive,
-        // Real leave state from EZ1-I210: an officer with no row has never set
-        // availability and is treated as available.
-        availability: availabilityView(availabilityFor.get(u.id)).status,
+        // Real leave state from EZ1-I210. An officer with no row has never set
+        // anything; allocation still treats them as available, but the roster
+        // says "not set" rather than reading "Available" as a choice they made.
+        availability: availability.neverSet ? 'not_set' : availability.status,
         online,
         lastActiveAt,
         serviceAreas: areas

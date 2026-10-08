@@ -290,4 +290,13 @@ export class CaseQueryDto extends PaginationDto {
   @IsOptional()
   @IsEnum(CaseSubject)
   subjectType?: CaseSubject;
+
+  @ApiPropertyOptional({
+    enum: ['raised'],
+    description:
+      'For an officer: their own raised cases, as the Support page reads them, rather than the allocated queue.',
+  })
+  @IsOptional()
+  @IsIn(['raised'])
+  scope?: 'raised';
 }

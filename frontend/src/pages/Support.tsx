@@ -92,13 +92,24 @@ export default function Support() {
   // "Raise an issue" elsewhere links to /support?new=1, which opens the form
   // straight away rather than leaving the reader on the list to find the button.
   const [raising, setRaising] = useState(() => searchParams.get('new') === '1');
-  const [open, setOpen] = useState<string | null>(null);
+  // Seeded from the param so the case is open in the first paint — a link
+  // that opens the page with nothing expanded and a row to find is only half
+  // a link. The effect below then strips the param so a reload starts clean.
+  const [open, setOpen] = useState<string | null>(() => searchParams.get('case'));
   const formRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (searchParams.get('new') !== '1') return;
     setRaising(true);
     const next = new URLSearchParams(searchParams);
     next.delete('new');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+  useEffect(() => {
+    const caseId = searchParams.get('case');
+    if (!caseId) return;
+    setOpen(caseId);
+    const next = new URLSearchParams(searchParams);
+    next.delete('case');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
   useEffect(() => {
@@ -112,8 +123,8 @@ export default function Support() {
   });
 
   const { data: cases, isLoading } = useQuery({
-    queryKey: ['support-cases'],
-    queryFn: async () => (await api.get('/verification/cases')).data,
+    queryKey: ['support-cases', 'raised'],
+    queryFn: async () => (await api.get('/verification/cases', { params: { scope: 'raised' } })).data,
     retry: false,
   });
 
