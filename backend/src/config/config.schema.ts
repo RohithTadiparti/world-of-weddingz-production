@@ -13,6 +13,9 @@ export const configValidationSchema = Joi.object({
     .default('local'),
   PLATFORM_CONFIG_PATH: Joi.string().allow('').optional(),
   LOG_RETENTION_DAYS: Joi.number().integer().min(1).max(365).optional(),
+  // Comma-separated operational alert email recipients; each address is
+  // validated by the platform configuration loader.
+  OPERATIONS_ALERT_RECIPIENTS: Joi.string().allow('').max(6000).optional(),
   MIGRATION_ENABLED: Joi.boolean().truthy('true').falsy('false').optional(),
   MIGRATION_EXECUTOR: Joi.string().valid('mock', 'aws').optional(),
   MIGRATION_DRY_RUN: Joi.boolean().truthy('true').falsy('false').optional(),

@@ -238,6 +238,15 @@ export enum NotificationType {
    */
   EVENT_CHANGED_BY_COUPLE = 'event_changed_by_couple',
   EVENT_CHANGED_BY_PLANNER = 'event_changed_by_planner',
+
+  /**
+   * A capacity or performance threshold has been crossed (OPS-003).
+   *
+   * For administrators holding the infrastructure-read permission only, never
+   * for a domain user. The payload carries the alert facts and a correlation id
+   * and nothing else: no credentials, request data or contact details.
+   */
+  OPERATIONAL_ALERT = 'operational_alert',
 }
 
 /**

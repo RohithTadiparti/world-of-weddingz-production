@@ -18,11 +18,17 @@ export interface MailMessage {
  * credentials; 'smtp' sends for real.
  */
 export interface MailProvider {
+  /**
+   * Which transport this is. `log` never reaches an inbox, so anything
+   * reporting delivery must call it simulated rather than sent.
+   */
+  readonly mode?: 'log' | 'smtp';
   send(message: MailMessage): Promise<void>;
 }
 
 @Injectable()
 export class LogMailProvider implements MailProvider {
+  readonly mode = 'log' as const;
   private readonly logger = new Logger('Mail');
 
   constructor(@Optional() private readonly capture?: DeliveryCaptureService) {}
@@ -40,6 +46,7 @@ export class LogMailProvider implements MailProvider {
 
 @Injectable()
 export class SmtpMailProvider implements MailProvider {
+  readonly mode = 'smtp' as const;
   private readonly logger = new Logger(SmtpMailProvider.name);
   private transporter?: nodemailer.Transporter;
 
