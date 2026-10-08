@@ -2,7 +2,7 @@ ID,Risk,Impact,Likelihood,Priority,Mitigation,Owner,Status,Evidence
 RISK-001,Public beta exposes real PII before security blockers close,Critical,Possible,P0,Block domain launch on security release gates,Unassigned,Open,
 RISK-002,Free or hard spending limit stops Railway workloads,High,Possible,P0,Use Hobby for public launch and alert before hard limit,Unassigned,Open,
 RISK-003,Railway memory is insufficient for the backend,High,Possible,P0,Measure idle/load use and retain 30 percent headroom,Unassigned,Open,
-RISK-004,Public or missing S3 objects expose or lose user media,Critical,Possible,P0,Private bucket least privilege reconciliation and restore test,Unassigned,Open,
+RISK-004,Public or missing S3 objects expose or lose user media,Critical,Possible,P0,Private bucket least privilege reconciliation and restore test,Codex,Open,Repository contract and runbook in S3-001 PR 104; live AWS privacy persistence rotation and reconciliation evidence pending
 RISK-005,Duplicate jobs send or release money twice,Critical,Possible,P0,Database claims locks and idempotency tests,Unassigned,Open,
 RISK-006,Migration produces split-brain writes,Critical,Unlikely,P0,Read-only final sync and no rollback after AWS writes without reverse replication,Unassigned,Open,
 RISK-007,DNS cutover fails after source is paused,High,Possible,P0,Preflight DNS access TTL and automatic restoration rehearsal,Unassigned,Open,
