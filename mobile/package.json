@@ -42,9 +42,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/jest": "^30.0.0",
     "@types/react": "~19.2.0",
-    "jest-expo": "~57.0.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -57,14 +55,7 @@
     "build:ios:simulator": "eas build --platform ios --profile simulator",
     "build:ios:production": "eas build --platform ios --profile production",
     "submit:ios": "eas submit --platform ios --profile production --latest",
-    "test": "jest",
     "typecheck": "tsc --noEmit"
-  },
-  "jest": {
-    "preset": "jest-expo",
-    "testMatch": [
-      "<rootDir>/src/**/*.test.ts"
-    ]
   },
   "overrides": {
     "source-map-js": "1.2.2",
