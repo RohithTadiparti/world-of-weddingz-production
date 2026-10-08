@@ -15,6 +15,7 @@ import {
   Graph,
   ListChecks,
   Gear,
+  HardDrives,
 } from '@phosphor-icons/react';
 import { Permission, PermissionValue, canAny } from '../../lib/permissions';
 import { useAuth, usePermissions } from '../../store/auth';
@@ -58,6 +59,7 @@ export const ADMIN_NAV: AdminNavEntry[] = [
   { to: '/admin/analytics', label: 'Analytics', icon: Graph, requires: [Permission.ADMIN_ANALYTICS_READ] },
   { to: '/admin/security', label: 'Security', icon: ShieldCheck, requires: [Permission.ADMIN_ANALYTICS_READ] },
   { to: '/admin/audit', label: 'Audit Logs', icon: ListChecks, requires: [Permission.ADMIN_AUDIT_READ] },
+  { to: '/admin/infrastructure', label: 'Infrastructure', icon: HardDrives, requires: [Permission.ADMIN_INFRASTRUCTURE_READ] },
   { to: '/admin/settings', label: 'Settings', icon: Gear, requires: [Permission.ADMIN_ANALYTICS_READ] },
 ];
 

@@ -13,6 +13,8 @@ import { RUNTIME_CAPACITY_PROVIDER } from './capacity/capacity.types';
 import { RuntimeCapacityService } from './capacity/runtime-capacity.service';
 import { CapacitySnapshot } from './entities/capacity-snapshot.entity';
 import { OperationalAlert } from './entities/operational-alert.entity';
+import { OperationsDashboardService } from './operations-dashboard.service';
+import { OperationsController } from './operations.controller';
 
 @Module({
   imports: [
@@ -22,12 +24,14 @@ import { OperationalAlert } from './entities/operational-alert.entity';
     ReplicaLockModule,
     NotificationsModule,
   ],
+  controllers: [OperationsController],
   providers: [
     RuntimeCapacityService,
     { provide: RUNTIME_CAPACITY_PROVIDER, useExisting: RuntimeCapacityService },
     CapacityCollector,
     AlertEvaluator,
     AlertDeliveryService,
+    OperationsDashboardService,
     CapacityScheduler,
     { provide: APP_INTERCEPTOR, useClass: RequestCapacityInterceptor },
   ],
