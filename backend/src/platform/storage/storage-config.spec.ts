@@ -54,4 +54,11 @@ describe('storage configuration', () => {
   it('refuses expiries too short to use', () => {
     expect(storageConfigProblems(s3({ presignExpirySeconds: 5, getExpirySeconds: 10 }))).toHaveLength(2);
   });
+
+  it('keeps the public upload ceiling at 10 MiB', () => {
+    expect(storageConfigProblems(s3({ maxFileSizeBytes: 10 * 1024 * 1024 }))).toEqual([]);
+    expect(storageConfigProblems(s3({ maxFileSizeBytes: 10 * 1024 * 1024 + 1 }))).toContain(
+      'MAX_FILE_SIZE cannot exceed the 10 MiB public upload ceiling',
+    );
+  });
 });

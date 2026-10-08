@@ -1,0 +1,14 @@
+aws_region                       = "ap-south-1"
+bucket_name                      = "wow-beta-private-media-CHANGE-ME"
+application_iam_user_name        = "wow-railway-media"
+allowed_web_origins              = ["https://test.worldofweddingz.com"]
+noncurrent_version_retention_days = 30
+incomplete_multipart_retention_days = 7
+
+tags = {
+  Application = "world-of-weddingz"
+  Environment = "beta"
+  ManagedBy   = "terraform"
+  DataClass   = "private-user-media"
+}
+
