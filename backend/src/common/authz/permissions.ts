@@ -158,6 +158,14 @@ export enum Permission {
    * operational alert notifications. Admin only.
    */
   ADMIN_INFRASTRUCTURE_READ = 'admin:infrastructure:read',
+  /**
+   * Start or steer an infrastructure migration. Reserved for the migration
+   * endpoints (MIG-001), which additionally require a fresh step-up token
+   * (AUTH-001). Nothing grants a working action on this permission alone;
+   * acknowledging an alert needs only the read permission, since it changes
+   * no infrastructure.
+   */
+  ADMIN_INFRASTRUCTURE_MIGRATE = 'admin:infrastructure:migrate',
 }
 
 /** Everything an individual (bride/groom/family) can do. */

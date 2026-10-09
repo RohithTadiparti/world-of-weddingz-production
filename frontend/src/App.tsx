@@ -88,6 +88,7 @@ import AdminAccountDetail from './pages/admin/AdminAccountDetail';
 import AdminProfileDetail from './pages/admin/AdminProfileDetail';
 import AdminBusinessDetail from './pages/admin/AdminBusinessDetail';
 import AdminSupport from './pages/admin/AdminSupport';
+import AdminInfrastructure from './pages/admin/AdminInfrastructure';
 import {
   AdminAgents,
   AdminAuditLogs,
@@ -1475,6 +1476,8 @@ export default function App() {
         {/* Keep links sent before Analytics was named as its own module working. */}
         <Route path="reports" element={<Navigate to="/admin/analytics" replace />} />
         <Route path="audit" element={<AdminAuditLogs />} />
+        {/* Capacity, operational alerts and migration readiness (UI-001). */}
+        <Route path="infrastructure" element={<AdminInfrastructure />} />
         <Route path="support" element={<AdminSupport />} />
         {/*
           Notifications and Security are the real modules, not placeholders

@@ -150,6 +150,24 @@ describe('permission matrix', () => {
     expect(roleHasPermission(UserRole.ADMIN, Permission.ADMIN_AUDIT_READ)).toBe(true);
   });
 
+  /**
+   * Infrastructure operations belong to the administrator alone. ADMIN is the
+   * only administrator role and is provisioned out-of-band, so it is the one
+   * role that may read capacity/alerts or (later) start a migration.
+   */
+  it('gives infrastructure read and migrate to the administrator role only', () => {
+    for (const permission of [
+      Permission.ADMIN_INFRASTRUCTURE_READ,
+      Permission.ADMIN_INFRASTRUCTURE_MIGRATE,
+    ]) {
+      for (const role of Object.values(UserRole)) {
+        expect(roleHasPermission(role, permission)).toBe(role === UserRole.ADMIN);
+      }
+    }
+    expect(Permission.ADMIN_INFRASTRUCTURE_READ).toBe('admin:infrastructure:read');
+    expect(Permission.ADMIN_INFRASTRUCTURE_MIGRATE).toBe('admin:infrastructure:migrate');
+  });
+
   it('gives listing management only to the matching provider role', () => {
     expect(roleHasPermission(UserRole.VENDOR, Permission.VENDOR_LISTING_MANAGE)).toBe(true);
     expect(roleHasPermission(UserRole.VENDOR, Permission.PLANNER_LISTING_MANAGE)).toBe(false);
