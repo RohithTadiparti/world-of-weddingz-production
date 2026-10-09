@@ -33,6 +33,9 @@ const schema = Joi.object<PlatformConfig>({
     alertReminderHours: Joi.number().integer().min(1).required(),
     consecutiveCountSamples: Joi.number().integer().min(1).required(),
     sustainedPerformanceMinutes: Joi.number().integer().min(1).required(),
+    measurements: Joi.object({
+      railwayMonthlyInr: Joi.number().min(0).required(),
+    }).unknown(false).required(),
     thresholds: Joi.object({
       accounts: threshold.required(),
       dailyActiveUsers: threshold.required(),

@@ -49,6 +49,7 @@ import { TravelModule } from './modules/travel/travel.module';
 import { MediaModule } from './modules/media/media.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AiModule } from './modules/ai/ai.module';
+import { OperationsModule } from './modules/operations/operations.module';
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { AiModule } from './modules/ai/ai.module';
     MediaModule,
     AdminModule,
     AiModule,
+    OperationsModule,
   ],
   providers: [
     // Rate limits by account when signed in, by IP otherwise.

@@ -23,6 +23,7 @@ export interface PlatformConfig {
     alertReminderHours: number;
     consecutiveCountSamples: number;
     sustainedPerformanceMinutes: number;
+    measurements: { railwayMonthlyInr: number };
     thresholds: Record<string, Threshold>;
     revenue: { minimumMonthlyNetInr: number; preferredMonthlyNetInr: number };
   };
