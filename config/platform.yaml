@@ -14,6 +14,10 @@ providers:
 operations:
   logRetentionDays: 30
   alertReminderHours: 24
+  # Operational alert email recipients. Deliberately empty here: supply the
+  # addresses per environment through OPERATIONS_ALERT_RECIPIENTS
+  # (comma-separated), never in this file.
+  alertRecipients: []
   consecutiveCountSamples: 2
   sustainedPerformanceMinutes: 15
   measurements:

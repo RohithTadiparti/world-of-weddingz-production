@@ -221,4 +221,24 @@ export const DELIVERY: Record<NotificationType, DeliverySpec> = {
     },
     whatsappTemplate: null,
   },
+
+  // Administrators only. The line names the measurement and the threshold and
+  // nothing else; the alert page has the rest.
+  [NotificationType.OPERATIONAL_ALERT]: {
+    title: 'Operational alert',
+    body: (p) => {
+      const severity = str(p, 'severity', 'warning');
+      const lead =
+        str(p, 'event') === 'reminder'
+          ? 'Still open'
+          : severity === 'critical'
+            ? 'Critical'
+            : 'Warning';
+      const unit = str(p, 'unit');
+      const value = [str(p, 'observedValue', '?'), unit].filter(Boolean).join(' ');
+      const limit = [str(p, 'thresholdValue', '?'), unit].filter(Boolean).join(' ');
+      return `${lead}: ${str(p, 'metric', 'a capacity metric')} is ${value} (threshold ${limit}).`;
+    },
+    whatsappTemplate: null,
+  },
 };

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadPlatformConfig } from './platform-config.loader';
@@ -47,6 +47,52 @@ describe('loadPlatformConfig', () => {
     expect(() => loadPlatformConfig(canonical, { DEPLOYMENT_TIER: 'revenue' })).toThrow(
       /providers\.payment/,
     );
+  });
+
+  describe('operational alert recipients', () => {
+    it('accepts the empty canonical default', () => {
+      expect(loadPlatformConfig(canonical, {}).operations.alertRecipients).toEqual([]);
+    });
+
+    it('takes a comma-separated environment override and trims each entry', () => {
+      const config = loadPlatformConfig(canonical, {
+        OPERATIONS_ALERT_RECIPIENTS: ' ops@example.com, oncall@example.org ,',
+      });
+      expect(config.operations.alertRecipients).toEqual(['ops@example.com', 'oncall@example.org']);
+      expect(Object.isFrozen(config.operations.alertRecipients)).toBe(true);
+    });
+
+    it('keeps the default when the override is blank', () => {
+      expect(
+        loadPlatformConfig(canonical, { OPERATIONS_ALERT_RECIPIENTS: '' }).operations
+          .alertRecipients,
+      ).toEqual([]);
+    });
+
+    it.each([
+      ['not an address', 'not-an-email'],
+      ['a duplicate, ignoring case', 'ops@example.com,OPS@example.com'],
+      ['too many entries', Array.from({ length: 21 }, (_, i) => `ops${i}@example.com`).join(',')],
+      ['an over-long address', `${'a'.repeat(250)}@example.com`],
+    ])('rejects %s without printing the address', (_label, value) => {
+      let message = '';
+      try {
+        loadPlatformConfig(canonical, { OPERATIONS_ALERT_RECIPIENTS: value });
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message).toMatch(/operations\.alertRecipients/);
+      expect(message).not.toContain('example.com');
+      expect(message).not.toContain('not-an-email');
+    });
+
+    it('rejects a YAML list that is not a list of addresses', () => {
+      const yaml = readFileSync(canonical, 'utf8').replace(
+        'alertRecipients: []',
+        'alertRecipients: [42]',
+      );
+      expect(() => loadPlatformConfig(tempConfig(yaml), {})).toThrow(/operations\.alertRecipients/);
+    });
   });
 
   it('never leaks secret-shaped values in validation errors', () => {

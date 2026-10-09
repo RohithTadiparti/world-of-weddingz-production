@@ -6,6 +6,7 @@ import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
 import { errorType } from '../../common/logging/log-redaction';
 import { maskIp, maskPii } from '../../common/util/pii-mask';
+import { OPERATIONAL_ALERT_AUDIT_ACTIONS } from '../../modules/operations/alerts/alert-delivery.types';
 
 /** Stable action names. Grep-able, and safe to build dashboards on. */
 export const AuditAction = {
@@ -114,6 +115,15 @@ export const AuditAction = {
   CATALOG_CATEGORY_CHANGED: 'catalog.category_changed',
   CATALOG_DEFINITION_CHANGED: 'catalog.definition_changed',
   CATALOG_ATTRIBUTE_CHANGED: 'catalog.attribute_changed',
+
+  // Operational alert lifecycle (OPS-003). The values are the shared
+  // contract in alert-delivery.types.ts, re-exported so the trail has one map.
+  OPERATIONS_ALERT_OPENED: OPERATIONAL_ALERT_AUDIT_ACTIONS.opened,
+  OPERATIONS_ALERT_PROMOTED: OPERATIONAL_ALERT_AUDIT_ACTIONS.promoted,
+  OPERATIONS_ALERT_REMINDED: OPERATIONAL_ALERT_AUDIT_ACTIONS.reminded,
+  OPERATIONS_ALERT_ACKNOWLEDGED: OPERATIONAL_ALERT_AUDIT_ACTIONS.acknowledged,
+  OPERATIONS_ALERT_RESOLVED: OPERATIONAL_ALERT_AUDIT_ACTIONS.resolved,
+  OPERATIONS_ALERT_DELIVERY_FAILED: OPERATIONAL_ALERT_AUDIT_ACTIONS.deliveryFailed,
 } as const;
 
 export type AuditActionName = (typeof AuditAction)[keyof typeof AuditAction];
@@ -131,7 +141,8 @@ export interface AuditInput {
  * Append-only audit trail.
  *
  * `record` never throws: losing an audit row must not fail the action it
- * describes. Pass a transaction manager when the action itself is
+ * describes. It resolves to whether the row was written, for the callers that
+ * must report a lost audit row rather than assume it landed. Pass a transaction manager when the action itself is
  * transactional, so the trail commits or rolls back with it.
  */
 /**
@@ -158,7 +169,7 @@ export class AuditService {
     @InjectRepository(AuditEvent) private readonly events: Repository<AuditEvent>,
   ) {}
 
-  async record(input: AuditInput, manager?: EntityManager): Promise<void> {
+  async record(input: AuditInput, manager?: EntityManager): Promise<boolean> {
     const repo = manager ? manager.getRepository(AuditEvent) : this.events;
     try {
       await repo.save(
@@ -173,6 +184,7 @@ export class AuditService {
         }),
       );
       this.alert(input);
+      return true;
     } catch (err) {
       this.logger.error({
         event: 'audit_write_failure',
@@ -181,6 +193,7 @@ export class AuditService {
         resourceId: input.resourceId ?? null,
         errorType: errorType(err),
       });
+      return false;
     }
   }
 

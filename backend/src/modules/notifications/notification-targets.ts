@@ -28,7 +28,8 @@ export type TargetModule =
   | 'clients'
   | 'events'
   | 'support'
-  | 'matches';
+  | 'matches'
+  | 'infrastructure';
 
 export type TargetAction = 'view' | 'respond' | 'pay' | 'review' | 'reply';
 
@@ -127,4 +128,13 @@ export const NOTIFICATION_TARGET: Record<NotificationType, NotificationTarget> =
   // through the client picker.
   [NotificationType.EVENT_CHANGED_BY_COUPLE]: { module: 'events', action: 'view', idKey: 'eventId' },
   [NotificationType.EVENT_CHANGED_BY_PLANNER]: { module: 'events', action: 'view', idKey: 'eventId' },
+
+  // Opens the administrator Infrastructure page on the alert itself
+  // (/admin/infrastructure?alert=:alertId), where it is reviewed and
+  // acknowledged.
+  [NotificationType.OPERATIONAL_ALERT]: {
+    module: 'infrastructure',
+    action: 'review',
+    idKey: 'alertId',
+  },
 };

@@ -7,6 +7,7 @@ import {
   TYPE_LABEL,
   UNREAD_POLL_MS,
   describe,
+  operationalAlertLink,
   type Notification,
 } from '../lib/notification-copy';
 import { EmptyState, Loading } from '../components/ui/Feedback';
@@ -45,6 +46,7 @@ const TYPE_GROUP: Record<string, Group> = {
   booking_update: 'progress',
   event_changed_by_couple: 'progress',
   event_changed_by_planner: 'progress',
+  operational_alert: 'action',
 };
 
 const GROUP_LABEL: Record<Group, string> = {
@@ -472,6 +474,10 @@ function linkFor(
         return '/verification';
       case 'chat':
         return '/chat';
+      case 'infrastructure':
+        // An operational alert, for administrators only: the Infrastructure
+        // page opens on the alert so it can be reviewed and acknowledged.
+        return operationalAlertLink(n.targetId);
       case 'planner':
         return '/planner';
       case 'events': {
