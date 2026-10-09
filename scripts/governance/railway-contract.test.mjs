@@ -46,3 +46,12 @@ test('Railway deployment is manual, secret-backed, ordered and smoke-gated', () 
   assert.match(workflow, /Rollback failed smoke deployment/);
 });
 
+test('new Railway services avoid deprecated config-as-code bootstrap instructions', () => {
+  const guide = read('railway/README.md');
+
+  assert.match(guide, /RAILWAY_DOCKERFILE_PATH=\/docker\/Dockerfile\b/);
+  assert.match(guide, /RAILWAY_DOCKERFILE_PATH=\/docker\/Dockerfile\.frontend\b/);
+  assert.match(guide, /Config as Code is deprecated/i);
+  assert.doesNotMatch(guide, /Set each repository service's config-file path/i);
+});
+

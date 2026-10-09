@@ -2,10 +2,10 @@
 
 RLY-001 defines four independent Railway services in one staging project:
 
-| Service | Source | Config path | Public networking |
+| Service | Source | Build setting | Public networking |
 | --- | --- | --- | --- |
-| `frontend` | this repository | `/railway/frontend.toml` | Railway temporary domain; production domain remains detached |
-| `backend` | this repository | `/railway/backend.toml` | temporary domain only for CORS and smoke verification |
+| `frontend` | this repository | `RAILWAY_DOCKERFILE_PATH=/docker/Dockerfile.frontend` | Railway temporary domain; production domain remains detached |
+| `backend` | this repository | `RAILWAY_DOCKERFILE_PATH=/docker/Dockerfile` | temporary domain only for CORS and smoke verification |
 | `Postgres` | Railway PostgreSQL | managed | none; private network only |
 | `Redis` | Railway Redis | managed | none; private network only |
 
@@ -19,11 +19,18 @@ name and port. No database, Redis, media or secret value belongs in Git.
    the production domain.
 2. Add PostgreSQL and Redis from Railway templates, then add `backend` and
    `frontend` from `RohithTadiparti/world-of-weddingz-production`.
-3. Set each repository service's config-file path to the value in the table.
-4. Generate temporary Railway domains for the frontend and backend only.
-5. Set `API_UPSTREAM` on `frontend` to the backend private address, including
+3. Do not attach `railway/backend.toml` or `railway/frontend.toml` to a new
+   service. Railway Config as Code is deprecated, and services created after
+   2026-08-28 cannot opt in. The files remain only as legacy-reference contracts
+   until Railway's 2026-12-01 cutoff.
+4. For each repository service, select the Dockerfile builder and set the
+   Dockerfile path shown in the table. Setting `RAILWAY_DOCKERFILE_PATH` to that
+   value is the repeatable equivalent of the dashboard selection.
+5. Generate temporary Railway domains for the frontend and backend only. Route
+   frontend port 80 and backend port 3000.
+6. Set `API_UPSTREAM` on `frontend` to the backend private address, including
    port 3000, for example `${{backend.RAILWAY_PRIVATE_DOMAIN}}:3000`.
-6. Create a Railway project token for CI and add the variables below to the
+7. Create a Railway project token for CI and add the variables below to the
    protected GitHub environment named `railway-staging`.
 
 ## Backend variables
@@ -49,7 +56,7 @@ HOST=0.0.0.0
 PORT=3000
 DEPLOYMENT_TIER=local
 SERVICE_NAME=backend
-RELEASE=${{RAILWAY_GIT_COMMIT_SHA}}
+RELEASE=<40-character-deployed-commit-sha>
 APP_BASE_URL=https://<temporary-frontend-domain>
 CORS_ORIGINS=https://<temporary-frontend-domain>
 COOKIE_SECURE=true
@@ -72,6 +79,11 @@ use mock media for real accounts.
 Create strong `JWT_SECRET`, `JWT_REFRESH_SECRET`, `PAYMENT_WEBHOOK_SECRET` and
 any test-delivery key directly in Railway. Do not paste them into issues, CI
 logs, this file or a workbook.
+
+Do not set `RELEASE=${{RAILWAY_GIT_COMMIT_SHA}}` as a service reference. That
+reference can resolve to an empty value during a dashboard deployment, and the
+application deliberately fails closed. Until REL-003 derives provenance from
+Railway's runtime metadata, set `RELEASE` to the exact deployed commit SHA.
 
 ## GitHub environment secrets and variables
 
