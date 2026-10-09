@@ -110,6 +110,12 @@ previous revisions. First-time bootstrap deployments have no previous revision
 and must therefore be performed from the Railway dashboard before enabling the
 workflow.
 
+On a Trial account that redirects project-token creation to plan verification,
+keep staging deployments manual through Railway's connected GitHub service. Do
+not substitute an account token or a token from another project. Enable the
+protected deployment workflow only after Hobby or public-beta approval creates
+a token scoped to this project's staging environment.
+
 ## Verification record
 
 After the disposable deployment, record the Railway plan, region, service IDs,

@@ -47,11 +47,26 @@ Result: 1 of 1 passed in 21.9 seconds. The run verified:
 The run created two uniquely timestamped staging-only smoke accounts. No real
 person data or production domain was used.
 
+## Protected automation decision
+
+The protected `railway-staging` GitHub environment was created with its six
+non-secret project, environment, service and URL variables. The first protected
+run, `37987169744`, passed input validation but Railway rejected the backend CLI
+request as unauthorized. A fail-closed scope preflight then proved in run
+`37987323813` that the supplied project token belonged to a different Railway
+project. Both runs stopped before changing either live service.
+
+The correct `confident-vibrancy` project reports that account verification is
+required to create its project token and routes verification to a paid plan.
+Under the approved no-revenue cost policy, paid automation is deferred until a
+Hobby or public-beta decision. The invalid cross-project secret is removed from
+this repository environment; the underlying token in its owning Railway
+project is not changed.
+
 ## Remaining closure gate
 
-RLY-001 remains In Progress until a project-scoped Railway token and a dedicated
-smoke password are stored in the protected GitHub `railway-staging` environment
-and `.github/workflows/railway-deploy.yml` completes successfully. Record the
-resulting workflow URL and final backend/frontend deployment IDs, then capture
-idle CPU, memory and projected monthly cost from Railway before marking the item
-Done.
+RLY-001 remains In Progress. At Hobby or public-beta approval, create a project
+token scoped to `confident-vibrancy` / `staging`, store it as `RAILWAY_TOKEN`,
+run `.github/workflows/railway-deploy.yml`, and record the successful workflow,
+final deployment IDs, idle CPU, memory and projected monthly cost before marking
+the item Done.
