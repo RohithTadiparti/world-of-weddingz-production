@@ -551,6 +551,7 @@ describe('Infrastructure navigation and dashboard summary', () => {
 describe('infrastructure helpers', () => {
   it('formats with digit grouping and the persisted unit, never converting', () => {
     expect(formatMeasurement(0.0123456789, 'GB')).toBe('0.0123456789 GB');
+    expect(formatMeasurement(1e-21, 'GB')).toBe('1e-21 GB');
     expect(formatMeasurement(100000, 'count')).toBe('1,00,000');
     expect(formatMeasurement(30000, 'INR/month')).toBe('₹30,000 per month');
     expect(formatMeasurement(0.5, 'percent')).toBe('0.5%');

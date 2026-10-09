@@ -198,9 +198,18 @@ export const METRIC_LABEL: Record<CapacityMetricKey, string> = {
 export const metricLabel = (key: string): string =>
   METRIC_LABEL[key as CapacityMetricKey] ?? key;
 
-/** Digit grouping only. No rounding: every persisted digit is shown. */
+/** Digit grouping only. No rounding: every digit in the parsed API number is shown. */
 export function formatNumber(value: number): string {
-  return value.toLocaleString('en-IN', { maximumFractionDigits: 20 });
+  const raw = String(value);
+  // Expanding scientific notation with floating-point arithmetic could change
+  // the value, so preserve it byte-for-byte as represented by JavaScript.
+  if (/e/i.test(raw)) return raw;
+  const sign = raw.startsWith('-') ? '-' : '';
+  const [integer, fraction] = (sign ? raw.slice(1) : raw).split('.');
+  const grouped = integer.length <= 3
+    ? integer
+    : `${integer.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${integer.slice(-3)}`;
+  return `${sign}${grouped}${fraction === undefined ? '' : `.${fraction}`}`;
 }
 
 /** The persisted value with its persisted unit, unchanged. */
