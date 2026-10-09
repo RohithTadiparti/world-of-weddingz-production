@@ -356,13 +356,14 @@ function SubjectRow({
 }) {
   const [open, setOpen] = useState(false);
   const { latest, earlier, unread } = subject;
-  // A support-case notification goes to the verification Cases tab for staff and
-  // to Support for the vendor who raised it (EZ1-I49).
+  // A support-case notification goes to the page its reader actually works
+  // cases on — the admin inbox for the allocator, the officer queue for
+  // fieldwork — and to the raiser's own Support page, straight to the case
+  // (EZ1-I49).
   const permissions = usePermissions();
-  const canVerify =
-    can(permissions, Permission.VERIFICATION_ALLOCATE) ||
-    can(permissions, Permission.VERIFICATION_FIELDWORK);
-  const href = linkFor(latest, canVerify);
+  const canAllocate = can(permissions, Permission.VERIFICATION_ALLOCATE);
+  const canFieldwork = can(permissions, Permission.VERIFICATION_FIELDWORK);
+  const href = linkFor(latest, { canAllocate, canFieldwork });
 
   return (
     <div className={`p-4 ${unread > 0 ? 'bg-brand-light/30' : ''}`}>
@@ -436,7 +437,12 @@ function SubjectRow({
   );
 }
 
-function linkFor(n: Notification, canVerify = false): string | null {
+function linkFor(
+  n: Notification,
+  staff: { canAllocate?: boolean; canFieldwork?: boolean } = {},
+): string | null {
+  const { canAllocate = false, canFieldwork = false } = staff;
+  const canVerify = canAllocate || canFieldwork;
   // The server now says where each notification goes, so this maps a module to
   // a route rather than re-deciding from the type. The two used to disagree
   // silently — the rule lived here, in a chain of prefix tests, and a phone
@@ -448,9 +454,13 @@ function linkFor(n: Notification, canVerify = false): string | null {
       case 'disputes':
         return n.targetId ? `/bookings?highlight=${n.targetId}` : '/bookings';
       case 'support':
-        // Staff review cases on the verification Cases tab; the raiser opens
-        // theirs on Support (EZ1-I49).
-        return canVerify ? '/verification' : '/support';
+        // The allocator reviews cases in the admin inbox; an officer works
+        // theirs in their queue; the raiser reads the outcome on their own
+        // Support page, opened straight to the case the update is about
+        // (EZ1-I49).
+        if (canAllocate) return '/admin/support';
+        if (canFieldwork) return '/cases';
+        return n.targetId ? `/support?case=${n.targetId}` : '/support';
       case 'verification':
         // A decision is for the applicant — a vendor or planner reads it on
         // their own business page, an agent on their agency page. Only staff
@@ -498,7 +508,13 @@ function linkFor(n: Notification, canVerify = false): string | null {
   }
   if (n.type === 'verification_decided') return canVerify ? '/verification' : '/console';
   if (n.type.startsWith('verification_')) return '/verification';
-  if (n.type === 'dispute_update') return canVerify ? '/verification' : '/support';
+  if (n.type === 'dispute_update') {
+    // Rows written before the columns existed, given the same destination the
+    // module-based branch above lands on today.
+    if (canAllocate) return '/admin/support';
+    if (canFieldwork) return '/cases';
+    return n.targetId ? `/support?case=${n.targetId}` : '/support';
+  }
   if (n.type === 'new_message') return '/chat';
   if (n.type === 'task_reminder') return '/planner';
   if (n.type === 'match_interest' || n.type === 'match_interest_for_client') return '/interests';

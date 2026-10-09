@@ -1885,7 +1885,7 @@ export function CaseRow({
                 <textarea
                   className="input mb-2"
                   rows={2}
-                  placeholder="Notes on the resolution (optional)"
+                  placeholder="What you did about it. The person who raised the case reads this."
                   value={resNotes}
                   onChange={(e) => setResNotes(e.target.value)}
                 />
@@ -1894,6 +1894,13 @@ export function CaseRow({
                     <button
                       key={a.key}
                       className={a.kind !== 'escalate' && a.primary ? 'btn' : 'btn-outline'}
+                      // Escalation and identity confirmation carry their own
+                      // reason; everything else proposes a settlement, and a
+                      // proposal without a note would hand the complainant a
+                      // closed case and nothing to read.
+                      disabled={
+                        a.kind !== 'escalate' && a.kind !== 'confirm_identity' && !notes
+                      }
                       onClick={() => run(a)}
                     >
                       {a.label}
@@ -1917,7 +1924,7 @@ export function CaseRow({
                     </label>
                     <button
                       className="btn-outline"
-                      disabled={!amount}
+                      disabled={!amount || !notes}
                       onClick={() =>
                         onRun(
                           () =>
@@ -1925,7 +1932,7 @@ export function CaseRow({
                               outcome: 'partial',
                               amount: Number(amount),
                               action: 'partial_settlement',
-                              notes: resNotes.trim() || undefined,
+                              notes,
                             }),
                           'Recommendation submitted for review.',
                         )

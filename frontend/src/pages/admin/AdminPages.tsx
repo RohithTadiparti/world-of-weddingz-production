@@ -534,7 +534,7 @@ interface OfficerRow {
   name: string | null;
   city: string | null;
   isActive: boolean;
-  availability: 'available' | 'on_leave' | 'unavailable';
+  availability: 'available' | 'on_leave' | 'unavailable' | 'not_set';
   online: boolean;
   lastActiveAt: string | null;
   serviceAreas: { label: string; primary: boolean }[];
@@ -576,6 +576,9 @@ const AVAILABILITY_META: Record<OfficerRow['availability'], { label: string; ton
   available: { label: 'Available', tone: 'bg-positive-bg text-positive-fg' },
   on_leave: { label: 'On Leave', tone: 'bg-caution-bg text-caution-fg' },
   unavailable: { label: 'Unavailable', tone: 'bg-gray-100 text-gray-500' },
+  // An officer who has never set anything. Allocation still treats them as
+  // available, but the roster says what is actually true: nobody chose this.
+  not_set: { label: 'Not set', tone: 'bg-gray-100 text-gray-500' },
 };
 
 /** Compact "when were they last seen" — the question presence answers. */

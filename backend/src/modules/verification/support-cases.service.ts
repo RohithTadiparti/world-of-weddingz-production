@@ -348,6 +348,14 @@ export class SupportCasesService {
       : [];
     const vendorByOwner = new Map(ownedVendors.map((v) => [v.ownerUserId, v]));
 
+    // "My business listing" is offered to planners as well, and their listing
+    // lives on the planner profile, so it is resolved from there too — without
+    // this a planner's listing case reached the officer with no business on it.
+    const ownedPlanners = ownerIds.length
+      ? await this.planners.find({ where: { ownerUserId: In(ownerIds) } })
+      : [];
+    const plannerByOwner = new Map(ownedPlanners.map((p) => [p.ownerUserId, p]));
+
     // Upcoming slots for those vendors, so an availability complaint can show
     // the windows and any that are overbooked.
     const today = new Date().toISOString().slice(0, 10);
@@ -378,6 +386,7 @@ export class SupportCasesService {
       }
 
       const vendor = row.raisedByUserId ? vendorByOwner.get(row.raisedByUserId) : null;
+      const planner = row.raisedByUserId ? plannerByOwner.get(row.raisedByUserId) : null;
       if (row.subjectType === CaseSubject.VENDOR) {
         row.business = vendor
           ? {
@@ -397,7 +406,25 @@ export class SupportCasesService {
               decisionReason: vendor.decisionReason,
               revisionCount: vendor.revisionCount,
             }
-          : null;
+          : planner
+            ? {
+                // A planner's listing has no compliance row, so the fields the
+                // vendor path fills from it read as unset rather than guessed.
+                id: planner.id,
+                name: planner.agencyName,
+                category: 'wedding planner',
+                categories: planner.services ?? [],
+                city: planner.city ?? null,
+                status: planner.isApproved ? 'live' : 'unapproved',
+                isApproved: planner.isApproved,
+                gstNumber: null,
+                panNumber: null,
+                tradingSince: null,
+                verifiedAt: null,
+                decisionReason: null,
+                revisionCount: 0,
+              }
+            : null;
       } else if (row.subjectType === CaseSubject.AVAILABILITY) {
         const slots = vendor ? (slotsByVendor.get(vendor.id) ?? []) : [];
         const ordered = [...slots].sort((a, b) => a.date.localeCompare(b.date));
@@ -1007,6 +1034,18 @@ export class SupportCasesService {
     if (dto.outcome === SettlementOutcome.PARTIAL && !dto.amount) {
       throw new BadRequestException('A partial settlement needs the amount that was settled');
     }
+    /*
+     * An officer's proposal is what the complainant is shown as the answer to
+     * their problem, and an action label says what was clicked, not what the
+     * person learns — so a proposal without a note closes a case with nothing
+     * to read. An administrator deciding in one step records findings instead,
+     * and is not made to write a note as well.
+     */
+    if (actor.role !== UserRole.ADMIN && !dto.notes?.trim()) {
+      throw new BadRequestException(
+        'Say what was done about it — the person who raised the case reads this',
+      );
+    }
 
     item.settlementOutcome = dto.outcome;
     item.settlementAmount = dto.amount ? dto.amount.toFixed(2) : null;
@@ -1308,7 +1347,15 @@ export class SupportCasesService {
     const qb = this.cases.createQueryBuilder('c');
 
     if (actor.role === UserRole.IN_PERSON) {
-      qb.where('c."assignedToUserId" = :me', { me: actor.userId });
+      // The Support page asks with scope=raised for the officer's own cases;
+      // the default stays the allocated queue the /cases page runs on, so the
+      // two pages answer different questions through the one endpoint.
+      qb.where(
+        q.scope === 'raised'
+          ? 'c."raisedByUserId" = :me'
+          : 'c."assignedToUserId" = :me',
+        { me: actor.userId },
+      );
     } else if (actor.role === UserRole.ADMIN) {
       qb.where('1 = 1');
     } else {

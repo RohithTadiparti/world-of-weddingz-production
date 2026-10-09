@@ -154,9 +154,13 @@ function ContactSupport() {
 function MyCases() {
   const router = useRouter();
   const cases = useQuery({
-    queryKey: ['support-cases'],
+    queryKey: ['support-cases', 'raised'],
     queryFn: async () => {
-      const data = (await api.get('/verification/cases')).data as SupportCase[] | { data: SupportCase[] };
+      // scope=raised: the officer's Support page is their own raised cases,
+      // not the queue the cases tab already shows them.
+      const data = (await api.get('/verification/cases', { params: { scope: 'raised' } })).data as
+        | SupportCase[]
+        | { data: SupportCase[] };
       return Array.isArray(data) ? data : data.data;
     },
     retry: false,

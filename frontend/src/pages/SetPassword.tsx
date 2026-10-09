@@ -80,7 +80,7 @@ export default function SetPassword() {
           autoComplete="new-password"
           minLength={8}
           maxLength={128}
-          pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}"
+          pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}"
           title="Use an uppercase letter, a lowercase letter and a digit."
           hint="At least 8 characters, with an upper-case letter, a lower-case letter and a digit."
           value={next}

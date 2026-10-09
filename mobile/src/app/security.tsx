@@ -39,6 +39,12 @@ interface Session {
   current: boolean;
 }
 
+interface AuthMe {
+  email: string;
+  phone: string | null;
+  phoneVerifiedAt: string | null;
+}
+
 /** Turns a raw user-agent into something a person can recognise. */
 function describeDevice(ua: string | null): string {
   if (!ua) return 'Unknown device';
@@ -73,10 +79,19 @@ export default function Security() {
   const setUser = useAuth((s) => s.setUser);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [verifyingPhone, setVerifyingPhone] = useState(false);
 
   const { data: sessions, isPending } = useQuery({
     queryKey: ['sessions'],
     queryFn: async () => (await api.get('/auth/sessions')).data as Session[],
+    retry: false,
+  });
+
+  // The account's phone, which the number card below reads; kept out of the
+  // auth store because it is only ever shown alongside this page's answer.
+  const { data: me } = useQuery({
+    queryKey: ['auth-me'],
+    queryFn: async () => (await api.get('/auth/me')).data as AuthMe,
     retry: false,
   });
 
@@ -125,6 +140,52 @@ export default function Security() {
             onPress={() => resend.mutate()}
           />
         )}
+      </Card>
+
+      {/*
+        The number and its verification, as the web Security page has them. A
+        number that is not verified is a number the platform cannot trust for
+        anything — login codes, an officer's out-of-hours contact — and this
+        page was the one place it could be put right from.
+      */}
+      <Card>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: space(2) }}>
+          <View style={{ flex: 1, gap: space(0.5) }}>
+            <SectionTitle>Phone number</SectionTitle>
+            <Body>{me?.phone ?? 'No number on this account'}</Body>
+            {me?.phoneVerifiedAt ? (
+              <Caption tone="brand">Verified</Caption>
+            ) : me?.phone ? (
+              <Caption tone="muted">Not verified yet</Caption>
+            ) : null}
+          </View>
+          {me?.phone && !me.phoneVerifiedAt ? (
+            <Button
+              label={verifyingPhone ? 'Cancel' : 'Verify'}
+              variant="ghost"
+              small
+              onPress={() => {
+                setError('');
+                setNotice('');
+                setVerifyingPhone((open) => !open);
+              }}
+            />
+          ) : null}
+        </View>
+        {verifyingPhone && me?.phone ? (
+          <PhoneVerify
+            onDone={() => {
+              setVerifyingPhone(false);
+              setError('');
+              setNotice('Phone number confirmed.');
+              void qc.invalidateQueries({ queryKey: ['auth-me'] });
+            }}
+            onError={(message) => {
+              setNotice('');
+              setError(message);
+            }}
+          />
+        ) : null}
       </Card>
 
       <ChangePassword
@@ -182,6 +243,61 @@ export default function Security() {
         app. Neither is a thing to do by accident.
       </Caption>
     </Screen>
+  );
+}
+
+/** Sends and confirms the SMS code that proves the number is answered. */
+function PhoneVerify({
+  onDone,
+  onError,
+}: {
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [code, setCode] = useState('');
+  const [sent, setSent] = useState(false);
+
+  const send = useMutation({
+    mutationFn: async () => (await api.post('/auth/phone/send-code')).data as { devCode?: string },
+    onSuccess: () => setSent(true),
+    onError: (err) => onError(apiMessage(err, 'That code could not be sent.')),
+  });
+
+  const confirm = useMutation({
+    mutationFn: async () => {
+      await api.post('/auth/phone/verify', { code: code.trim() });
+    },
+    onSuccess: onDone,
+    onError: (err) => onError(apiMessage(err, 'That code was not accepted.')),
+  });
+
+  return (
+    <View style={{ gap: space(2), marginTop: space(2) }}>
+      {!sent ? (
+        <Button
+          label="Send the code"
+          variant="outline"
+          busy={send.isPending}
+          onPress={() => send.mutate()}
+        />
+      ) : (
+        <>
+          <Field
+            label="Code"
+            value={code}
+            onChangeText={setCode}
+            keyboardType="number-pad"
+            maxLength={6}
+          />
+          <Button
+            label="Confirm code"
+            busy={confirm.isPending}
+            disabled={code.trim().length < 4}
+            onPress={() => confirm.mutate()}
+          />
+        </>
+      )}
+    </View>
   );
 }
 

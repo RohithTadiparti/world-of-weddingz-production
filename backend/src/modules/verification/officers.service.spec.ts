@@ -2,7 +2,7 @@ import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { OfficersService } from './officers.service';
-import { OfficerAvailability, todayIso } from './entities/officer-availability.entity';
+import { OfficerAvailability, availabilityView, todayIso } from './entities/officer-availability.entity';
 import { User } from '../auth/entities/user.entity';
 import { Profile } from '../users/entities/profile.entity';
 import { AppConfigService } from '../../config/app-config.service';
@@ -165,5 +165,30 @@ describe('todayIso', () => {
 
   it('pads month and day', () => {
     expect(todayIso(new Date('2026-01-05T06:30:00Z'))).toBe('2026-01-05');
+  });
+});
+
+describe('availabilityView never set', () => {
+  /*
+   * An officer with no row has never chosen a status, and a roster that prints
+   * "Available" for them is asserting something nobody said. Allocation still
+   * treats a missing row as available, so only the answer to the roster changes.
+   */
+  it('marks a missing row as never set while still answering available', () => {
+    const view = availabilityView(undefined);
+    expect(view.neverSet).toBe(true);
+    expect(view.status).toBe(OfficerAvailabilityStatus.AVAILABLE);
+    expect(view.onLeaveNow).toBe(false);
+  });
+
+  it('marks a saved row as set', () => {
+    const view = availabilityView({
+      status: OfficerAvailabilityStatus.ON_LEAVE,
+      leaveFrom: todayIso(),
+      leaveTo: todayIso(),
+      leaveReason: null,
+    } as OfficerAvailability);
+    expect(view.neverSet).toBe(false);
+    expect(view.status).toBe(OfficerAvailabilityStatus.ON_LEAVE);
   });
 });

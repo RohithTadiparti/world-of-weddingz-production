@@ -42,6 +42,12 @@ export class OfficerAvailability {
 /** The officer's availability as anyone reading a roster wants it. */
 export interface AvailabilityView {
   status: OfficerAvailabilityStatus;
+  /**
+   * Whether the officer has ever set anything. Allocation keeps treating no row
+   * as available, but a roster that prints "Available" for them is asserting a
+   * choice nobody made, so the reader can say "not set" instead.
+   */
+  neverSet: boolean;
   leaveFrom: string | null;
   leaveTo: string | null;
   leaveReason: string | null;
@@ -103,6 +109,7 @@ export function isOnLeaveNow(
 export function availabilityView(a: OfficerAvailability | null | undefined): AvailabilityView {
   return {
     status: a?.status ?? OfficerAvailabilityStatus.AVAILABLE,
+    neverSet: !a,
     leaveFrom: a?.leaveFrom ?? null,
     leaveTo: a?.leaveTo ?? null,
     leaveReason: a?.leaveReason ?? null,

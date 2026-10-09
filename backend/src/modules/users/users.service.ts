@@ -93,6 +93,20 @@ export class UsersService {
       // DTO validation normally performs this transform; keeping the service
       // defensive prevents a direct caller from storing a differently formatted number.
       (dto as { contactPhone?: string }).contactPhone = phone;
+
+      /*
+       * The account's phone is the one /auth/me, phone verification and every
+       * staff roster read; the profile's contactPhone is only on the profile
+       * form. Writing the profile alone left all of those on the previous
+       * number after the person changed it, so the account follows here and the
+       * number becomes unverified again until they re-verify it.
+       */
+      const account = accountUsingPhone ?? (await this.users.findOne({ where: { id: userId } }));
+      if (account && account.phone !== phone) {
+        account.phone = phone;
+        account.phoneVerifiedAt = null;
+        await this.users.save(account);
+      }
     }
 
     // The profile form can carry the whole photo list, so this is an attach
@@ -201,8 +215,11 @@ export class UsersService {
       counts['/cases'] = await this.cases.count({
         where: { assignedToUserId: actor.userId, status: In(active) },
       });
-      // The same queue, shown on both entries.
-      counts['/support'] = counts['/cases'];
+      // The Support page is the officer's own raised cases — different work
+      // from the queue, so its badge counts those and not the queue again.
+      counts['/support'] = await this.cases.count({
+        where: { raisedByUserId: actor.userId, status: In(active) },
+      });
     }
 
     counts['/notifications'] = await this.notifications.count({

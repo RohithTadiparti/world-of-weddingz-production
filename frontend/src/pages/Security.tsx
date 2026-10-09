@@ -356,7 +356,7 @@ function ChangePasswordCard() {
           autoComplete="new-password"
           minLength={8}
           maxLength={128}
-          pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}"
+          pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}"
           title="Use an uppercase letter, a lowercase letter and a digit."
           hint="Use an uppercase letter, a lowercase letter and a digit."
           value={newPassword}
