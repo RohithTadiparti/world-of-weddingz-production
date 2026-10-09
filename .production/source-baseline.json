@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "2bd8eaa40013eb694ef44aa103e1b7b89c4d59b3",
-  "snapshotDate": "2026-10-08",
+  "reviewedCommit": "0d23fa25f166b61dae654b44c7b3b818102ad2e6",
+  "snapshotDate": "2026-10-09",
   "historyImported": false,
-  "notes": "Reviewed through WOW-MD PR 63 at 2bd8eaa. RLY-001, S3-001 and QA-001 record the intervening Railway contract, private-media guardrail and capacity-harness merges. SYNC-007 accepts the reviewed live E2E fixes, session and PII hardening, media-origin controls, maintenance utilities, two documented migrations and their regression coverage. Remaining uncommitted source changes still require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 75 at 0d23fa2. Change-intake rows CHG-019 through CHG-024 classify client observability, officer QA fixes, dependency locks, OPS-002, OPS-003 and UI-001. The scanner-only fixture cleanup in PR 76 is included in the reviewed source history and changes no behavior. Remaining uncommitted source changes still require separate intake review."
 }
