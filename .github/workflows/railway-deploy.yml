@@ -51,6 +51,24 @@ jobs:
             *) echo 'Railway smoke URLs must both use HTTPS'; exit 1 ;;
           esac
 
+      - name: Verify Railway project token scope
+        run: |
+          response_file="$(mktemp)"
+          http_status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+            --request POST \
+            --url https://backboard.railway.com/graphql/v2 \
+            --header "Project-Access-Token: $RAILWAY_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data '{"query":"query { projectToken { projectId environmentId } }"}')"
+          if [ "$http_status" != 200 ]; then
+            echo "::error::RAILWAY_TOKEN is not a valid project token for the staging environment (Railway HTTP $http_status). Create it under Project Settings > Tokens, not Account Settings > Tokens."
+            exit 1
+          fi
+          token_project_id="$(jq -r '.data.projectToken.projectId // empty' "$response_file")"
+          token_environment_id="$(jq -r '.data.projectToken.environmentId // empty' "$response_file")"
+          test "$token_project_id" = "$RAILWAY_PROJECT_ID" || { echo '::error::RAILWAY_TOKEN belongs to a different project'; exit 1; }
+          test "$token_environment_id" = "$RAILWAY_ENVIRONMENT_ID" || { echo '::error::RAILWAY_TOKEN belongs to a different environment'; exit 1; }
+
       - name: Install pinned Railway CLI
         run: npm install --global @railway/cli@5.63.4
 

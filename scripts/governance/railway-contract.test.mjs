@@ -55,3 +55,12 @@ test('new Railway services avoid deprecated config-as-code bootstrap instruction
   assert.doesNotMatch(guide, /Set each repository service's config-file path/i);
 });
 
+test('Railway deployment verifies project-token scope before invoking the CLI', () => {
+  const workflow = read('.github/workflows/railway-deploy.yml');
+
+  assert.match(workflow, /Project-Access-Token: \$RAILWAY_TOKEN/);
+  assert.match(workflow, /projectToken \{ projectId environmentId \}/);
+  assert.match(workflow, /RAILWAY_PROJECT_ID/);
+  assert.match(workflow, /RAILWAY_ENVIRONMENT_ID/);
+});
+
