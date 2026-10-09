@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { bootstrapSession } from '@/lib/api';
+import { installGlobalErrorReporting } from '@/lib/client-errors';
 import { useAuth } from '@/store/auth';
 import { rgb, useHydrateTheme, useTheme } from '@/theme';
 import { FONT_ASSETS, typeface } from '@/theme/fonts';
@@ -94,6 +95,8 @@ export default function RootLayout() {
   useEffect(() => {
     void bootstrapSession().finally(() => setBooted(true));
   }, []);
+
+  useEffect(() => installGlobalErrorReporting(), []);
 
   const ready = themeReady && booted && authReady && (fontsLoaded || Boolean(fontError));
 

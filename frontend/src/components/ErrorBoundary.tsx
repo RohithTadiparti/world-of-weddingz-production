@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { ArrowClockwise, Warning } from '@phosphor-icons/react';
+import { reportClientError } from '../lib/client-errors';
 
 /**
  * Keeps one broken screen from taking the whole application with it.
@@ -40,6 +41,11 @@ export default class ErrorBoundary extends Component<Props, State> {
     // the stack is for the person fixing it, and swallowing it here would trade
     // one silent failure for another.
     console.error('Screen failed to render', error, info.componentStack);
+    reportClientError({
+      category: 'render',
+      message: error.message,
+      stack: [error.stack, info.componentStack].filter(Boolean).join('\n'),
+    });
   }
 
   render(): ReactNode {

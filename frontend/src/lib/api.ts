@@ -1,5 +1,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuth } from '../store/auth';
+import { newRequestId, reportClientError } from './client-errors';
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -10,6 +11,7 @@ export const api = axios.create({
 
 // Attach the access token to every request.
 api.interceptors.request.use((config) => {
+  config.headers['X-Request-ID'] = config.headers['X-Request-ID'] || newRequestId();
   const token = useAuth.getState().accessToken;
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
@@ -117,6 +119,16 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${token}`;
         return api(original);
       }
+    }
+
+    const status = error.response?.status;
+    if ((!status || status >= 500) && !url.includes('/telemetry/client-errors')) {
+      reportClientError({
+        category: status ? 'server' : 'network',
+        message: status ? `API request failed with ${status}` : 'API request failed without a response',
+        route: url,
+        requestId: String(original?.headers?.['X-Request-ID'] ?? ''),
+      });
     }
 
     return Promise.reject(error);
