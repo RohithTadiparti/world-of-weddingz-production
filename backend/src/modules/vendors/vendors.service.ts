@@ -29,6 +29,13 @@ import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
 import { likeEscape } from '../../common/util/like';
 import { SocialLink, resolveSocialLinks } from '../../common/dto/social-links.dto';
+import { rulesFor } from './business-lifecycle';
+import {
+  alignComplianceDocumentTypes,
+  dedupeSocialLinksByPlatform,
+  isComplianceDocumentFormat,
+  resolveProfileImage,
+} from './vendor-listing-rules';
 
 /**
  * One listing, as somebody who is not the vendor may see it.
@@ -57,6 +64,8 @@ export interface PublicVendor {
   description: string;
   city: string;
   portfolio: string[];
+  /** The portfolio image the business shows as its picture; the first one when none was chosen. */
+  profileImage: string | null;
   ratingAvg: number;
   ratingCount: number;
   /**
@@ -87,6 +96,68 @@ export interface PublicVendor {
   youtubeUrl: string | null;
 }
 
+function refuse(message: string): never {
+  throw new BadRequestException([message]);
+}
+
+/** Two JSON values equal by content (arrays by order). */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * New compliance documents must be PDF, JPG, JPEG or PNG files. One already on
+ * the record may be resent as it is, whatever it is, so a listing saved before
+ * the rule can still save its other fields (the kept-media.ts principle).
+ */
+function assertComplianceDocumentFormats(
+  next: readonly string[] | undefined,
+  stored: readonly string[] | null | undefined,
+): void {
+  if (!next?.length) return;
+  const kept = new Set(stored ?? []);
+  if (next.some((url) => !kept.has(url) && !isComplianceDocumentFormat(url))) {
+    refuse('Compliance documents must be PDF, JPG, JPEG or PNG files');
+  }
+}
+
+/** The type of each document, aligned with the list; never more types than documents. */
+function documentTypesFor(
+  documents: readonly string[],
+  sent: ReadonlyArray<string | null> | undefined,
+  stored?: Pick<Vendor, 'complianceDocuments' | 'complianceDocumentTypes'>,
+): (string | null)[] {
+  if (sent && sent.length > documents.length) {
+    refuse('complianceDocumentTypes must have one entry per compliance document');
+  }
+  return alignComplianceDocumentTypes(documents, sent, {
+    documents: stored?.complianceDocuments,
+    types: stored?.complianceDocumentTypes,
+  });
+}
+
+/**
+ * The profile picture for this portfolio. A picture the client chose must be
+ * one of the images; otherwise the stored choice is kept while its image is,
+ * and the first image stands in when it is not.
+ */
+function profileImageFor(
+  portfolio: readonly string[],
+  chosen: string | null | undefined,
+  explicit: boolean,
+): string | null {
+  if (explicit && chosen && !portfolio.includes(chosen)) {
+    refuse('profileImage must be one of the portfolio images');
+  }
+  return resolveProfileImage(portfolio, chosen);
+}
+
+/** Whether this listing's city may be edited right now, by the lifecycle's rules. */
+function cityEditable(vendor: Vendor): boolean {
+  const fields = vendor.correctionFields;
+  return rulesFor(vendor.status).editIdentity && (!fields?.length || fields.includes('city'));
+}
+
 export function publicVendor(v: Vendor, startingPrice: number | null = null): PublicVendor {
   return {
     id: v.id,
@@ -97,6 +168,7 @@ export function publicVendor(v: Vendor, startingPrice: number | null = null): Pu
     description: v.description,
     city: v.city,
     portfolio: v.portfolio,
+    profileImage: resolveProfileImage(v.portfolio, v.profileImage),
     ratingAvg: v.ratingAvg,
     ratingCount: v.ratingCount,
     registeredAddress: v.registeredAddress,
@@ -106,7 +178,7 @@ export function publicVendor(v: Vendor, startingPrice: number | null = null): Pu
     verifiedAt: v.verifiedAt,
     createdAt: v.createdAt,
     startingPrice,
-    socialLinks: v.socialLinks ?? [],
+    socialLinks: dedupeSocialLinksByPlatform(v.socialLinks),
     website: v.website ?? null,
     instagramUrl: v.instagramUrl ?? null,
     youtubeUrl: v.youtubeUrl ?? null,
@@ -160,6 +232,7 @@ export class VendorsService {
     // Nothing is stored yet, so every file named here must be an upload.
     assertNewMediaUploaded('complianceDocuments', dto.complianceDocuments, []);
     assertNewMediaUploaded('portfolio', dto.portfolio, []);
+    assertComplianceDocumentFormats(dto.complianceDocuments, []);
     // The links are written through resolveSocialLinks, with their mirrors.
     const { socialLinks: _links, ...rest } = dto;
     const fields: Partial<Omit<CreateVendorDto, 'socialLinks'>> = { ...rest };
@@ -172,6 +245,11 @@ export class VendorsService {
       this.vendors.create({
         ...fields,
         ...(resolveSocialLinks(dto) ?? {}),
+        complianceDocumentTypes: documentTypesFor(
+          dto.complianceDocuments ?? [],
+          dto.complianceDocumentTypes,
+        ),
+        profileImage: profileImageFor(dto.portfolio ?? [], dto.profileImage, true),
         categories,
         category: categories[0],
         otherCategory: null,
@@ -240,6 +318,7 @@ export class VendorsService {
     // may come back as it is; a new one must be an upload.
     assertNewMediaUploaded('complianceDocuments', dto.complianceDocuments, vendor.complianceDocuments);
     assertNewMediaUploaded('portfolio', dto.portfolio, vendor.portfolio);
+    assertComplianceDocumentFormats(dto.complianceDocuments, vendor.complianceDocuments);
 
     // Enforced here, not by hiding a button. A vendor who edits their GST
     // number after an officer has been sent to check it has verified nothing,
@@ -261,7 +340,55 @@ export class VendorsService {
     // of them the client sent (see resolveSocialLinks).
     delete changes.socialLinks;
     const social = resolveSocialLinks(dto, vendor);
-    if (social) Object.assign(changes, social);
+    // A legacy list with a repeated platform is read back with each platform
+    // once (listOwn); the form resending that list has changed nothing, so it
+    // is not treated as an edit and the stored row is left as it is.
+    const onlyDeduped =
+      social !== null &&
+      sameJson(social.socialLinks, dedupeSocialLinksByPlatform(vendor.socialLinks)) &&
+      !sameJson(social.socialLinks, vendor.socialLinks ?? []);
+    if (social && !onlyDeduped) Object.assign(changes, social);
+
+    // The type beside each document, kept aligned with the list; written only
+    // when it actually changes, so an untouched list is not an edit.
+    delete changes.complianceDocumentTypes;
+    if (dto.complianceDocuments !== undefined || dto.complianceDocumentTypes !== undefined) {
+      const types = documentTypesFor(
+        dto.complianceDocuments ?? vendor.complianceDocuments ?? [],
+        dto.complianceDocumentTypes,
+        vendor,
+      );
+      if (!sameJson(types, vendor.complianceDocumentTypes ?? [])) {
+        changes.complianceDocumentTypes = types;
+      }
+    }
+
+    // The profile picture is always one of the portfolio images: a chosen one
+    // must be, and one whose image was removed moves to the first image.
+    delete changes.profileImage;
+    if (dto.portfolio !== undefined || dto.profileImage !== undefined) {
+      const explicit = dto.profileImage !== undefined;
+      const picture = profileImageFor(
+        dto.portfolio ?? vendor.portfolio ?? [],
+        explicit ? dto.profileImage : vendor.profileImage,
+        explicit,
+      );
+      if (picture !== (vendor.profileImage ?? null)) changes.profileImage = picture;
+    }
+
+    // A city stored before cities were title-cased ("hyderabad") comes back
+    // from the form as "Hyderabad". That is not an edit, and must not trip the
+    // correction or verified-listing lock over a field nobody touched; it is
+    // written in its new case only where the city may be edited anyway.
+    if (
+      typeof changes.city === 'string' &&
+      typeof vendor.city === 'string' &&
+      changes.city !== vendor.city &&
+      changes.city.toLowerCase() === vendor.city.toLowerCase() &&
+      !cityEditable(vendor)
+    ) {
+      changes.city = vendor.city;
+    }
 
     this.lifecycle.assertIdentityEditable(vendor, changes);
 
@@ -275,8 +402,21 @@ export class VendorsService {
     return saved;
   }
 
-  listOwn(ownerUserId: string): Promise<Vendor[]> {
-    return this.vendors.find({ where: { ownerUserId }, order: { createdAt: 'DESC' } });
+  /**
+   * The owner's listings, read the way a save now stores them: each social
+   * platform once (rows saved before duplicates were refused can repeat one,
+   * which the Review step then showed twice) and a profile picture filled in
+   * from the first portfolio image where none was chosen.
+   */
+  async listOwn(ownerUserId: string): Promise<Vendor[]> {
+    const rows = await this.vendors.find({ where: { ownerUserId }, order: { createdAt: 'DESC' } });
+    return rows.map((row) =>
+      Object.assign(row, {
+        socialLinks: dedupeSocialLinksByPlatform(row.socialLinks),
+        profileImage: resolveProfileImage(row.portfolio, row.profileImage),
+        complianceDocumentTypes: row.complianceDocumentTypes ?? [],
+      }),
+    );
   }
 
   /** Dashboard issue buckets are derived from the same cases Support exposes. */
@@ -285,7 +425,12 @@ export class VendorsService {
       where: { raisedByUserId: ownerUserId },
       select: ['id', 'status'],
     });
-    const solved = new Set([CaseStatus.RESOLVED, CaseStatus.REJECTED, CaseStatus.CLOSED]);
+    const solved = new Set([
+      CaseStatus.RESOLVED,
+      CaseStatus.REJECTED,
+      CaseStatus.CLOSED,
+      CaseStatus.CANCELLED,
+    ]);
     // Anything not yet solved is pending, open cases included, so every case
     // lands in exactly one of the two buckets.
     const pending = rows.filter((row) => !solved.has(row.status));

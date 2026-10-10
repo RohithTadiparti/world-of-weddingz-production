@@ -6,15 +6,11 @@ import { CalendarBlank, MapPin, UsersThree } from 'phosphor-react-native';
 
 import { api } from '@/lib/api';
 import {
-  ACTIONS,
   PAYMENT_LABEL,
   PAYMENT_TONE,
-  QUOTABLE,
   QUOTATION_STAGE_LABEL,
   QUOTATION_STAGE_TONE,
   SELLER_STATUS_LABEL,
-  canMarkCompleted,
-  canMarkDelivered,
   isRequestOnDate,
   nextActionFor,
   type IncomingBooking,
@@ -25,6 +21,8 @@ import { BookingDetail } from '@/components/bookings/detail';
 import { BookingChat } from '@/components/bookings/chat';
 import { RequestedServices } from '@/components/bookings/requested-services';
 import { QuotationForm } from '@/components/bookings/quotation';
+import { RaiseIssueForm } from '@/components/bookings/raise-issue';
+import { isRequoteRequested, pricingModelLabel, sellerActions } from '@/shared/booking-rules';
 import { PromptSheet } from '@/components/prompt';
 import { Body, Button, Caption, Card } from '@/components/ui';
 import { radius, rgb, space, useTheme } from '@/theme';
@@ -67,6 +65,7 @@ export function BookingCard({
   const [expanded, setExpanded] = useState(openByDefault);
   const [quoting, setQuoting] = useState(false);
   const [deliveryPrompt, setDeliveryPrompt] = useState(false);
+  const [raising, setRaising] = useState(false);
 
   // The list recycles its rows, so a card that was already mounted when the
   // request to open it arrived would keep its own collapsed state.
@@ -74,15 +73,13 @@ export function BookingCard({
     if (openByDefault) setExpanded(true);
   }, [openByDefault]);
 
-  const actions = ACTIONS[booking.status] ?? [];
+  // What the provider may do now (rows 17 and 20), from the shared rules.
+  const actions = sellerActions(booking, { canQuote });
+  const requote = isRequoteRequested(booking);
   const onDate = isRequestOnDate(booking);
   const paid = Number(booking.paidAmount ?? 0);
   const remaining = Math.max(0, Number(booking.amount ?? 0) - paid);
   const nextAction = nextActionFor(booking);
-  const deliverable = canMarkDelivered(booking);
-  const canAccept =
-    booking.status === 'requested' &&
-    (Number(booking.estimatedAmount ?? 0) > 0 || Number(booking.expectedBudget ?? 0) > 0);
 
   return (
     <Card>
@@ -105,21 +102,18 @@ export function BookingCard({
           {/* The real customer name; "Customer" only when the record genuinely
               has no name, never "A client". */}
           <Body numberOfLines={2}>
-            {booking.clientName ?? booking.clientEmail ?? 'Customer'}
+            {booking.clientName ?? 'Customer'}
             {booking.serviceName ? ` · ${booking.serviceName}` : ''}
+            {pricingModelLabel(booking.pricingModel) ? ` (${pricingModelLabel(booking.pricingModel)})` : ''}
             {booking.offeringName ? ` · ${booking.offeringName}` : ''}
           </Body>
           <Caption tone="faint">
             Asked {shortDate(booking.createdAt)} · {booking.id.slice(0, 8)}
           </Caption>
-          {/* The customer's own contact and location, so the provider can reach
-              them and place the event without opening another screen. */}
-          {booking.clientPhone || booking.clientEmail || booking.clientCity || booking.eventCity ? (
-            <Caption tone="faint">
-              {[booking.clientPhone, booking.clientEmail, booking.clientCity ?? booking.eventCity]
-                .filter(Boolean)
-                .join(' · ')}
-            </Caption>
+          {/* Where the customer is. Their phone and email are not shown to a
+              vendor (WOW-06); Messages opens once the advance is paid. */}
+          {booking.clientCity || booking.eventCity ? (
+            <Caption tone="faint">{booking.clientCity ?? booking.eventCity}</Caption>
           ) : null}
         </View>
       </View>
@@ -134,7 +128,8 @@ export function BookingCard({
         ) : null}
         {/* A declined, withdrawn or revised offer is not a new request, and the
             card says so (EZ1-I264). */}
-        {booking.quotation && ['requested', 'quotation_sent'].includes(booking.status) ? (
+        {requote ? <Badge tone="critical">Quotation rejected - requote requested</Badge> : null}
+        {booking.quotation && !requote && ['requested', 'quotation_sent'].includes(booking.status) ? (
           <Badge tone={QUOTATION_STAGE_TONE[booking.quotation.stage]}>
             {QUOTATION_STAGE_LABEL[booking.quotation.stage]}
           </Badge>
@@ -151,7 +146,7 @@ export function BookingCard({
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space(3) }}>
         {booking.eventDate ? (
           <Fact icon={<CalendarBlank size={14} color={rgb(theme.ink[400])} />}>
-            {shortDate(booking.eventDate)}
+            {`${shortDate(booking.eventDate)}${booking.requestedTime ? ` · ${booking.requestedTime}` : ''}`}
           </Fact>
         ) : null}
         {booking.eventVenue || booking.eventCity ? (
@@ -274,77 +269,93 @@ export function BookingCard({
         </>
       )}
 
-      {(actions.length > 0 || canAccept || (canQuote && QUOTABLE.includes(booking.status))) && (
+      {actions.length > 0 && (
         <View style={{ gap: space(2) }}>
-          {canAccept ? (
-            <Button
-              label="Accept"
-              disabled={acting}
-              onPress={() =>
-                NativeAlert.alert(
-                  'Accept booking request?',
-                  'The customer will be asked to pay the advance once you accept.',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Accept', onPress: () => onAct(booking.id, 'accept') },
-                  ],
-                )
-              }
-            />
-          ) : null}
-          {canQuote && QUOTABLE.includes(booking.status) ? (
-            <Button
-              label={booking.quotation ? 'Re-quote' : 'Send quotation'}
-              onPress={() => setQuoting((q) => !q)}
-            />
-          ) : null}
-          {actions.map((action) => (
-            <Button
-              key={action.path}
-              label={action.label}
-              variant={action.primary ? 'primary' : 'outline'}
-              // The server refuses a delivery before the second instalment;
-              // the Next line above says why (EZ1-I266).
-              disabled={
-                acting ||
-                (action.path === 'complete' && !deliverable) ||
-                (action.path === 'mark-completed' && !canMarkCompleted(booking))
-              }
-              onPress={() => {
-                if (action.path === 'quotations/withdraw') {
-                  NativeAlert.alert(
-                    'Withdraw this quotation?',
-                    'The customer can no longer accept it, and the request comes back to you to price again.',
-                    [
-                      { text: 'Keep it', style: 'cancel' },
-                      {
-                        text: 'Withdraw',
-                        style: 'destructive',
-                        onPress: () => onAct(booking.id, action.path),
-                      },
-                    ],
-                  );
-                  return;
-                }
-                /*
-                  Marking a delivery asks what was delivered.
-
-                  Optional — a caterer has nothing to show, a photographer has a
-                  gallery link — but when it is given it stays on the booking,
-                  which is what the customer reads before confirming and what an
-                  administrator settling a later dispute needs. Cancelling the
-                  prompt cancels the action rather than marking it delivered
-                  with no note.
-                */
-                if (action.path === 'complete') {
-                  setDeliveryPrompt(true);
-                  return;
-                }
-                onAct(booking.id, action.path);
-              }}
-            />
-          ))}
+          {actions.map((action) => {
+            if (action.key === 'requote' || action.key === 'send_quote') {
+              return (
+                <Button
+                  key={action.key}
+                  label={action.label}
+                  variant={action.primary ? 'primary' : 'outline'}
+                  onPress={() => setQuoting((q) => !q)}
+                />
+              );
+            }
+            if (action.key === 'raise_issue') {
+              return (
+                <Button
+                  key={action.key}
+                  label={raising ? 'Never mind' : action.label}
+                  variant="outline"
+                  onPress={() => setRaising((r) => !r)}
+                />
+              );
+            }
+            return (
+              <View key={action.key} style={{ gap: space(1) }}>
+                <Button
+                  label={action.label}
+                  variant={action.primary ? 'primary' : 'outline'}
+                  disabled={acting || Boolean(action.disabledReason)}
+                  onPress={() => {
+                    if (action.key === 'withdraw_quote') {
+                      NativeAlert.alert(
+                        'Withdraw this quotation?',
+                        'The customer can no longer accept it, and the request comes back to you to price again.',
+                        [
+                          { text: 'Keep it', style: 'cancel' },
+                          {
+                            text: 'Withdraw',
+                            style: 'destructive',
+                            onPress: () => onAct(booking.id, action.path as string),
+                          },
+                        ],
+                      );
+                      return;
+                    }
+                    if (action.key === 'accept_request') {
+                      NativeAlert.alert(
+                        `${action.label}?`,
+                        'The customer will be asked to pay the advance once you accept.',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Accept',
+                            onPress: () => onAct(booking.id, 'accept', { amount: action.amount }),
+                          },
+                        ],
+                      );
+                      return;
+                    }
+                    // Marking a delivery asks what was delivered; cancelling the
+                    // prompt cancels the action.
+                    if (action.key === 'deliver') {
+                      setDeliveryPrompt(true);
+                      return;
+                    }
+                    onAct(booking.id, action.path as string);
+                  }}
+                />
+                {/* Why it is unavailable, on the card (row 20). */}
+                {action.disabledReason ? (
+                  <Caption style={{ color: rgb(theme.cautionFg) }}>{action.disabledReason}</Caption>
+                ) : null}
+              </View>
+            );
+          })}
         </View>
+      )}
+
+      {raising && (
+        <RaiseIssueForm
+          bookingId={booking.id}
+          onCancel={() => setRaising(false)}
+          onDone={() => {
+            setRaising(false);
+            onQuoted();
+          }}
+        />
       )}
 
       {quoting && (

@@ -61,6 +61,14 @@ export class Vendor {
   @Column({ type: 'jsonb', default: [] })
   portfolio: string[];
 
+  /**
+   * The portfolio image shown as the business's profile picture. Always one of
+   * `portfolio` (the service keeps it so); null when there are no images, and
+   * readers fall back to the first image for rows saved before it existed.
+   */
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  profileImage: string | null;
+
   @Column({ type: 'float', default: 0 })
   ratingAvg: number;
 
@@ -115,6 +123,14 @@ export class Vendor {
   /** Uploaded certificates and licences, as media URLs. */
   @Column({ type: 'jsonb', default: [] })
   complianceDocuments: string[];
+
+  /**
+   * What each compliance document is (GST certificate, PAN card, Aadhaar card,
+   * business registration certificate), aligned by position with
+   * `complianceDocuments`; null where the vendor has not said.
+   */
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  complianceDocumentTypes: (string | null)[];
 
   @Index()
   @Column({ default: false })

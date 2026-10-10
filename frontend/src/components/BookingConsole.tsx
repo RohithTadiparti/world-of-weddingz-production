@@ -15,6 +15,7 @@ import {
   nextActionFor,
   type QuotationSummary,
 } from '../lib/booking-progress';
+import { isRequoteRequested, pricingModelLabel } from '../lib/booking-rules';
 
 /**
  * The work coming in, as one screen instead of four.
@@ -50,8 +51,12 @@ interface IncomingBooking {
   /** Planner requests only: the services the couple ticked, as catalogue keys. */
   requestedServices?: string[];
   clientName: string | null;
-  clientEmail: string | null;
-  clientPhone: string | null;
+  /** How the vendor prices what was booked, e.g. "fixed" (WOW-06, row 15). */
+  pricingModel?: string | null;
+  /** The customer declined the latest quotation (row 17). */
+  requoteRequested?: boolean;
+  /** The time asked for on a request for an unpublished date (row 13). */
+  requestedTime?: string | null;
   /** The client's own city and photo, for the provider's booking detail (EZ1-I109). */
   clientCity?: string | null;
   clientPhoto?: string | null;
@@ -186,7 +191,7 @@ export default function BookingConsole({
       if (!term) return true;
       // Everything somebody might type: a couple, a booking reference, a
       // venue, a city, a service.
-      return [b.clientName, b.clientEmail, b.eventName, b.eventVenue, b.eventCity, b.serviceName, b.id]
+      return [b.clientName, b.eventName, b.eventVenue, b.eventCity, b.serviceName, b.id]
         .filter(Boolean)
         .some((field) => String(field).toLowerCase().includes(term));
     });
@@ -308,9 +313,14 @@ export default function BookingConsole({
                   <p className="font-medium text-gray-900">
                     {/* The real customer/couple name; "Customer" only when the
                         record genuinely has no name (EZ1-I33), never "A client". */}
-                    {booking.clientName ?? booking.clientEmail ?? 'Customer'}
+                    {booking.clientName ?? 'Customer'}
                     {booking.serviceName && (
                       <span className="font-normal text-gray-500"> · {booking.serviceName}</span>
+                    )}
+                    {pricingModelLabel(booking.pricingModel) && (
+                      <span className="ml-1.5 rounded-sm bg-surface-sunken px-1.5 py-0.5 align-middle text-[0.6875rem] font-normal text-gray-600">
+                        {pricingModelLabel(booking.pricingModel)}
+                      </span>
                     )}
                     {booking.offeringName && (
                       <span className="font-normal text-gray-400"> · {booking.offeringName}</span>
@@ -319,14 +329,12 @@ export default function BookingConsole({
                   <p className="text-xs text-gray-500">
                     Asked {formatDate(booking.createdAt)} · {booking.id.slice(0, 8)}
                   </p>
-                  {/* The customer's own contact and location, so the provider can
-                      reach them and place the event without opening another
-                      screen (EZ1-I109). */}
-                  {(booking.clientPhone || booking.clientEmail || booking.clientCity || booking.eventCity) && (
+                  {/* Where the customer is. Their phone and email are not shown
+                      to a vendor (WOW-06): the booking's chat opens once the
+                      advance is paid. */}
+                  {(booking.clientCity || booking.eventCity) && (
                     <p className="mt-0.5 text-xs text-gray-500">
-                      {[booking.clientPhone, booking.clientEmail, booking.clientCity ?? booking.eventCity]
-                        .filter(Boolean)
-                        .join(' · ')}
+                      {booking.clientCity ?? booking.eventCity}
                     </p>
                   )}
                   </div>
@@ -351,7 +359,13 @@ export default function BookingConsole({
                   )}
                   {/* A declined, withdrawn or revised offer is not a new request,
                       and the row says so (EZ1-I264). */}
+                  {isRequoteRequested(booking) && (
+                    <span className="rounded-sm bg-critical-bg px-2 py-0.5 text-xs font-medium text-critical-fg">
+                      Quotation rejected - requote requested
+                    </span>
+                  )}
                   {booking.quotation &&
+                    !isRequoteRequested(booking) &&
                     ['requested', 'quotation_sent'].includes(booking.status) && (
                       <span
                         className={`rounded-sm px-2 py-0.5 text-xs ${QUOTATION_STAGE_TONE[booking.quotation.stage]}`}
@@ -380,7 +394,10 @@ export default function BookingConsole({
                 {booking.eventDate && (
                   <div className="flex items-center gap-1.5">
                     <CalendarBlank size={13} className="text-gray-400" aria-hidden />
-                    <dd>{formatDate(booking.eventDate)}</dd>
+                    <dd>
+                      {formatDate(booking.eventDate)}
+                      {booking.requestedTime ? ` · ${booking.requestedTime}` : ''}
+                    </dd>
                   </div>
                 )}
                 {(booking.eventVenue || booking.eventCity) && (

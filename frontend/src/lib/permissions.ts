@@ -185,7 +185,8 @@ export type CaseStatus =
   | 'resolved'
   | 'rejected'
   | 'escalated'
-  | 'closed';
+  | 'closed'
+  | 'cancelled';
 
 export type ProfileLifecycle = 'active' | 'deactivated' | 'archived';
 
@@ -262,6 +263,8 @@ export const CASE_ACTION_LABEL: Record<string, string> = {
   review: 'Reviewed',
   correct: 'Corrected',
   resolve: 'Resolved',
+  grant_edit_access: 'Edit access granted',
+  cancelled: 'Request cancelled',
 };
 
 /**
@@ -397,9 +400,14 @@ export const CASE_STATUS_LABEL: Record<string, string> = {
   in_progress: 'Under investigation',
   waiting_for_information: 'Waiting on you',
   escalated: 'Escalated for a visit',
-  resolved: 'Settled',
+  resolved: 'Resolved',
   rejected: 'Not upheld',
   closed: 'Closed',
+  cancelled: 'Cancelled',
+  triaged: 'Open',
+  reassigned: 'Being looked at again',
+  resolution_submitted: 'Resolution in review',
+  admin_review: 'Resolution in review',
 };
 
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;

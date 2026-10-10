@@ -78,6 +78,14 @@ export class Booking {
   eventDate: string | null;
 
   /**
+   * The time of day asked for on a request made for a date the provider never
+   * published a window on ("Request on Date"), as HH:MM. A request against a
+   * published window carries the window's own times, so this stays null there.
+   */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  requestedTime: string | null;
+
+  /**
    * The published window this booking holds.
    *
    * A booking without one is a legacy row or a planner engagement; for a vendor
@@ -260,6 +268,12 @@ export class Booking {
   eventCity?: string | null;
   expectedGuests?: number | null;
   serviceName?: string | null;
+  /**
+   * How the vendor prices what was booked -- the chosen package's model, or
+   * the service's own models when no package was picked -- for the label
+   * beside the service name (e.g. "Fixed price").
+   */
+  pricingModel?: string | null;
   /** The package the customer picked, resolved from offeringId (EZ1-I33). */
   offeringName?: string | null;
   /** The furthest this booking's money has got, not a list of transactions. */
@@ -285,6 +299,11 @@ export class Booking {
   sharedFromPartner?: boolean;
   /** The newest quotation, and where the price negotiation stands (EZ1-I264). */
   quotation?: QuotationSummary | null;
+  /**
+   * The customer declined the latest quotation and is waiting on a requote.
+   * The provider may then only requote or cancel.
+   */
+  requoteRequested?: boolean;
   /**
    * Asked for on a date the provider never published a window for (EZ1-I266).
    * Worked out on the server so the row, its badge and the tab count share one

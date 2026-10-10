@@ -9,6 +9,15 @@ import { formatDateTime } from '../lib/dates';
 import { Loading } from '../components/ui/Feedback';
 import { useAuth } from '../store/auth';
 import { CASE_ACTION_LABEL, isProvider } from '../lib/permissions';
+import {
+  type CaseHistoryEntry,
+  canClose,
+  canReply,
+  raiserTimeline,
+  supportBucket,
+  supportPrefill,
+  supportStatusLabel,
+} from '../lib/support-cases';
 
 interface SupportCase {
   id: string;
@@ -19,7 +28,7 @@ interface SupportCase {
   status: string;
   evidence?: string[];
   createdAt: string;
-  history?: { at: string; byUserId: string; status: string; remarks?: string }[];
+  history?: CaseHistoryEntry[];
   /** The officer's investigation and the resolution, once there is one (EZ1-I49). */
   findings?: string | null;
   settlementOutcome?: string | null;
@@ -28,21 +37,6 @@ interface SupportCase {
   resolutionAction?: string | null;
   resolvedAt?: string | null;
 }
-
-const STATUS_LABEL: Record<string, string> = {
-  open: 'Open',
-  triaged: 'Triaged',
-  allocated: 'With an investigator',
-  in_progress: 'Being looked into',
-  waiting_for_information: 'Waiting on you',
-  resolution_submitted: 'Resolution in review',
-  admin_review: 'Resolution in review',
-  reassigned: 'Sent for another look',
-  resolved: 'Resolved',
-  rejected: 'Closed, no action',
-  escalated: 'Escalated for a visit',
-  closed: 'Closed',
-};
 
 const STATUS_TONE: Record<string, string> = {
   open: 'bg-amber-50 text-amber-800',
@@ -57,6 +51,7 @@ const STATUS_TONE: Record<string, string> = {
   rejected: 'bg-gray-100 text-gray-600',
   escalated: 'bg-red-50 text-red-700',
   closed: 'bg-gray-100 text-gray-600',
+  cancelled: 'bg-gray-100 text-gray-600',
 };
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -78,9 +73,6 @@ const OUTCOME_LABEL: Record<string, string> = {
  * subject is asked for deliberately rather than inferred: freezing somebody's
  * money by accident is not a small mistake.
  */
-/** The terminal statuses: a case here has an answer, one way or another. */
-const DONE = ['resolved', 'rejected', 'closed'];
-
 /** The three buckets the overview card counts and filters by. */
 type Bucket = 'raised' | 'open' | 'pending' | 'resolved' | 'escalated';
 
@@ -126,15 +118,32 @@ export default function Support() {
     queryKey: ['support-cases', 'raised'],
     queryFn: async () => (await api.get('/verification/cases', { params: { scope: 'raised' } })).data,
     retry: false,
+    // Cases move while the page is open (allocated, waiting on you, resolved);
+    // the notifications socket refreshes this too.
+    refetchInterval: 20_000,
   });
 
   const rows: SupportCase[] = cases?.data ?? [];
   // Open is the just-raised state; resolved covers every terminal status;
   // pending is everything in between (being triaged, investigated, waited on).
-  const openCases = rows.filter((c) => c.status === 'open');
-  const done = rows.filter((c) => DONE.includes(c.status));
-  const pending = rows.filter((c) => c.status !== 'open' && !DONE.includes(c.status));
+  const openCases = rows.filter((c) => supportBucket(c.status) === 'open');
+  const done = rows.filter((c) => supportBucket(c.status) === 'resolved');
+  const pending = rows.filter((c) => supportBucket(c.status) === 'pending');
   const escalated = rows.filter((c) => c.status === 'escalated');
+
+  const sectionProps = {
+    open,
+    setOpen,
+    onChanged: async (message: string) => {
+      setError('');
+      setNotice(message);
+      await qc.invalidateQueries({ queryKey: ['support-cases'] });
+    },
+    onError: (message: string) => {
+      setNotice('');
+      setError(message);
+    },
+  };
 
   const showAll = filter === null;
 
@@ -193,19 +202,19 @@ export default function Support() {
       )}
 
       {(showAll || filter === 'open') && openCases.length > 0 && (
-        <Section title="Open" cases={openCases} open={open} setOpen={setOpen} />
+        <Section title="Open" cases={openCases} {...sectionProps} />
       )}
       {filter === 'raised' && rows.length > 0 && (
-        <Section title="Raised" cases={rows} open={open} setOpen={setOpen} />
+        <Section title="Raised" cases={rows} {...sectionProps} />
       )}
       {(showAll || filter === 'pending') && pending.length > 0 && (
-        <Section title="In progress" cases={pending} open={open} setOpen={setOpen} />
+        <Section title="In progress" cases={pending} {...sectionProps} />
       )}
       {(showAll || filter === 'resolved') && done.length > 0 && (
-        <Section title="Resolved" cases={done} open={open} setOpen={setOpen} />
+        <Section title="Resolved" cases={done} {...sectionProps} />
       )}
       {(showAll || filter === 'escalated') && escalated.length > 0 && (
-        <Section title="Escalated to Admin" cases={escalated} open={open} setOpen={setOpen} />
+        <Section title="Escalated to Admin" cases={escalated} {...sectionProps} />
       )}
     </div>
   );
@@ -285,12 +294,17 @@ function Section({
   cases,
   open,
   setOpen,
+  onChanged,
+  onError,
 }: {
   title: string;
   cases: SupportCase[];
   open: string | null;
   setOpen: (id: string | null) => void;
+  onChanged: (message: string) => Promise<void>;
+  onError: (message: string) => void;
 }) {
+  const myUserId = useAuth((s) => s.user?.id ?? null);
   return (
     <div className="space-y-2">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
@@ -314,7 +328,7 @@ function Section({
                   STATUS_TONE[c.status] ?? 'bg-gray-100 text-gray-600'
                 }`}
               >
-                {STATUS_LABEL[c.status] ?? c.status.replace(/_/g, ' ')}
+                {supportStatusLabel(c.status)}
               </span>
             </button>
 
@@ -368,32 +382,124 @@ function Section({
                 )}
                 {c.history && c.history.length > 0 && (
                   <ol className="space-y-1 border-l-2 border-gray-200 pl-3">
-                    {/* Collapse consecutive duplicates so an older case whose
-                        status was re-written without changing (same status and
-                        note) shows each step once, not six times (EZ1-I193). */}
-                    {c.history
-                      .filter(
-                        (h, i, all) =>
-                          i === 0 ||
-                          all[i - 1].status !== h.status ||
-                          (all[i - 1].remarks ?? '') !== (h.remarks ?? ''),
-                      )
-                      .map((h, i) => (
-                        <li key={i} className="text-xs text-gray-600">
-                          <span className="font-medium text-gray-800">
-                            {STATUS_LABEL[h.status] ?? h.status.replace(/_/g, ' ')}
-                          </span>{' '}
-                          · {formatDateTime(h.at)}
-                          {h.remarks ? `: ${h.remarks}` : ''}
-                        </li>
-                      ))}
+                    {/* Each step once (EZ1-I193), the raiser's own replies
+                        marked as theirs. The desk's internal notes never reach
+                        this page; the server strips them. */}
+                    {raiserTimeline(c.history, myUserId).map((h, i) => (
+                      <li key={i} className="text-xs text-gray-600">
+                        <span className="font-medium text-gray-800">{h.label}</span> ·{' '}
+                        {formatDateTime(h.at)}
+                        {h.note ? `: ${h.note}` : ''}
+                      </li>
+                    ))}
                   </ol>
                 )}
+                <CaseActions item={c} onChanged={onChanged} onError={onError} />
               </div>
             )}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What the person who raised a case can do with it: reply (with more proof)
+ * while it is open, and close it — accepting an answer or withdrawing it. The
+ * desk could park a case on the vendor ("Waiting on you") and there was no way
+ * to answer from here.
+ */
+function CaseActions({
+  item,
+  onChanged,
+  onError,
+}: {
+  item: SupportCase;
+  onChanged: (message: string) => Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const [message, setMessage] = useState('');
+  const [evidence, setEvidence] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const replyable = canReply(item.status);
+  const closable = canClose(item.status);
+  if (!replyable && !closable) return null;
+
+  async function act(fn: () => Promise<unknown>, done: string) {
+    setBusy(true);
+    try {
+      await fn();
+      setMessage('');
+      setEvidence([]);
+      await onChanged(done);
+    } catch (err) {
+      onError(apiMessage(err, 'That could not be done.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 border-t pt-3">
+      {replyable && (
+        <form
+          className="space-y-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (message.trim().length < 2) return;
+            void act(
+              () =>
+                api.put(`/verification/cases/${item.id}/reply`, {
+                  message: message.trim(),
+                  evidence: evidence.length ? evidence : undefined,
+                }),
+              'Reply sent. Whoever is working on it has been told.',
+            );
+          }}
+        >
+          <label className="block text-sm">
+            <span className="font-medium text-gray-700">
+              {item.status === 'waiting_for_information' ? 'Answer the question above' : 'Add a reply'}
+            </span>
+            <textarea
+              className="input mt-1"
+              rows={2}
+              maxLength={4000}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            {evidence.map((url, i) => (
+              <span key={url} className="rounded-sm bg-gray-100 px-2 py-1 text-xs">
+                Attachment {i + 1}
+              </span>
+            ))}
+            {evidence.length < 10 && (
+              <PhotoUploader kind="attachment" label="Attach" onUploaded={(url) => setEvidence([...evidence, url])} />
+            )}
+            <button className="btn btn-sm" disabled={busy || message.trim().length < 2}>
+              Send reply
+            </button>
+          </div>
+        </form>
+      )}
+      {closable && (
+        <button
+          type="button"
+          className="btn-outline btn-sm"
+          disabled={busy}
+          onClick={() =>
+            void act(
+              () => api.put(`/verification/cases/${item.id}/close`, {}),
+              supportBucket(item.status) === 'resolved' ? 'Case closed.' : 'Case withdrawn and closed.',
+            )
+          }
+        >
+          {supportBucket(item.status) === 'resolved' ? 'Close case' : 'Withdraw and close'}
+        </button>
+      )}
     </div>
   );
 }
@@ -444,8 +550,20 @@ function RaiseCase({
 }) {
   const role = useAuth((s) => s.user?.role);
   const subjects = subjectsFor(role);
-  const [subjectType, setSubjectType] = useState('other');
-  const [subjectId, setSubjectId] = useState('');
+  // "Contact support" on a refused listing arrives already about that listing
+  // (?subject=vendor&business=…, row 27).
+  const [searchParams] = useSearchParams();
+  const [prefill] = useState(() => supportPrefill(searchParams));
+  const [subjectType, setSubjectType] = useState(() =>
+    subjects.some((s) => s.value === prefill.subjectType) ? prefill.subjectType : 'other',
+  );
+  const [subjectId, setSubjectId] = useState(prefill.subjectId);
+  const { data: businesses = [] } = useQuery({
+    queryKey: ['vendor-me'],
+    queryFn: async () => (await api.get('/vendors/me')).data as { id: string; name: string; status: string }[],
+    enabled: role === 'vendor' && subjectType === 'vendor',
+    retry: false,
+  });
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [evidence, setEvidence] = useState<string[]>([]);
@@ -500,6 +618,22 @@ function RaiseCase({
             <span className="mt-1 block text-xs text-amber-700">{subject.hint}</span>
           )}
         </label>
+        {subjectType === 'vendor' && businesses.length > 0 && (
+          <label className="text-sm">
+            <span className="font-medium text-gray-700">Which listing?</span>
+            <select className="input mt-1" value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
+              <option value="">Not about one listing</option>
+              {businesses.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-xs text-gray-500">
+              The administrator and officer see this listing in full with your case.
+            </span>
+          </label>
+        )}
         {needsSubject && (
           <label className="text-sm">
             <span className="font-medium text-gray-700">Which one?</span>

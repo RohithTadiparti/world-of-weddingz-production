@@ -324,12 +324,22 @@ export class UpsertVendorServiceDto {
 // ------------------------------------------------------------------ offering
 
 export class UpsertOfferingDto {
-  @ApiProperty({ example: 'Full day, two photographers' })
+  @ApiProperty({
+    example: 'Full day, two photographers',
+    description:
+      'Required, not blank. Stored with the first letter of each word upper-cased ' +
+      '("pre-wedding-shoot" becomes "Pre-wedding-shoot"); see offering-rules.ts.',
+  })
   @IsString()
   @MaxLength(140)
   name: string;
 
-  @ApiPropertyOptional()
+  /*
+   * Required, 50 to 500 characters once trimmed. Checked in the service
+   * (offeringProblems) rather than with decorators here, so a missing, blank
+   * and short description each get the same precise message the forms show.
+   */
+  @ApiProperty({ minLength: 50, maxLength: 500 })
   @IsOptional()
   @IsString()
   @MaxLength(2000)

@@ -1,5 +1,7 @@
 import { AnimatedCounter, AnimatedTimeline } from '../components/ui/Motion';
 import { ReactNode, useEffect, useState } from 'react';
+import { CatalogSummaryList, PortfolioGallery, SubmittedSocialLinks } from '../components/CatalogSummary';
+import type { SummaryService } from '../lib/catalog-rules';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
@@ -7,6 +9,7 @@ import { todayIso } from '../lib/dates';
 import { useAuth, usePermissions } from '../store/auth';
 import { Loading } from '../components/ui/Feedback';
 import { useCategoryNames } from '../components/CategoryPicker';
+import { deepLinkId, useDeepLink } from '../lib/deep-link';
 import {
   CASE_ACTION_LABEL,
   CORRECTABLE_FIELD_KEYS,
@@ -118,7 +121,19 @@ export interface SupportCase {
     verifiedAt: string | null;
     decisionReason: string | null;
     revisionCount: number;
+    /** The rest of the listing, for a listing case (row 27). */
+    description?: string | null;
+    registeredAddress?: string | null;
+    registrationNumber?: string | null;
+    contactPhone?: string | null;
+    complianceDocuments?: string[];
+    portfolio?: string[];
+    correctionFields?: string[] | null;
+    submittedAt?: string | null;
   } | null;
+  /** The assigned officer's name, when the server names them. */
+  assignedToName?: string | null;
+  history?: { at: string; byUserId: string; status: string; note?: string; kind?: 'reply' }[];
   account?: {
     email: string | null;
     role: string | null;
@@ -240,6 +255,7 @@ const STATUS_TONE: Record<string, string> = {
   resolved: 'bg-emerald-50 text-emerald-800',
   closed: 'bg-gray-100 text-gray-600',
   rejected: 'bg-red-50 text-red-700',
+  cancelled: 'bg-gray-100 text-gray-600',
   issue: 'bg-red-50 text-red-700',
   escalated: 'bg-red-50 text-red-700',
   additional_review: 'bg-amber-50 text-amber-800',
@@ -322,6 +338,7 @@ export const CASE_FILTERS: { key: CaseStatus; label: string }[] = [
   { key: 'resolved', label: 'Resolved' },
   { key: 'rejected', label: 'Rejected' },
   { key: 'closed', label: 'Closed' },
+  { key: 'cancelled', label: 'Cancelled' },
 ];
 
 function Pill({ status }: { status: string }) {
@@ -512,6 +529,7 @@ export default function Verification({
   }
 
   const rows: VerificationRequest[] = requests?.data ?? [];
+  const linkedRequest = useDeepLink('request', 'request', rows.length > 0);
   const totalRequests: number = requests?.meta?.total ?? rows.length;
   // The server's per-status counts, used only where they cover the same
   // requests this list does: all of them for somebody who allocates, and an
@@ -707,15 +725,22 @@ export default function Verification({
                   <p className="text-sm text-gray-600">{section.blurb}</p>
                 </div>
                 {sectionRows.map((r) => (
-                  <RequestRow
+                  // A notification link (?request=) lands on this visit and
+                  // marks it, rather than on the top of the queue (row 21b).
+                  <div
                     key={r.id}
-                    request={r}
-                    officers={activeOfficers}
-                    canAllocate={canAllocate}
-                    canDecide={canDecide}
-                    canFieldwork={canFieldwork}
-                    onRun={run}
-                  />
+                    id={deepLinkId('request', r.id)}
+                    className={`scroll-mt-6 ${linkedRequest === r.id ? 'ring-2 ring-brand' : ''}`}
+                  >
+                    <RequestRow
+                      request={r}
+                      officers={activeOfficers}
+                      canAllocate={canAllocate}
+                      canDecide={canDecide}
+                      canFieldwork={canFieldwork}
+                      onRun={run}
+                    />
+                  </div>
                 ))}
               </div>
             );
@@ -1416,20 +1441,29 @@ export function CaseRow({
   officers,
   canAllocate,
   onRun,
+  highlighted = false,
 }: {
   item: SupportCase;
   officers: Officer[];
   canAllocate: boolean;
   onRun: (fn: () => Promise<unknown>, done?: string) => Promise<void>;
+  /** Opened from a notification link (row 21b). */
+  highlighted?: boolean;
 }) {
   const categoryNames = useCategoryNames();
+  // Said beside the buttons rather than by disabling them: a greyed-out button
+  // read as "clicking does nothing" to officers who had not written a note yet
+  // (row 27).
+  const [actionHint, setActionHint] = useState('');
+  const replies = (item.history ?? []).filter((h) => h.kind === 'reply' && h.note);
   const [officerUserId, setOfficerUserId] = useState('');
   const [findings, setFindings] = useState(item.findings ?? '');
   const [amount, setAmount] = useState('');
   // Notes the officer attaches to whichever resolution action they choose
   // (EZ1-I181). Recorded as the settlement note the vendor reads.
   const [resNotes, setResNotes] = useState('');
-  const settled = item.status === 'resolved' || item.status === 'closed';
+  const settled =
+    item.status === 'resolved' || item.status === 'closed' || item.status === 'cancelled';
   const businessChange = item.subjectType === 'vendor' && item.category === 'business_change';
   // An officer has proposed a resolution and it is waiting on an administrator
   // to approve it or send it back (EZ1-I49) — a different screen from settling a
@@ -1454,7 +1488,10 @@ export function CaseRow({
     item.status === 'waiting_for_information';
 
   return (
-    <div className="card space-y-3">
+    <div
+      id={deepLinkId('case', item.id)}
+      className={`card scroll-mt-6 space-y-3 ${highlighted ? 'ring-2 ring-brand' : ''}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-medium">{item.title}</p>
@@ -1561,6 +1598,58 @@ export function CaseRow({
           {item.business.decisionReason && (
             <p className="text-gray-600">Last decision: {item.business.decisionReason}</p>
           )}
+          {/* The rest of the listing (row 27): the administrator and the
+              allocated officer see the complete business on a listing case. */}
+          {item.business.registeredAddress && (
+            <p className="text-gray-600">Registered address: {item.business.registeredAddress}</p>
+          )}
+          {(item.business.registrationNumber || item.business.contactPhone) && (
+            <p className="text-gray-600">
+              {item.business.registrationNumber ? `Registration ${item.business.registrationNumber}` : ''}
+              {item.business.registrationNumber && item.business.contactPhone ? ' · ' : ''}
+              {item.business.contactPhone ? `Contact ${item.business.contactPhone}` : ''}
+            </p>
+          )}
+          {item.business.description && (
+            <p className="whitespace-pre-wrap text-gray-600">{item.business.description}</p>
+          )}
+          {item.business.correctionFields?.length ? (
+            <p className="text-gray-600">
+              Open for correction:{' '}
+              {item.business.correctionFields
+                .map((field) => CORRECTION_FIELD_LABELS[field] ?? field)
+                .join(', ')}
+            </p>
+          ) : null}
+          {[
+            ['Compliance documents', item.business.complianceDocuments ?? []] as const,
+            ['Portfolio', item.business.portfolio ?? []] as const,
+          ].map(([label, files]) =>
+            files.length > 0 ? (
+              <p key={label} className="flex flex-wrap gap-2 text-gray-600">
+                <span>{label}:</span>
+                {files.map((url, i) => (
+                  <a key={url} className="text-brand underline" href={url} target="_blank" rel="noreferrer noopener">
+                    {label === 'Portfolio' ? `Photo ${i + 1}` : `Document ${i + 1}`}
+                  </a>
+                ))}
+              </p>
+            ) : null,
+          )}
+        </div>
+      )}
+
+      {/* What the person who raised it has said since (vendor Support reply). */}
+      {replies.length > 0 && (
+        <div className="rounded-sm bg-gray-50 p-2 text-sm text-gray-700">
+          <p className="font-medium text-gray-900">Replies from the person who raised it</p>
+          <ul className="mt-1 space-y-1">
+            {replies.map((h, i) => (
+              <li key={i} className="whitespace-pre-wrap text-gray-600">
+                {new Date(h.at).toLocaleString()}: {h.note}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -1724,6 +1813,23 @@ export function CaseRow({
           >
             Grant edit access
           </button>
+          {/* Declines the request without touching the listing (row 24). */}
+          <button
+            className="btn-outline"
+            onClick={() => {
+              const reason = window.prompt('Why is this request being cancelled? The vendor reads this.');
+              if (reason === null) return;
+              void onRun(
+                () =>
+                  api.put(`/verification/cases/${item.id}/cancel-business-change`, {
+                    reason: reason.trim() || undefined,
+                  }),
+                'Request cancelled. The vendor has been notified.',
+              );
+            }}
+          >
+            Cancel Request
+          </button>
         </div>
       )}
 
@@ -1815,10 +1921,17 @@ export function CaseRow({
           />
           <button
             className="btn-outline"
-            disabled={findings.trim().length < 10}
-            onClick={() =>
-              onRun(() => api.put(`/verification/cases/${item.id}/findings`, { findings }))
-            }
+            onClick={() => {
+              if (findings.trim().length < 10) {
+                setActionHint('Write at least 10 characters of findings before recording them.');
+                return;
+              }
+              setActionHint('');
+              void onRun(
+                () => api.put(`/verification/cases/${item.id}/findings`, { findings }),
+                'Findings recorded.',
+              );
+            }}
           >
             Record findings
           </button>
@@ -1841,6 +1954,13 @@ export function CaseRow({
             const notes = resNotes.trim();
 
             const run = (a: CaseAction) => {
+              if (a.kind === 'settle' && !notes) {
+                setActionHint(
+                  'Write what you did about it first. The person who raised the case reads this note.',
+                );
+                return;
+              }
+              setActionHint('');
               if (a.kind === 'confirm_identity') {
                 void onRun(
                   () => api.put(`/verification/identity/${item.subjectId}/verify`),
@@ -1897,16 +2017,24 @@ export function CaseRow({
                       // Escalation and identity confirmation carry their own
                       // reason; everything else proposes a settlement, and a
                       // proposal without a note would hand the complainant a
-                      // closed case and nothing to read.
-                      disabled={
-                        a.kind !== 'escalate' && a.kind !== 'confirm_identity' && !notes
-                      }
+                      // closed case and nothing to read. `run` says so.
                       onClick={() => run(a)}
                     >
                       {a.label}
                     </button>
                   ))}
                 </div>
+                {actionHint && (
+                  <p role="alert" className="mt-2 text-xs text-amber-800">
+                    {actionHint}
+                  </p>
+                )}
+                {item.subjectType === 'vendor' && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    Unlock business details or Request correction reopens the listing for the
+                    vendor to correct once an administrator approves it.
+                  </p>
+                )}
 
                 {/* Partial settlement is kept for money cases: it needs an
                     amount, so it sits apart from the one-click actions. */}
@@ -2199,20 +2327,6 @@ function Sla({ request }: { request: VerificationRequest }) {
  * plus every hand the request has passed through, so an approval can be read
  * back later and understood.
  */
-/** A vendor service with its priced offerings, for the officer's review (EZ1-I25). */
-interface ServiceSummary {
-  id: string;
-  active: boolean;
-  definition?: { name?: string } | null;
-  category?: { name?: string } | null;
-  offerings?: {
-    id: string;
-    name: string;
-    price: string | number | null;
-    pricingModel?: string;
-  }[];
-}
-
 function SubjectDetails({
   requestId,
   applicantType,
@@ -2306,22 +2420,23 @@ function SubjectDetails({
         <p className="border-t pt-2 text-sm text-gray-700">{String(subject.description)}</p>
       ) : null}
 
-      {/* Portfolio images the business submitted (EZ1-I25). */}
+      {/*
+        Social media links the business submitted. They were always in the
+        response (the subject row carries socialLinks) and simply never drawn.
+        Each platform and address once.
+      */}
+      {subject && applicantType !== 'agent' && (
+        <div className="border-t pt-2">
+          <p className="mb-1 text-sm font-medium text-gray-900">Social media links</p>
+          <SubmittedSocialLinks listing={subject as Parameters<typeof SubmittedSocialLinks>[0]['listing']} />
+        </div>
+      )}
+
+      {/* Portfolio images the business submitted, each opening full size (EZ1-I25). */}
       {Array.isArray(subject?.portfolio) && (subject!.portfolio as string[]).length > 0 && (
         <div className="border-t pt-2">
           <p className="mb-1 text-sm font-medium text-gray-900">Portfolio</p>
-          <div className="flex flex-wrap gap-2">
-            {(subject!.portfolio as string[]).map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <img
-                  src={url}
-                  alt=""
-                  className="h-20 w-28 rounded-sm object-cover"
-                  loading="lazy"
-                />
-              </a>
-            ))}
-          </div>
+          <PortfolioGallery urls={subject!.portfolio as string[]} title="Portfolio" />
         </div>
       )}
 
@@ -2342,52 +2457,14 @@ function SubjectDetails({
           </div>
         )}
 
-      {/* Catalog & services with their priced offerings (EZ1-I25). */}
-      {Array.isArray(data?.services) && (data!.services as ServiceSummary[]).length > 0 && (
+      {/*
+        Catalog & services in full (EZ1-I25): category name, service name, and
+        for every price its name, details and description.
+      */}
+      {Array.isArray(data?.services) && (
         <div className="border-t pt-2">
           <p className="mb-1 text-sm font-medium text-gray-900">Catalog &amp; services</p>
-          <div className="space-y-2">
-            {(data!.services as ServiceSummary[]).map((svc) => (
-              <div key={svc.id} className="rounded-sm bg-gray-50 p-2">
-                <p className="text-sm font-medium text-gray-800">
-                  {svc.definition?.name ?? svc.category?.name ?? 'Service'}
-                  {svc.category?.name && svc.definition?.name ? (
-                    <span className="ml-2 text-xs font-normal text-gray-500">
-                      {svc.category.name}
-                    </span>
-                  ) : null}
-                  {!svc.active && (
-                    <span className="ml-2 text-xs font-normal text-amber-700">inactive</span>
-                  )}
-                </p>
-                {svc.offerings && svc.offerings.length > 0 ? (
-                  <ul className="mt-1 space-y-0.5 text-sm text-gray-700">
-                    {svc.offerings.map((off) => {
-                      // A custom-quote / price-on-request offering carries no
-                      // amount; it was printing as ₹0 (EZ1-I139). Show the model
-                      // instead, and only format a real number.
-                      const hasPrice =
-                        off.price !== null && off.price !== undefined && Number(off.price) > 0;
-                      return (
-                        <li key={off.id} className="flex justify-between gap-3">
-                          <span>{off.name}</span>
-                          <span className="tabular-nums text-gray-600">
-                            {hasPrice
-                              ? `₹${Number(off.price).toLocaleString('en-IN')}`
-                              : off.pricingModel === 'custom_quote'
-                                ? 'Custom quote'
-                                : 'Price on request'}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <p className="mt-1 text-xs text-gray-400">No offerings priced yet.</p>
-                )}
-              </div>
-            ))}
-          </div>
+          <CatalogSummaryList services={data!.services as SummaryService[]} />
         </div>
       )}
 

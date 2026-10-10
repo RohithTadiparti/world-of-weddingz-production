@@ -10,6 +10,7 @@ import { FileText, Trash, X } from 'phosphor-react-native';
 import { api, apiMessage } from '@/lib/api';
 import { Body, Button, Caption } from '@/components/ui';
 import { radius, rgb, rgba, space, useTheme } from '@/theme';
+import { COMPLIANCE_DOCUMENT_EXTENSIONS } from '@/shared/vendor-listing-rules';
 
 /**
  * Picking a file and putting it where the platform serves it from.
@@ -59,6 +60,11 @@ const ALLOWED: Record<Kind, { extensions: string[]; message: string }> = {
   biodata: {
     extensions: BIODATA_EXTENSIONS,
     message: 'Choose a photo of your biodata: a JPEG, PNG or WebP image.',
+  },
+  // A vendor's compliance documents: the officer's formats only.
+  compliance: {
+    extensions: [...COMPLIANCE_DOCUMENT_EXTENSIONS],
+    message: 'Upload a PDF, JPG, JPEG or PNG file.',
   },
 };
 
@@ -139,7 +145,7 @@ async function upload(
   // them: on S3 both are signed into the upload URL, and a file of any other
   // length is refused there. The type only when it is a real one.
   const presignPath =
-    kind === 'attachment' ? '/media/attachment/presign'
+    kind === 'attachment' || kind === 'compliance' ? '/media/attachment/presign'
     : kind === 'biodata' ? '/media/biodata/presign'
     : '/media/profile-photo/presign';
   const { data } = await api.post(
@@ -207,7 +213,7 @@ async function upload(
   return { url: reachable(data.publicUrl as string), key: data.key as string };
 }
 
-type Kind = 'photo' | 'attachment' | 'biodata';
+type Kind = 'photo' | 'attachment' | 'biodata' | 'compliance';
 
 /** Where an upload landed: a link to show it, and the key the API knows it by. */
 interface Uploaded {
@@ -220,9 +226,15 @@ export function PhotoPicker({
   kind = 'photo',
   purpose,
   onUploaded,
+  multiple = false,
+  maxFiles,
 }: {
   label?: string;
   kind?: Kind;
+  /** Let several be chosen at once; each is uploaded in turn. */
+  multiple?: boolean;
+  /** How many more may be added; extras chosen past it are left out. Zero disables picking. */
+  maxFiles?: number;
   /**
    * `profile_photo` for a photograph of a person going onto a profile: the
    * server checks it for AI generation as soon as it lands, and a refusal is
@@ -272,29 +284,49 @@ export function PhotoPicker({
         : await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
             quality: 0.85,
+            allowsMultipleSelection: multiple,
+            ...(multiple && maxFiles !== undefined ? { selectionLimit: Math.max(1, maxFiles) } : {}),
           });
     if (result.canceled || result.assets.length === 0) return;
 
-    const asset = result.assets[0];
+    await uploadAll(
+      result.assets.map((asset) => ({
+        uri: asset.uri,
+        name:
+          asset.fileName ??
+          `upload-${Date.now()}.${asset.uri.split('.').pop() ?? FALLBACK_EXTENSION}`,
+        mimeType: asset.mimeType ?? 'image/jpeg',
+      })),
+      kind,
+      'That photo could not be uploaded.',
+    );
+  }
+
+  /** Uploads the chosen files one after another, within `maxFiles`. */
+  async function uploadAll(
+    files: { uri: string; name: string; mimeType: string }[],
+    as: Kind,
+    fallback: string,
+  ) {
+    const room = maxFiles ?? Number.POSITIVE_INFINITY;
+    const chosen = multiple ? files.slice(0, Math.max(0, room)) : files.slice(0, 1);
+    const left = files.length - chosen.length;
     setBusy(true);
     setProgress(0);
-    try {
-      const name =
-        asset.fileName ?? `upload-${Date.now()}.${asset.uri.split('.').pop() ?? FALLBACK_EXTENSION}`;
-      const { url, key } = await upload(
-        asset.uri,
-        name,
-        asset.mimeType ?? 'image/jpeg',
-        kind,
-        setProgress,
-        purpose,
-      );
-      onUploaded(url, key);
-    } catch (err) {
-      report(err, 'That photo could not be uploaded.');
-    } finally {
-      setBusy(false);
+    let failure = '';
+    for (const file of chosen) {
+      try {
+        const { url, key } = await upload(file.uri, file.name, file.mimeType, as, setProgress, purpose);
+        onUploaded(url, key);
+      } catch (err) {
+        report(err, fallback);
+        failure = 'reported';
+      }
       setProgress(0);
+    }
+    setBusy(false);
+    if (!failure && multiple && left > 0) {
+      setError(`Only ${chosen.length} more could be added; the rest were left out.`);
     }
   }
 
@@ -307,34 +339,29 @@ export function PhotoPicker({
   async function pickDocument() {
     setError('');
     const result = await DocumentPicker.getDocumentAsync({
-      type: ['application/pdf', 'image/*'],
+      type:
+        kind === 'compliance'
+          ? ['application/pdf', 'image/jpeg', 'image/png']
+          : ['application/pdf', 'image/*'],
       // Copied into the app's own cache, so the uri stays readable after the
       // picker's temporary grant is gone.
       copyToCacheDirectory: true,
-      multiple: false,
+      multiple,
     });
     if (result.canceled || result.assets.length === 0) return;
 
-    const asset = result.assets[0];
-    setBusy(true);
-    setProgress(0);
-    try {
-      const name = asset.name || `document-${Date.now()}.pdf`;
-      const { url, key } = await upload(
-        asset.uri,
-        name,
-        asset.mimeType ?? 'application/pdf',
-        'attachment',
-        setProgress,
-      );
-      onUploaded(url, key);
-    } catch (err) {
-      report(err, 'That document could not be uploaded.');
-    } finally {
-      setBusy(false);
-      setProgress(0);
-    }
+    await uploadAll(
+      result.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.name || `document-${Date.now()}.pdf`,
+        mimeType: asset.mimeType ?? 'application/pdf',
+      })),
+      kind === 'compliance' ? 'compliance' : 'attachment',
+      'That document could not be uploaded.',
+    );
   }
+
+  const full = maxFiles !== undefined && maxFiles <= 0;
 
   return (
     <View style={{ gap: space(2) }}>
@@ -344,6 +371,7 @@ export function PhotoPicker({
           variant="outline"
           small
           busy={busy}
+          disabled={full}
           onPress={() => void run('library')}
           style={{ flex: 1 }}
         />
@@ -351,16 +379,16 @@ export function PhotoPicker({
           label="Camera"
           variant="outline"
           small
-          disabled={busy}
+          disabled={busy || full}
           onPress={() => void run('camera')}
         />
       </View>
-      {kind === 'attachment' ? (
+      {kind === 'attachment' || kind === 'compliance' ? (
         <Button
           label="Choose a PDF or file"
           variant="outline"
           small
-          disabled={busy}
+          disabled={busy || full}
           onPress={() => void pickDocument()}
         />
       ) : null}

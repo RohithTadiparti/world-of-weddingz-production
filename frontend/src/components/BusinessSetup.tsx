@@ -37,6 +37,8 @@ interface CompletionItem {
   complete: boolean;
   /** What is still needed, or a note when the item is optional. */
   missing: string | null;
+  /** One precise reason per line, e.g. "Bridal Wear: pricing is missing for Lehenga". */
+  issues?: string[];
 }
 
 export interface Completion {
@@ -97,26 +99,55 @@ export default function BusinessSetup({ businessId }: { businessId: string }) {
   const [error, setError] = useState('');
   const { data, isPending } = useCompletion(businessId);
 
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ['business-completion'] });
-    void qc.invalidateQueries({ queryKey: ['my-listing'] });
-    void qc.invalidateQueries({ queryKey: ['businesses'] });
-  };
+  // Everything that shows this listing's status: the checklist, the listing
+  // itself and the header's business switcher (`vendor-me`). The switcher's key
+  // was named 'businesses' here, which matches no query, so it kept showing the
+  // old status until a reload. Awaited, so the button stays busy until the page
+  // is showing the new state rather than flicking back to the old one.
+  const refresh = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ['business-completion'] }),
+      qc.invalidateQueries({ queryKey: ['my-listing'] }),
+      qc.invalidateQueries({ queryKey: ['vendor-me'] }),
+      qc.invalidateQueries({ queryKey: ['vendor-services', businessId] }),
+    ]);
 
   const review = useMutation({
     mutationFn: () => api.post(`/vendors/${businessId}/first-review`),
-    onSuccess: () => {
+    onSuccess: async () => {
       setError('');
-      refresh();
+      await refresh();
     },
     onError: (err) => setError(apiMessage(err, 'That could not be opened for review.')),
   });
 
   const submit = useMutation({
-    mutationFn: () => api.post(`/vendors/${businessId}/submit-verification`),
-    onSuccess: () => {
+    mutationFn: async () =>
+      (await api.post(`/vendors/${businessId}/submit-verification`)).data as {
+        status?: BusinessStatus;
+      },
+    onSuccess: async (result) => {
       setError('');
-      refresh();
+      // Show "submitted" at once from the server's answer, then confirm it
+      // with a fresh read. Locked rules mirror the pending-verification row
+      // of the server's state table.
+      qc.setQueryData<Completion>(['business-completion', businessId], (old) =>
+        old
+          ? {
+              ...old,
+              status: result?.status ?? 'pending_verification',
+              canSubmit: false,
+              rules: {
+                ...old.rules,
+                editIdentity: false,
+                editPresentational: false,
+                editCatalog: false,
+                submit: false,
+              },
+            }
+          : old,
+      );
+      await refresh();
     },
     onError: (err) => setError(apiMessage(err, 'That could not be submitted.')),
   });
@@ -162,7 +193,15 @@ export default function BusinessSetup({ businessId }: { businessId: string }) {
             )}
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-900">{item.label}</p>
-              {item.missing && <p className="text-xs text-gray-500">{item.missing}</p>}
+              {item.issues && item.issues.length > 0 ? (
+                <ul className="list-disc pl-4 text-xs text-gray-600">
+                  {item.issues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              ) : (
+                item.missing && <p className="text-xs text-gray-500">{item.missing}</p>
+              )}
             </div>
           </li>
         ))}

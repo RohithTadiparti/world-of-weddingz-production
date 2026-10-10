@@ -14,6 +14,7 @@ import { AttributeScope, BusinessStatus, UserRole } from '../../common/enums';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { AppConfigService } from '../../config/app-config.service';
 import { QUANTITY_MODELS, QUOTE_ONLY, requirementsRequired } from './booking-request-rules';
+import { normaliseOfferingText, offeringProblems } from './offering-rules';
 
 /**
  * The vendor's half of the catalog: which services they offer, how they have
@@ -362,12 +363,13 @@ export class VendorServicesService {
     const service = await this.ownedService(actor, vendorId, serviceId);
     const definition = await this.catalog.getDefinition(service.definitionId);
     this.assertPricingAllowed(definition, dto);
+    const text = normaliseOfferingText(dto);
 
     return this.offerings.save(
       this.offerings.create({
         vendorServiceId: service.id,
-        name: dto.name,
-        description: dto.description ?? null,
+        name: text.name,
+        description: text.description,
         pricingModel: dto.pricingModel,
         price: QUOTE_ONLY.includes(dto.pricingModel) ? null : (dto.price ?? null),
         currency: dto.currency ?? 'INR',
@@ -397,13 +399,14 @@ export class VendorServicesService {
 
     const definition = await this.catalog.getDefinition(service.definitionId);
     this.assertPricingAllowed(definition, dto);
+    const text = normaliseOfferingText(dto);
 
     const proposed = QUOTE_ONLY.includes(dto.pricingModel) ? null : (dto.price ?? null);
     const held = await this.needsReview(vendorId, offering.price, proposed);
 
     Object.assign(offering, {
-      name: dto.name,
-      description: dto.description ?? null,
+      name: text.name,
+      description: text.description,
       pricingModel: dto.pricingModel,
       // A change big enough to need a look is parked rather than applied. The
       // old price keeps selling in the meantime: taking the shop off sale
@@ -556,12 +559,14 @@ export class VendorServicesService {
       throw new BadRequestException(`${definition.name} is not sold as a package`);
     }
 
-    const quoteOnly = QUOTE_ONLY.includes(dto.pricingModel);
-    if (!quoteOnly && (dto.price === undefined || dto.price === null || dto.price === '')) {
-      throw new BadRequestException('Give a price, or choose Custom Quote if you quote per job');
-    }
-    if (!quoteOnly && Number(dto.price) < 0) {
-      throw new BadRequestException('A price cannot be negative');
+    // Pricing name, amount and description: a name that is not blank, an
+    // amount above zero wherever the model publishes one, and a description a
+    // buyer can actually read, 50 to 500 characters. One message per field, so
+    // a form that skipped its own checks still hears everything at once.
+    const problems = offeringProblems(dto);
+    const messages = [problems.name, problems.price, problems.description].filter(Boolean);
+    if (messages.length > 0) {
+      throw new BadRequestException(messages.join('. '));
     }
 
     if (
@@ -680,5 +685,10 @@ export class VendorServicesService {
 
   async findService(id: string): Promise<VendorService | null> {
     return this.services.findOne({ where: { id } });
+  }
+
+  /** How many services this business has switched on, for the publish-a-window rule. */
+  async countActiveServices(vendorId: string): Promise<number> {
+    return this.services.count({ where: { vendorId, active: true } });
   }
 }

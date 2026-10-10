@@ -40,11 +40,22 @@ import { PaginatedResult, paginate } from '../../common/dto/pagination.dto';
 import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 import {
   ApplicantType,
+  BusinessStatus,
   NotificationType,
   OfficerAvailabilityStatus,
   UserRole,
   VerificationStatus,
 } from '../../common/enums';
+
+/** The business states in which an officer can usefully be sent to a listing. */
+const ALLOCATABLE_BUSINESS: BusinessStatus[] = [
+  BusinessStatus.PENDING_VERIFICATION,
+  BusinessStatus.VERIFICATION_IN_PROGRESS,
+];
+
+/** History markers for the send-backs whose remarks are written for the applicant. */
+const CORRECTION_PREFIX = 'Correction requested';
+const REOPENED_PREFIX = 'Reopened through support:';
 
 /** Outcomes that leave the applicant unable to operate. */
 const BLOCKING = [
@@ -274,6 +285,18 @@ export class VerificationService {
     // The automatic pick now considers where the applicant actually is, and
     // records what it went on — an allocation made on workload alone because
     // nobody covers that city is a staffing gap somebody should see.
+    // A vendor listing that was sent back for changes is allocated only once the
+    // vendor has resubmitted it. Before that there is nothing new to visit, and
+    // an officer sent now would be checking details the vendor is still editing.
+    if (request.applicantType === ApplicantType.VENDOR && request.subjectId) {
+      const business = await this.vendors.findOne({ where: { id: request.subjectId } });
+      if (business && !ALLOCATABLE_BUSINESS.includes(business.status)) {
+        throw new BadRequestException(
+          'The vendor has not resubmitted this listing yet. Allocate an officer once it is submitted for verification.',
+        );
+      }
+    }
+
     const city = await this.applicantCity(request);
     const previousOfficerUserId =
       request.status === VerificationStatus.ADDITIONAL_REVIEW
@@ -284,9 +307,15 @@ export class VerificationService {
         'The officer who performed the previous visit cannot be assigned for another look. Choose a different officer.',
       );
     }
+    // A resubmission is a fresh allocation (row 25): the automatic pick never
+    // lands it back on the officer who visited last time. An administrator
+    // naming that officer deliberately is still their decision to make.
     const suggestion = dto.officerUserId
       ? null
-      : await this.suggestOfficerWithReason(city, previousOfficerUserId ?? undefined);
+      : await this.suggestOfficerWithReason(
+          city,
+          (previousOfficerUserId ?? request.previousOfficerUserId) ?? undefined,
+        );
     const officerUserId = dto.officerUserId ?? suggestion?.officerUserId ?? null;
     if (!officerUserId) {
       throw new BadRequestException(
@@ -339,7 +368,164 @@ export class VerificationService {
       allocatedByUserId: actor.userId,
       note: dto.note ?? null,
     });
+    // The applicant hears that an officer has been assigned, and nothing about
+    // who or the administrator's note to them.
+    await this.notifyProgress(saved, 'officer_assigned');
 
+    return saved;
+  }
+
+  /**
+   * A tracking update for the applicant (row 11).
+   *
+   * Only the stage and the ids it concerns: never the officer, their findings,
+   * their recommendation or an administrator's remarks. Not awaited by anything
+   * that could fail because of it — a lost tracking line must not undo the step
+   * it describes.
+   */
+  private async notifyProgress(
+    request: VerificationRequest,
+    stage: 'officer_assigned' | 'visit_started' | 'findings_submitted' | 'additional_review',
+  ): Promise<void> {
+    try {
+      await this.notifications.create(request.applicantUserId, NotificationType.VERIFICATION_PROGRESS, {
+        requestId: request.id,
+        businessId: request.subjectId,
+        applicantType: request.applicantType,
+        stage,
+      });
+    } catch {
+      // The step itself is saved; the feed simply misses one line.
+    }
+  }
+
+  /**
+   * Whether the request's remarks were written for the applicant.
+   *
+   * A rejection's reason and a correction's instructions are; the note on an
+   * "another review" decision is the administrator's brief to the next
+   * officer, and an approval needs none. Both send-backs that are meant for the
+   * applicant mark their history entry, so this reads the latest one.
+   */
+  isApplicantFacing(request: VerificationRequest): boolean {
+    if (request.status === VerificationStatus.REJECTED) return true;
+    if (request.status !== VerificationStatus.ADDITIONAL_REVIEW) return false;
+    const last = request.history?.[request.history.length - 1]?.remarks ?? '';
+    return last.startsWith(CORRECTION_PREFIX) || last.startsWith(REOPENED_PREFIX);
+  }
+
+  /** A request parked on the applicant after a send-back, waiting to come back. */
+  isAwaitingResubmission(request: VerificationRequest): boolean {
+    return (
+      request.status === VerificationStatus.ADDITIONAL_REVIEW ||
+      request.status === VerificationStatus.ISSUE
+    );
+  }
+
+  /**
+   * The vendor has corrected and resubmitted a listing that was sent back
+   * (rows 23 and 25).
+   *
+   * The request returns to NEW — "submitted for verification, waiting to be
+   * allocated" — with nobody assigned. It used to stay on the previous officer's
+   * queue with their old findings cleared or not, so the same officer simply
+   * carried on and an administrator never got to allocate the fresh visit.
+   * The previous officer is remembered so automatic allocation avoids them,
+   * the SLA clock restarts, and the administrators are told it is waiting.
+   */
+  async markResubmitted(
+    requestId: string,
+    actor: AuthUser,
+    subjectName?: string | null,
+  ): Promise<VerificationRequest> {
+    const request = await this.loadOrFail(requestId);
+    if (!this.isAwaitingResubmission(request)) return request;
+
+    const now = new Date();
+    request.previousOfficerUserId = request.assignedToUserId ?? request.previousOfficerUserId;
+    request.assignedToUserId = null;
+    request.allocatedAt = null;
+    request.allocatedByUserId = null;
+    request.findings = null;
+    request.verificationStartedAt = null;
+    request.slaDeadline = null;
+    request.slaBreachedAt = null;
+    request.status = VerificationStatus.NEW;
+    request.history = [
+      ...request.history,
+      {
+        at: now.toISOString(),
+        byUserId: actor.userId,
+        status: VerificationStatus.NEW,
+        remarks: 'Resubmitted after corrections. Waiting for an officer to be allocated.',
+      },
+    ];
+    const saved = await this.requests.save(request);
+
+    await this.audit.record({
+      action: AuditAction.VERIFICATION_RESUBMITTED,
+      actor,
+      resourceType: 'verification_request',
+      resourceId: saved.id,
+      metadata: { applicantType: saved.applicantType, previousOfficerUserId: saved.previousOfficerUserId },
+    });
+    void this.notifications
+      .createForRole(UserRole.ADMIN, NotificationType.VERIFICATION_REQUESTED, {
+        requestId: saved.id,
+        applicantType: saved.applicantType,
+        subjectId: saved.subjectId,
+        subjectName: subjectName ?? null,
+        awaitingAllocation: true,
+        resubmitted: true,
+      })
+      .catch(() => undefined);
+    return saved;
+  }
+
+  /**
+   * Puts a refused vendor request back in play after an administrator approves
+   * a support case that unlocks the listing (row 27).
+   *
+   * Without this the listing could be reopened but never resubmitted: the
+   * refused request is what `assertNotRejected` finds. It is parked as
+   * ADDITIONAL_REVIEW with nobody assigned, waiting on the vendor exactly like
+   * a correction, and becomes a fresh NEW request when they resubmit.
+   */
+  async reopenRejected(
+    actor: AuthUser,
+    subjectId: string,
+    reason: string,
+  ): Promise<VerificationRequest | null> {
+    const request = await this.requests.findOne({
+      where: { applicantType: ApplicantType.VENDOR, subjectId, status: VerificationStatus.REJECTED },
+      order: { createdAt: 'DESC' },
+    });
+    if (!request) return null;
+
+    request.status = VerificationStatus.ADDITIONAL_REVIEW;
+    request.previousOfficerUserId = request.assignedToUserId ?? request.previousOfficerUserId;
+    request.assignedToUserId = null;
+    request.findings = null;
+    request.remarks = reason;
+    request.slaDeadline = null;
+    request.slaBreachedAt = null;
+    request.history = [
+      ...request.history,
+      {
+        at: new Date().toISOString(),
+        byUserId: actor.userId,
+        status: VerificationStatus.ADDITIONAL_REVIEW,
+        remarks: `${REOPENED_PREFIX} ${reason}`.slice(0, 500),
+      },
+    ];
+    const saved = await this.requests.save(request);
+    await this.audit.record({
+      action: AuditAction.VERIFICATION_REOPENED,
+      actor,
+      resourceType: 'verification_request',
+      resourceId: saved.id,
+      metadata: { subjectId, via: 'support_case_unlock' },
+    });
     return saved;
   }
 
@@ -419,6 +605,10 @@ export class VerificationService {
       // different eligible officer is selected.
       request.assignedToUserId = null;
       request.findings = null;
+      // A new visit gets its own clock rather than inheriting one the first
+      // officer has already spent.
+      request.slaDeadline = null;
+      request.slaBreachedAt = null;
     }
     request.history = [
       ...request.history,
@@ -429,7 +619,10 @@ export class VerificationService {
         remarks: dto.remarks,
       },
     ];
-    const saved = await this.requests.save(request);
+    let saved = await this.requests.save(request);
+    if (dto.status === VerificationStatus.ADDITIONAL_REVIEW) {
+      saved = (await this.startSla(saved.id)) ?? saved;
+    }
 
     if (dto.status === VerificationStatus.APPROVED) {
       await this.activateApplicant(request);
@@ -489,7 +682,7 @@ export class VerificationService {
 
     // Asked before anything is written, as `decide` does: the business must be
     // in a state it can move back from, or the request and the listing disagree.
-    const check = await this.lifecycle.canDecide(request.subjectId, 'revisit');
+    const check = await this.lifecycle.canDecide(request.subjectId, 'correct');
     if (!check.ok) throw new BadRequestException(check.reason ?? 'That listing cannot be sent back yet');
 
     request.status = VerificationStatus.ADDITIONAL_REVIEW;
@@ -498,6 +691,14 @@ export class VerificationService {
     // The visit that justified this correction is done with; the resubmission
     // earns a fresh write-up, exactly as the ADDITIONAL_REVIEW decision does.
     request.findings = null;
+    // Off the officer's queue while the vendor edits, and remembered so the
+    // fresh allocation after the resubmission avoids them by default (row 25).
+    request.previousOfficerUserId = request.assignedToUserId ?? request.previousOfficerUserId;
+    request.assignedToUserId = null;
+    // The clock is on the vendor now, not the platform; it restarts when they
+    // resubmit. Left running, the SLA sweep rejected listings mid-correction.
+    request.slaDeadline = null;
+    request.slaBreachedAt = null;
     request.decidedAt = new Date();
     request.decidedByUserId = actor.userId;
     request.reviewedByUserId = actor.userId;
@@ -507,7 +708,7 @@ export class VerificationService {
         at: new Date().toISOString(),
         byUserId: actor.userId,
         status: VerificationStatus.ADDITIONAL_REVIEW,
-        remarks: `Correction requested (${dto.fields.join(', ')}): ${dto.reason}`.slice(0, 500),
+        remarks: `${CORRECTION_PREFIX} (${dto.fields.join(', ')}): ${dto.reason}`.slice(0, 500),
       },
     ];
     const saved = await this.requests.save(request);
@@ -587,19 +788,29 @@ export class VerificationService {
     ];
     const saved = await this.requests.save(request);
 
-    // Whoever allocated it is the person waiting on the answer.
+    // Whoever allocated it is the person waiting on the answer. A request with
+    // no recorded allocator (an older row) goes to the administrators' desk
+    // rather than to nobody.
+    const submitted = {
+      requestId: saved.id,
+      applicantType: saved.applicantType,
+      recommendation: dto.recommendation,
+      issues: dto.issues.length,
+    };
     if (request.allocatedByUserId) {
       await this.notifications.create(
         request.allocatedByUserId,
         NotificationType.VERIFICATION_SUBMITTED,
-        {
-          requestId: saved.id,
-          applicantType: saved.applicantType,
-          recommendation: dto.recommendation,
-          issues: dto.issues.length,
-        },
+        submitted,
       );
+    } else {
+      await this.notifications
+        .createForRole(UserRole.ADMIN, NotificationType.VERIFICATION_SUBMITTED, submitted)
+        .catch(() => undefined);
     }
+    // The applicant is told the visit is written up and with an administrator;
+    // the recommendation and the findings themselves stay internal (row 11).
+    await this.notifyProgress(saved, 'findings_submitted');
     return saved;
   }
 
@@ -658,7 +869,9 @@ export class VerificationService {
         status: VerificationStatus.IN_PROGRESS,
       },
     ];
-    return this.requests.save(request);
+    const saved = await this.requests.save(request);
+    await this.notifyProgress(saved, 'visit_started');
+    return saved;
   }
 
   private async activateApplicant(request: VerificationRequest): Promise<void> {
@@ -723,6 +936,10 @@ export class VerificationService {
     const reason = request.remarks ?? 'Verification could not be completed.';
     if (request.status === VerificationStatus.REJECTED) {
       await this.lifecycle.reject(request.subjectId, reason, undefined);
+    } else if (request.status === VerificationStatus.ADDITIONAL_REVIEW) {
+      // Another review is another officer's visit, not a send-back: the listing
+      // stays locked and the administrator's remark stays internal (row 11).
+      await this.lifecycle.awaitAnotherReview(request.subjectId);
     } else {
       await this.lifecycle.requireReverification(request.subjectId, reason, undefined);
     }
@@ -730,6 +947,18 @@ export class VerificationService {
 
 
   private async notifyApplicant(request: VerificationRequest): Promise<void> {
+    // Another review is a tracking update, not a decision, and the remark that
+    // came with it is the administrator's note to the next officer. The
+    // applicant is told only that another review is being arranged.
+    const anotherReview =
+      request.status === VerificationStatus.ADDITIONAL_REVIEW && !this.isApplicantFacing(request);
+    // The outcome email says the verification "could not be completed" and asks
+    // for corrections, which is not what another review means, so none is sent.
+    if (anotherReview) {
+      await this.notifyProgress(request, 'additional_review');
+      return;
+    }
+
     const applicant = await this.users.findOne({ where: { id: request.applicantUserId } });
     // A business applicant always has an address; an account taken on by
     // mobile alone does not, and there is nowhere to send this (EZ1-I233).
@@ -1047,7 +1276,8 @@ export class VerificationService {
       id: request?.id ?? null,
       applicantType: request?.applicantType ?? null,
       status: request?.status ?? null,
-      remarks: request?.remarks ?? null,
+      // Only a reason written for the applicant; never an internal note.
+      remarks: request && this.isApplicantFacing(request) ? request.remarks : null,
       submittedAt: request?.createdAt ?? null,
       decidedAt: request?.decidedAt ?? null,
     };
@@ -1376,6 +1606,9 @@ export class VerificationService {
     let breached = 0;
     for (const request of candidates) {
       if (!OPEN_AND_UNWORKED.includes(request.status)) continue;
+      // Parked on the applicant to make corrections: the clock is theirs, not
+      // the platform's, and it restarts when they resubmit.
+      if (this.isApplicantFacing(request)) continue;
 
       request.slaBreachedAt = now;
       request.status = VerificationStatus.REJECTED;

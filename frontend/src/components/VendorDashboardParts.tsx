@@ -139,7 +139,7 @@ export function BookingList({
             <li key={b.id} className="flex items-center justify-between gap-3 py-2">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-gray-900">
-                  {b.clientName ?? b.clientEmail ?? 'Customer'}
+                  {b.clientName ?? 'Customer'}
                   {b.serviceName && <span className="font-normal text-gray-500"> · {b.serviceName}</span>}
                 </p>
                 <p className="truncate text-xs text-gray-500">

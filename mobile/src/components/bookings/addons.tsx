@@ -137,8 +137,13 @@ export function VendorAddOns({ bookingId }: { bookingId: string }) {
               <Button
                 label="Accept"
                 small
+                // Accepting agrees the customer's price; with none, requote.
+                disabled={!(Number(addon.proposedPrice ?? 0) > 0)}
                 onPress={() => void run(() => api.put(`/bookings/addons/${addon.id}/accept`, {}))}
               />
+              {!(Number(addon.proposedPrice ?? 0) > 0) ? (
+                <Caption tone="muted">No price was proposed. Requote it with yours.</Caption>
+              ) : null}
               <View style={{ flexDirection: 'row', gap: space(2) }}>
                 <Button
                   label="Reject"
@@ -174,6 +179,12 @@ export function VendorAddOns({ bookingId }: { bookingId: string }) {
         onConfirm={(value) => {
           const addon = requoting;
           if (!addon) return;
+          // Only an amount above zero is a price (row 17).
+          if (!(Number(value) > 0)) {
+            setError('An add-on price must be greater than zero.');
+            setRequoting(null);
+            return;
+          }
           void run(() =>
             api.put(`/bookings/addons/${addon.id}/requote`, { vendorPrice: Number(value) }),
           );

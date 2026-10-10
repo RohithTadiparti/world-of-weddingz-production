@@ -164,7 +164,6 @@ export default function Bookings() {
       // venue, a city, a service.
       return [
         booking.clientName,
-        booking.clientEmail,
         booking.eventName,
         booking.eventVenue,
         booking.eventCity,

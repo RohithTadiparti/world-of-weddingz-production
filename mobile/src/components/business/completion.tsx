@@ -27,6 +27,8 @@ export interface CompletionItem {
   complete: boolean;
   /** What is still needed, or a note when the item is optional. */
   missing: string | null;
+  /** One precise reason per line, e.g. "Bridal Wear: pricing is missing for Lehenga". */
+  issues?: string[];
 }
 
 export interface Completion {
@@ -59,34 +61,56 @@ export function useCompletion(businessId?: string | null) {
 /** Everything a save touches, so the hub, the switcher and the checklist agree. */
 export function useRefreshBusiness() {
   const qc = useQueryClient();
-  return () => {
-    void qc.invalidateQueries({ queryKey: ['business-completion'] });
-    void qc.invalidateQueries({ queryKey: ['my-listing'] });
-    void qc.invalidateQueries({ queryKey: ['vendor-me'] });
-    void qc.invalidateQueries({ queryKey: ['me'] });
-  };
+  return () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ['business-completion'] }),
+      qc.invalidateQueries({ queryKey: ['my-listing'] }),
+      qc.invalidateQueries({ queryKey: ['vendor-me'] }),
+      qc.invalidateQueries({ queryKey: ['me'] }),
+      qc.invalidateQueries({ queryKey: ['vendor-services'] }),
+    ]);
 }
 
 export function BusinessChecklist({ businessId }: { businessId: string }) {
   const theme = useTheme();
+  const qc = useQueryClient();
   const refresh = useRefreshBusiness();
   const [error, setError] = useState('');
   const { data, isPending } = useCompletion(businessId);
 
   const review = useMutation({
     mutationFn: () => api.post(`/vendors/${businessId}/first-review`),
-    onSuccess: () => {
+    onSuccess: async () => {
       setError('');
-      refresh();
+      await refresh();
     },
     onError: (err) => setError(apiMessage(err, 'That could not be opened for review.')),
   });
 
   const submit = useMutation({
-    mutationFn: () => api.post(`/vendors/${businessId}/submit-verification`),
-    onSuccess: () => {
+    mutationFn: async () =>
+      (await api.post(`/vendors/${businessId}/submit-verification`)).data as { status?: string },
+    onSuccess: async (result) => {
       setError('');
-      refresh();
+      // Show "submitted" at once from the server's answer, then confirm it with
+      // a fresh read, so the screen never needs a manual refresh.
+      qc.setQueryData<Completion>(['business-completion', businessId], (old) =>
+        old
+          ? {
+              ...old,
+              status: result?.status ?? 'pending_verification',
+              canSubmit: false,
+              rules: {
+                ...old.rules,
+                editIdentity: false,
+                editPresentational: false,
+                editCatalog: false,
+                submit: false,
+              },
+            }
+          : old,
+      );
+      await refresh();
     },
     onError: (err) => setError(apiMessage(err, 'That could not be submitted.')),
   });
@@ -142,7 +166,15 @@ export function BusinessChecklist({ businessId }: { businessId: string }) {
             )}
             <View style={{ flex: 1, gap: space(0.5) }}>
               <Body>{item.label}</Body>
-              {item.missing ? <Caption tone="faint">{item.missing}</Caption> : null}
+              {item.issues && item.issues.length > 0 ? (
+                item.issues.map((issue) => (
+                  <Caption key={issue} tone="faint">
+                    {`• ${issue}`}
+                  </Caption>
+                ))
+              ) : item.missing ? (
+                <Caption tone="faint">{item.missing}</Caption>
+              ) : null}
             </View>
           </View>
         ))}

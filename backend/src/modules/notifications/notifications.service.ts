@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { NotificationsGateway } from './notifications.gateway';
 import { Notification } from './entities/notification.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { BookingStatus, NotificationType, UserRole } from '../../common/enums';
@@ -15,6 +16,9 @@ import { WhatsAppService } from '../../platform/whatsapp/whatsapp.service';
 // because a malformed uuid fails the insert and loses the notification.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** The most unread rows the feed returns beyond the newest hundred. */
+export const UNREAD_LIST_LIMIT = 500;
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -25,7 +29,19 @@ export class NotificationsService {
     @InjectRepository(Booking) private readonly bookings: Repository<Booking>,
     private readonly push: PushService,
     private readonly whatsapp: WhatsAppService,
+    // Optional so a service built without sockets (scripts, unit tests) still
+    // writes notifications; the clients' poll covers the gap.
+    @Optional() private readonly gateway?: NotificationsGateway,
   ) {}
+
+  /** Tells the reader's open clients to refetch. Never throws. */
+  private signal(userId: string, reason: 'created' | 'read'): void {
+    try {
+      this.gateway?.changed(userId, { reason });
+    } catch {
+      // Best effort; the feed and badge still poll.
+    }
+  }
 
   /**
    * Writes one notification, stamps where it goes, and puts it on whatever
@@ -58,6 +74,7 @@ export class NotificationsService {
     void this.fanOut(saved.id, userId, type, payload).catch((err) =>
       this.logger.warn(`Delivering notification ${saved.id} failed: ${(err as Error).message}`),
     );
+    this.signal(userId, 'created');
     return saved;
   }
 
@@ -168,11 +185,29 @@ export class NotificationsService {
   }
 
   async listForUser(userId: string) {
-    const notes = await this.repo.find({
-      where: { userId },
-      order: { createdAt: 'DESC' },
-      take: 100,
-    });
+    /*
+     * The newest hundred, plus every unread one however old.
+     *
+     * The badge counts every unread row, and the feed only ever showed the
+     * newest hundred. A busy vendor with older unread booking notifications had
+     * a count that could not reach zero: the rows holding it up were never in
+     * the list, so there was nothing to open or mark read. Unread rows are
+     * always included now (bounded, so a neglected account cannot ask for an
+     * unbounded page), and the two numbers describe the same rows.
+     */
+    const [recent, unread] = await Promise.all([
+      this.repo.find({ where: { userId }, order: { createdAt: 'DESC' }, take: 100 }),
+      this.repo.find({
+        where: { userId, isRead: false },
+        order: { createdAt: 'DESC' },
+        take: UNREAD_LIST_LIMIT,
+      }),
+    ]);
+    const byId = new Map<string, Notification>();
+    for (const n of [...recent, ...unread]) byId.set(n.id, n);
+    const notes = [...byId.values()].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
 
     // A booking notification's action is stamped when it is created, so a
     // "Respond" raised for a new request still read as outstanding after the
@@ -222,7 +257,22 @@ export class NotificationsService {
 
   async markRead(userId: string, id: string) {
     await this.repo.update({ id, userId }, { isRead: true });
-    return { success: true };
+    this.signal(userId, 'read');
+    return { success: true, ...(await this.unreadCount(userId)) };
+  }
+
+  /**
+   * Everything the reader has been told about one thing, read at once.
+   *
+   * Opening a booking from a notification is reading every update about that
+   * booking, not just the newest line: the feed already folds them into one
+   * row, and leaving the earlier ones unread kept the badge above zero after
+   * the reader had seen the lot. Scoped to the caller's own rows.
+   */
+  async markTargetRead(userId: string, targetId: string) {
+    const result = await this.repo.update({ userId, targetId, isRead: false }, { isRead: true });
+    this.signal(userId, 'read');
+    return { success: true, marked: result.affected ?? 0, ...(await this.unreadCount(userId)) };
   }
 
   /**
@@ -231,6 +281,7 @@ export class NotificationsService {
    */
   async markAllRead(userId: string) {
     const result = await this.repo.update({ userId, isRead: false }, { isRead: true });
-    return { success: true, marked: result.affected ?? 0 };
+    this.signal(userId, 'read');
+    return { success: true, marked: result.affected ?? 0, unread: 0 };
   }
 }

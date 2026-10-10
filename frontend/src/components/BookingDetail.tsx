@@ -9,10 +9,12 @@ import { usePermissions } from '../store/auth';
 import { PlacedBookingFacts, usePlacedForClients } from './PlacedForClients';
 import { ReferenceThumbs, RequestEstimate } from './RequestExtras';
 import type { QuotationSummary } from '../lib/booking-progress';
+import { pricingModelLabel } from '../lib/booking-rules';
 import {
   BookingProgress,
   PaymentBreakdown,
   PriceBreakdown,
+  NegotiationHistory,
   QuotationHistory,
   Row,
   Section,
@@ -46,8 +48,9 @@ interface DetailBooking {
   status: string;
   eventDate: string | null;
   clientName: string | null;
-  /** Named when there is no display name, rather than a bare "Customer". */
-  clientEmail?: string | null;
+  /** HH:MM asked for on a request for an unpublished date. */
+  requestedTime?: string | null;
+  pricingModel?: string | null;
   eventName: string | null;
   eventVenue: string | null;
   eventCity: string | null;
@@ -108,10 +111,13 @@ export default function BookingDetail({
         </Row>
         {/* Said from the provider's side, the same words as the row above it. */}
         <Row label="Status">{SELLER_STATUS_LABEL[booking.status] ?? humanize(booking.status)}</Row>
-        <Row label="Customer">{booking.clientName ?? booking.clientEmail ?? 'Customer'}</Row>
+        <Row label="Customer">{booking.clientName ?? 'Customer'}</Row>
         {booking.providerName && <Row label="Booked with">{booking.providerName}</Row>}
         <Row label="Event">{booking.eventName ?? 'Not linked to an event'}</Row>
-        <Row label="Date">{formatDate(booking.eventDate)}</Row>
+        <Row label="Date">
+          {formatDate(booking.eventDate)}
+          {booking.requestedTime ? ` · ${booking.requestedTime} (requested time)` : ''}
+        </Row>
         <Row label="Venue">
           {[booking.eventVenue, booking.eventCity].filter(Boolean).join(', ') ||
             (booking.clientCity ? `${booking.clientCity} · venue not fixed for this date` : 'Not given')}
@@ -138,7 +144,10 @@ export default function BookingDetail({
       </Section>
 
       <Section title="Service">
-        <Row label="Service">{booking.serviceName ?? 'No service chosen'}</Row>
+        <Row label="Service">
+          {booking.serviceName ?? 'No service chosen'}
+          {pricingModelLabel(booking.pricingModel) ? ` · ${pricingModelLabel(booking.pricingModel)}` : ''}
+        </Row>
         {booking.offeringName && <Row label="Package">{booking.offeringName}</Row>}
         {booking.quantity ? <Row label="Quantity">{booking.quantity}</Row> : null}
         <RequestEstimate
@@ -166,6 +175,7 @@ export default function BookingDetail({
       {summary.data && (
         <>
           <PriceBreakdown summary={summary.data} />
+          <NegotiationHistory summary={summary.data} viewer="provider" />
           <QuotationHistory summary={summary.data} />
           <PaymentBreakdown summary={summary.data} />
         </>

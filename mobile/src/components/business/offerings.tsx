@@ -10,6 +10,13 @@ import { PromptSheet } from '@/components/prompt';
 import { Alert, Body, Button, Caption, Field } from '@/components/ui';
 import { rgb, radius, space, useTheme } from '@/theme';
 import type { Offering, VendorService } from '@/components/business/service-types';
+import {
+  PRICING_DESCRIPTION_MAX,
+  PRICING_DESCRIPTION_MIN,
+  offeringErrors,
+  titleCaseWords,
+  type OfferingErrors,
+} from '@/shared/catalog-rules';
 
 /**
  * A service's prices.
@@ -40,7 +47,11 @@ export function Offerings({
     setError('');
     try {
       await fn();
-      await qc.invalidateQueries({ queryKey: ['vendor-services', vendorId] });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['vendor-services', vendorId] }),
+        // The checklist counts prices per category, so it is asked again.
+        qc.invalidateQueries({ queryKey: ['business-completion'] }),
+      ]);
       onChanged(ok);
       setEditing(null);
     } catch (err) {
@@ -119,6 +130,7 @@ export function Offerings({
               {offering.inclusions.length > 0 ? (
                 <Caption tone="faint">Includes: {offering.inclusions.join(', ')}</Caption>
               ) : null}
+              {offering.description ? <Caption>{offering.description}</Caption> : null}
             </View>
             <Button
               label="Edit"
@@ -199,17 +211,19 @@ function OfferingForm({
   const [inclusions, setInclusions] = useState((existing?.inclusions ?? []).join(', '));
   const [active, setActive] = useState(existing?.active ?? true);
   const [problem, setProblem] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<OfferingErrors>({});
 
   const quoteOnly = QUOTE_ONLY.includes(model);
   const takesQuantity = QUANTITY_MODELS.includes(model);
+  const descriptionLength = description.trim().length;
 
   function submit() {
-    if (!name.trim()) {
-      setProblem('Give this price a name a client would recognise.');
-      return;
-    }
-    if (!quoteOnly && (price === '' || Number(price) < 0)) {
-      setProblem('Give a price, or choose Custom quote if you price each job.');
+    // The server's rules, with its words: a name that is not blank, an amount
+    // above zero, and a description of 50 to 500 characters.
+    const found = offeringErrors({ name, description, pricingModel: model, price });
+    setFieldErrors(found);
+    if (Object.keys(found).length > 0) {
+      setProblem('');
       return;
     }
     if (minQuantity && maxQuantity && Number(minQuantity) > Number(maxQuantity)) {
@@ -217,9 +231,12 @@ function OfferingForm({
       return;
     }
     setProblem('');
+    // Title Case on submission ("pre-wedding-shoot" -> "Pre-wedding-shoot").
+    const finalName = titleCaseWords(name);
+    setName(finalName);
     onSave({
-      name: name.trim(),
-      description: description.trim() || undefined,
+      name: finalName,
+      description: description.trim(),
       pricingModel: model,
       price: quoteOnly ? undefined : String(price),
       unitLabel: unitLabel.trim() || undefined,
@@ -244,10 +261,14 @@ function OfferingForm({
       }}
     >
       <Field
-        label="Name"
+        label="Pricing name"
+        required
         placeholder="Full day, two photographers"
         value={name}
+        maxLength={140}
         onChangeText={setName}
+        onBlur={() => setName((v) => titleCaseWords(v))}
+        error={fieldErrors.name}
       />
       <SelectField
         label="How it is priced"
@@ -259,10 +280,12 @@ function OfferingForm({
       {!quoteOnly && (
         <>
           <Field
-            label="Amount (INR)"
+            label="Pricing amount (INR)"
+            required
             value={String(price)}
             onChangeText={setPrice}
             keyboardType="decimal-pad"
+            error={fieldErrors.price}
           />
           <Field
             label="Per what?"
@@ -292,7 +315,17 @@ function OfferingForm({
           </View>
         </View>
       )}
-      <Field label="Description" value={description} onChangeText={setDescription} />
+      <Textarea
+        label="Description"
+        required
+        value={description}
+        onChange={setDescription}
+        rows={3}
+        maxLength={PRICING_DESCRIPTION_MAX}
+        placeholder="What the client gets: hours, people, deliverables, anything not included."
+        hint={`${descriptionLength} / ${PRICING_DESCRIPTION_MAX} characters, at least ${PRICING_DESCRIPTION_MIN}.`}
+        error={fieldErrors.description}
+      />
 
       {packagesAllowed && (
         <CheckRow label="This is a package" checked={isPackage} onChange={setIsPackage} />

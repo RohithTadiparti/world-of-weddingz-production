@@ -21,7 +21,12 @@ import {
   roleLabel,
 } from '../../lib/labels';
 import { EmptyState, Loading } from '../../components/ui/Feedback';
-import { ContactRevealButton, useContactReveal } from '../../components/AdminContactReveal';
+import {
+  ContactRevealButton,
+  useContactReveal,
+  type RevealedContact,
+} from '../../components/AdminContactReveal';
+import { accountLabel } from '../../lib/admin-names';
 
 /**
  * One account and everything hanging off it, as a dedicated page (EZ1-I171,
@@ -52,6 +57,10 @@ const KIND: Record<Kind, { title: string; listRoute: string; listLabel: string }
 
 interface AccountUser {
   id: string;
+  /** The person's name, else their business, else the masked contact (WOW-01..04). */
+  name?: string | null;
+  personName?: string | null;
+  businessName?: string | null;
   /** Masked by the server (r***@gmail.com) unless revealed. */
   email: string | null;
   role: string;
@@ -66,6 +75,7 @@ interface AccountUser {
 
 interface RelatedAccount {
   id: string;
+  name?: string | null;
   email: string;
   role: string;
   isActive: boolean;
@@ -136,7 +146,8 @@ interface IssueRow {
 
 interface AccountDetail {
   user: AccountUser;
-  profiles: { id: string; displayName: string; lifecycle: string; city: string | null }[];
+  /** `own` marks the account's own profile; the rest are ones it stewards. */
+  profiles: { id: string; displayName: string; lifecycle: string; city: string | null; userId?: string | null; own?: boolean }[];
   businesses: { id: string; name: string; category: string; status: string; isApproved: boolean }[];
   bookings: BookingRow[];
   providerBookings: (BookingRow & { buyerName: string | null; serviceName: string | null; amountPaid: string })[];
@@ -202,6 +213,39 @@ interface VendorActivity {
 }
 
 const money = (v: string) => `₹${Number(v ?? 0).toLocaleString('en-IN')}`;
+
+/**
+ * What the page is headed with (WOW-01..05).
+ *
+ * The name is the server's — the person's first and last name, else profile
+ * name, else business, else masked contact — so the heading matches the row
+ * that was clicked. It used to take the first profile in the list, which for
+ * an agent is whichever client they happened to steward first.
+ */
+export function accountHeading(data: Pick<AccountDetail, 'user' | 'profiles' | 'businesses' | 'plannerBusinesses'>) {
+  const own = data.profiles.find((p) => p.own) ?? (data.profiles.some((p) => p.own === false) ? undefined : data.profiles[0]);
+  return {
+    name: data.user.name || own?.displayName || data.user.email || data.user.phone || 'Account',
+    businessName:
+      data.user.businessName ?? data.businesses[0]?.name ?? data.plannerBusinesses[0]?.name ?? 'No business recorded',
+    /** The account's own profile, for "View full profile". */
+    profileId: own?.id ?? null,
+  };
+}
+
+/**
+ * A planner business's contact lines: masked as served (WOW-05), or whole once
+ * the account's audited reveal has returned them.
+ */
+export function plannerContact(
+  business: { id: string; contactPhone: string | null; contactEmail: string | null },
+  revealed: RevealedContact | null,
+) {
+  const whole = revealed?.plannerBusinesses?.find((b) => b.id === business.id);
+  return whole
+    ? { phone: whole.contactPhone, email: whole.contactEmail }
+    : { phone: business.contactPhone, email: business.contactEmail };
+}
 
 export function buildSummaryCards(kind: Kind, data: AccountDetail, accountId: string) {
   const providerId = data.businesses[0]?.id ?? data.plannerBusinesses[0]?.id;
@@ -324,8 +368,7 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
   // Masked unless an administrator has explicitly revealed them (ISS-11).
   const shownEmail = contactReveal.contact ? contactReveal.contact.email : user.email;
   const shownPhone = contactReveal.contact ? contactReveal.contact.phone : user.phone;
-  const name = data.profiles[0]?.displayName || user.email || 'Account';
-  const businessName = data.businesses[0]?.name ?? data.plannerBusinesses[0]?.name ?? 'No business recorded';
+  const { name, businessName, profileId: ownProfileId } = accountHeading(data);
   const portalLabel =
     kind === 'vendor' ? 'Vendor Portal' :
     kind === 'agent' ? 'Agent Portal' :
@@ -400,8 +443,8 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {data.profiles[0] && (
-                <Link className="btn btn-sm" to={`/admin/profiles/${data.profiles[0].id}`}>
+              {ownProfileId && (
+                <Link className="btn btn-sm" to={`/admin/profiles/${ownProfileId}`}>
                   View full profile
                 </Link>
               )}
@@ -528,7 +571,7 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
               className="flex items-center justify-between gap-3 rounded-md px-2 py-2 transition-colors hover:bg-brand-soft/40"
             >
               <span className="min-w-0">
-                <span className="block truncate text-sm font-medium text-gray-900">{c.email}</span>
+                <span className="block truncate text-sm font-medium text-gray-900">{accountLabel(c)}</span>
                 <span className="text-xs text-gray-500">
                   {roleLabel(c.role)} · joined {formatDate(c.createdAt)}
                 </span>
@@ -601,8 +644,9 @@ export default function AdminAccountDetail({ kind }: { kind: Kind }) {
           {b.bio && <p className="mb-3 whitespace-pre-line text-sm text-gray-700">{b.bio}</p>}
           <div className="grid gap-1 sm:grid-cols-2">
             <Row label="Contact person">{b.contactPerson ?? '—'}</Row>
-            <Row label="Phone">{b.contactPhone ?? '—'}</Row>
-            <Row label="Email">{b.contactEmail ?? '—'}</Row>
+            {/* Masked unless revealed with the account's details (WOW-05). */}
+            <Row label="Phone">{plannerContact(b, contactReveal.contact).phone ?? '—'}</Row>
+            <Row label="Email">{plannerContact(b, contactReveal.contact).email ?? '—'}</Row>
             <Row label="Website">{b.website ?? '—'}</Row>
             <Row label="Address">{[b.address, b.pincode].filter(Boolean).join(' · ') || '—'}</Row>
             <Row label="Serves">{b.servesCities.length ? b.servesCities.join(', ') : '—'}</Row>

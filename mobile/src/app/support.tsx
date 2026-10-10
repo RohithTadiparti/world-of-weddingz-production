@@ -7,7 +7,8 @@ import { CaretDown, CaretUp, Star } from 'phosphor-react-native';
 import { api, apiMessage } from '@/lib/api';
 import { dateTime, humanise } from '@/lib/format';
 import { STATUS_TONE, type SupportCase } from '@/lib/verification';
-import { CASE_STATUS_LABEL, isProvider } from '@/shared/permissions';
+import { isProvider } from '@/shared/permissions';
+import { supportPrefill, supportStatusLabel } from '@/shared/support-cases';
 import { Badge } from '@/components/chrome';
 import { SelectField, Textarea } from '@/components/form';
 import {
@@ -142,9 +143,25 @@ function Faq({
 
 function ContactSupport() {
   const role = useAuth((s) => s.user?.role);
+  // "Raise it on Support" from a refused listing arrives already about that
+  // listing (row 27).
+  const params = useLocalSearchParams<{ subject?: string; business?: string }>();
+  const prefill = supportPrefill({
+    get: (key) => {
+      const value = (params as Record<string, string | string[] | undefined>)[key];
+      return typeof value === 'string' ? value : null;
+    },
+  });
   return (
     <Screen>
-      <RaiseCase subjects={subjectsFor(role)} submitLabel="Send Message" doneMessage="Sent. Somebody will read it." />
+      <RaiseCase
+        subjects={subjectsFor(role)}
+        submitLabel="Send Message"
+        doneMessage="Sent. Somebody will read it."
+        initialSubject={prefill.subjectType}
+        initialSubjectId={prefill.subjectId}
+        canPickBusiness={role === 'vendor'}
+      />
       <MyCases />
     </Screen>
   );
@@ -164,6 +181,7 @@ function MyCases() {
       return Array.isArray(data) ? data : data.data;
     },
     retry: false,
+    refetchInterval: 20_000,
   });
 
   if (cases.isPending) return <Loading rows={2} />;
@@ -185,7 +203,7 @@ function MyCases() {
                 {item.title}
               </Body>
               <Badge tone={STATUS_TONE[item.status] ?? 'neutral'}>
-                {CASE_STATUS_LABEL[item.status] ?? humanise(item.status)}
+                {supportStatusLabel(item.status)}
               </Badge>
             </View>
             <Caption tone="muted">{`Raised ${dateTime(item.createdAt)}`}</Caption>
@@ -270,13 +288,27 @@ function RaiseCase({
   subjects,
   submitLabel,
   doneMessage,
+  initialSubject = 'other',
+  initialSubjectId = '',
+  canPickBusiness = false,
 }: {
   subjects: { value: string; label: string; note?: string }[];
   submitLabel: string;
   doneMessage: string;
+  initialSubject?: string;
+  initialSubjectId?: string;
+  canPickBusiness?: boolean;
 }) {
-  const [subjectType, setSubjectType] = useState('other');
-  const [subjectId, setSubjectId] = useState('');
+  const [subjectType, setSubjectType] = useState(() =>
+    subjects.some((s) => s.value === initialSubject) ? initialSubject : 'other',
+  );
+  const [subjectId, setSubjectId] = useState(initialSubjectId);
+  const { data: businesses = [] } = useQuery({
+    queryKey: ['vendor-me', 'support'],
+    queryFn: async () => (await api.get('/vendors/me')).data as { id: string; name: string }[],
+    enabled: canPickBusiness && subjectType === 'vendor',
+    retry: false,
+  });
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [notice, setNotice] = useState('');
@@ -322,6 +354,18 @@ function RaiseCase({
             setSubjectId('');
           }}
         />
+        {subjectType === 'vendor' && businesses.length > 0 ? (
+          <SelectField
+            label="Which listing?"
+            value={subjectId}
+            options={[
+              { value: '', label: 'Not about one listing' },
+              ...businesses.map((b) => ({ value: b.id, label: b.name })),
+            ]}
+            onChange={setSubjectId}
+            hint="The administrator and officer see this listing in full with your request."
+          />
+        ) : null}
         {needsSubject ? (
           <Field
             label={subjectType === 'booking' ? 'Booking reference' : 'Payment reference'}

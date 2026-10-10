@@ -7,9 +7,9 @@ import {
   TYPE_LABEL,
   UNREAD_POLL_MS,
   describe,
-  operationalAlertLink,
   type Notification,
 } from '../lib/notification-copy';
+import { notificationLink } from '../lib/notification-link';
 import { EmptyState, Loading } from '../components/ui/Feedback';
 import { usePermissions } from '../store/auth';
 import { Permission, can } from '../lib/permissions';
@@ -39,6 +39,8 @@ const TYPE_GROUP: Record<string, Group> = {
   booking_completed: 'progress',
   booking_cancelled: 'progress',
   verification_decided: 'progress',
+  verification_progress: 'progress',
+  business_change_update: 'progress',
   dispute_update: 'action',
   match_accepted: 'progress',
   new_message: 'action',
@@ -159,8 +161,11 @@ export default function Notifications() {
   }, [rows]);
 
   /** Clearing a subject clears the whole story, not just its last line. */
-  async function markSubject(ids: string[]) {
-    await Promise.all(ids.map((id) => api.put(`/notifications/${id}/read`, {})));
+  async function markSubject(ids: string[], targetId?: string | null) {
+    // A subject with an id is read in one call on the server, which also
+    // catches older updates about it that are not in this page's rows (row 22).
+    if (targetId) await api.put(`/notifications/targets/${targetId}/read`, {});
+    else await Promise.all(ids.map((id) => api.put(`/notifications/${id}/read`, {})));
     qc.invalidateQueries({ queryKey: ['notifications'] });
     qc.invalidateQueries({ queryKey: ['unread-count'] });
   }
@@ -354,7 +359,7 @@ function SubjectRow({
   onClear,
 }: {
   subject: Subject;
-  onClear: (ids: string[]) => void;
+  onClear: (ids: string[], targetId?: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const { latest, earlier, unread } = subject;
@@ -365,7 +370,7 @@ function SubjectRow({
   const permissions = usePermissions();
   const canAllocate = can(permissions, Permission.VERIFICATION_ALLOCATE);
   const canFieldwork = can(permissions, Permission.VERIFICATION_FIELDWORK);
-  const href = linkFor(latest, { canAllocate, canFieldwork });
+  const href = notificationLink(latest, { canAllocate, canFieldwork });
 
   return (
     <div className={`p-4 ${unread > 0 ? 'bg-brand-light/30' : ''}`}>
@@ -396,13 +401,13 @@ function SubjectRow({
                 latest.targetAction && latest.targetAction !== 'view' ? 'btn' : 'btn-outline'
               }`}
               to={href}
-              onClick={() => onClear(subject.ids)}
+              onClick={() => onClear(subject.ids, latest.targetId)}
             >
               {(latest.targetAction && ACTION_LABEL[latest.targetAction]) ?? 'Open'}
             </Link>
           )}
           {unread > 0 && (
-            <button className="btn-outline btn-sm" onClick={() => onClear(subject.ids)}>
+            <button className="btn-outline btn-sm" onClick={() => onClear(subject.ids, latest.targetId)}>
               Mark read
             </button>
           )}
@@ -438,96 +443,3 @@ function SubjectRow({
     </div>
   );
 }
-
-function linkFor(
-  n: Notification,
-  staff: { canAllocate?: boolean; canFieldwork?: boolean } = {},
-): string | null {
-  const { canAllocate = false, canFieldwork = false } = staff;
-  const canVerify = canAllocate || canFieldwork;
-  // The server now says where each notification goes, so this maps a module to
-  // a route rather than re-deciding from the type. The two used to disagree
-  // silently — the rule lived here, in a chain of prefix tests, and a phone
-  // showing the same notification would have needed its own copy of it.
-  if (n.targetModule) {
-    switch (n.targetModule) {
-      case 'bookings':
-      case 'quotations':
-      case 'disputes':
-        return n.targetId ? `/bookings?highlight=${n.targetId}` : '/bookings';
-      case 'support':
-        // The allocator reviews cases in the admin inbox; an officer works
-        // theirs in their queue; the raiser reads the outcome on their own
-        // Support page, opened straight to the case the update is about
-        // (EZ1-I49).
-        if (canAllocate) return '/admin/support';
-        if (canFieldwork) return '/cases';
-        return n.targetId ? `/support?case=${n.targetId}` : '/support';
-      case 'verification':
-        // A decision is for the applicant — a vendor or planner reads it on
-        // their own business page, an agent on their agency page. Only staff
-        // notifications (assigned/submitted/requested) belong on the officer
-        // Cases screen (EZ1-I110).
-        if (n.type === 'verification_decided' && !canVerify) {
-          return '/console';
-        }
-        return '/verification';
-      case 'chat':
-        return '/chat';
-      case 'infrastructure':
-        // An operational alert, for administrators only: the Infrastructure
-        // page opens on the alert so it can be reviewed and acknowledged.
-        return operationalAlertLink(n.targetId);
-      case 'planner':
-        return '/planner';
-      case 'events': {
-        // A shared wedding event (EZ1-I84). The couple hear about a planner's
-        // change and open their own Events page; the planner hears about the
-        // couple's change and opens that client's event workspace.
-        const host = typeof n.payload?.hostUserId === 'string' ? n.payload.hostUserId : null;
-        if (n.type === 'event_changed_by_couple' && host && n.targetId) {
-          return `/my-clients/${host}/events/${n.targetId}`;
-        }
-        return '/events';
-      }
-      case 'matches':
-        // An incoming interest is responded to on the Interests → Received tab,
-        // where the actions are Accept / Decline — not on Matches, which offers
-        // "Send interest" to somebody who has already sent one to you (EZ1-I107).
-        if (n.type === 'match_interest') return '/interests';
-        // The agency reads it on its own Interests board, which opens on its
-        // whole book, so the new interest is there without picking a client.
-        if (n.type === 'match_interest_for_client') return '/interests';
-        // Declined by the other family's agency: it sits under Declined.
-        if (n.type === 'match_declined_by_agency') return '/interests';
-        return n.targetId ? `/matches?profile=${n.targetId}` : '/matches';
-    }
-  }
-
-  // Rows written before the columns existed. Kept rather than migrated to a
-  // guess: the old derivation is what those rows were displayed with.
-  const p = n.payload ?? {};
-  const bookingId = typeof p.bookingId === 'string' ? p.bookingId : null;
-
-  if (n.type.startsWith('booking_')) {
-    return bookingId ? `/bookings?highlight=${bookingId}` : '/bookings';
-  }
-  if (n.type === 'verification_decided') return canVerify ? '/verification' : '/console';
-  if (n.type.startsWith('verification_')) return '/verification';
-  if (n.type === 'dispute_update') {
-    // Rows written before the columns existed, given the same destination the
-    // module-based branch above lands on today.
-    if (canAllocate) return '/admin/support';
-    if (canFieldwork) return '/cases';
-    return n.targetId ? `/support?case=${n.targetId}` : '/support';
-  }
-  if (n.type === 'new_message') return '/chat';
-  if (n.type === 'task_reminder') return '/planner';
-  if (n.type === 'match_interest' || n.type === 'match_interest_for_client') return '/interests';
-  if (n.type.startsWith('match_')) {
-    const profileId = typeof p.counterpartProfileId === 'string' ? p.counterpartProfileId : null;
-    return profileId ? `/matches?profile=${profileId}` : '/matches';
-  }
-  return null;
-}
-

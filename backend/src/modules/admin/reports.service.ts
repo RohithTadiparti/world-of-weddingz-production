@@ -58,6 +58,7 @@ const CASE_FINISHED: readonly CaseStatus[] = [
   CaseStatus.RESOLVED,
   CaseStatus.REJECTED,
   CaseStatus.CLOSED,
+  CaseStatus.CANCELLED,
 ];
 
 const money = (n: number) => n.toFixed(2);

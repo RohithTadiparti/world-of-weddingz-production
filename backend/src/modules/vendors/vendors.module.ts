@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { ServiceCategory } from '../catalog/entities/service-category.entity';
+import { ServiceDefinition } from '../catalog/entities/service-definition.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Vendor } from './entities/vendor.entity';
 import { User } from '../auth/entities/user.entity';
@@ -31,6 +32,8 @@ import { PayoutBankAccount } from './entities/payout-bank-account.entity';
       Vendor,
       // Read-only, to check a listing's categories against the catalogue (EZ1-I263).
       ServiceCategory,
+      // Read-only, to name each service in the catalog completeness checklist.
+      ServiceDefinition,
       VendorReview,
       VendorAvailabilitySlot,
       VendorService,

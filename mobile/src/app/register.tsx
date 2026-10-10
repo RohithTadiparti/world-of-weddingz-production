@@ -11,6 +11,7 @@ import {
 } from '@/shared/permissions';
 import { Alert, Body, Button, Caption, Field, PageSubtitle, PageTitle, Screen } from '@/components/ui';
 import { radius, rgb, space, useTheme } from '@/theme';
+import { usernameRequired, validateUsername } from '@/shared/vendor-listing-rules';
 
 /**
  * Sign up.
@@ -98,9 +99,10 @@ export default function Register() {
     }
 
     if (!EMAIL_PATTERN.test(email.trim())) errors.email = 'Enter a valid email address';
-    if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username.trim().toLowerCase())) {
-      errors.username = 'Use 3-40 lowercase letters, numbers, dots, underscores or hyphens';
-    }
+    // Optional for a vendor, who signs in with the email or mobile number
+    // given here; still checked when one is typed.
+    const usernameError = validateUsername(username, accountType);
+    if (usernameError) errors.username = usernameError;
 
     /*
      * Every account needs a number now (EZ1-I258).
@@ -143,11 +145,12 @@ export default function Register() {
     try {
       const payload: Record<string, unknown> = {
         email: email.trim(),
-        username: username.trim().toLowerCase(),
         password,
         accountType,
         displayName: displayName.trim(),
       };
+      // Left out when blank: an optional username is not an empty one.
+      if (username.trim()) payload.username = username.trim().toLowerCase();
       if (phone.trim()) payload.phone = phone.replace(/\s|-/g, '');
       // Only meaningful for an individual; the server derives the role from
       // accountType for every other persona, and refuses it here.
@@ -256,7 +259,7 @@ export default function Register() {
         {fieldErrors.email ? <Caption tone="critical">{fieldErrors.email}</Caption> : null}
 
         <Field
-          label="Username"
+          label={usernameRequired(accountType) ? 'Username' : 'Username (optional)'}
           value={username}
           onChangeText={(value) => setUsername(value.toLowerCase())}
           autoCapitalize="none"
@@ -321,7 +324,9 @@ export default function Register() {
           onPress={submit}
           busy={busy}
           disabled={
-            !email.trim() || !username.trim() || !password || !confirmPassword || !displayName.trim() || !phone.trim()
+            !email.trim() ||
+            (usernameRequired(accountType) && !username.trim()) ||
+            !password || !confirmPassword || !displayName.trim() || !phone.trim()
           }
         />
 

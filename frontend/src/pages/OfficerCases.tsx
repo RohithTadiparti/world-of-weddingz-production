@@ -4,6 +4,7 @@ import { api, apiMessage } from '../lib/api';
 import { usePermissions } from '../store/auth';
 import { CaseStatus, Permission, can } from '../lib/permissions';
 import { CASE_FILTERS, CaseRow, type Officer, type SupportCase } from './Verification';
+import { useDeepLink } from '../lib/deep-link';
 
 /**
  * The cases assigned to a verification officer, on their own page.
@@ -79,6 +80,8 @@ export default function OfficerCases() {
   }
 
   const caseRows: SupportCase[] = cases?.data ?? [];
+  // A notification link (?case=) opens on that case (row 21b).
+  const linkedCase = useDeepLink('case', 'case', caseRows.length > 0);
   // Already filtered by the server; nothing to narrow here.
   const shown = caseRows;
   const totalCases: number = cases?.meta?.total ?? caseRows.length;
@@ -143,6 +146,7 @@ export default function OfficerCases() {
               officers={activeOfficers}
               canAllocate={canAllocate}
               onRun={run}
+              highlighted={linkedCase === c.id}
             />
           ))
         )}

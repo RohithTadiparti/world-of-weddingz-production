@@ -19,6 +19,7 @@ import {
   Permission,
   can,
 } from '@/shared/permissions';
+import { canClose, canReply, raiserTimeline } from '@/shared/support-cases';
 import { Badge, Divider } from '@/components/chrome';
 import { Textarea } from '@/components/form';
 import { PromptSheet } from '@/components/prompt';
@@ -41,7 +42,7 @@ import { selectPermissions, useAuth } from '@/store/auth';
 import { rgb, space, useTheme } from '@/theme';
 
 /** Which prompt is open, since three of the actions ask for a sentence first. */
-type Ask = 'escalate' | 'await' | 'sendBack' | null;
+type Ask = 'escalate' | 'await' | 'sendBack' | 'cancel' | null;
 
 /**
  * One investigation.
@@ -73,6 +74,7 @@ export default function Case() {
   const [amount, setAmount] = useState('');
   const [ask, setAsk] = useState<Ask>(null);
   const [seeded, setSeeded] = useState(false);
+  const [reply, setReply] = useState('');
 
   // The case itself, by id. Searching the first page of the queue for it told
   // anybody whose case had fallen past that page that it was no longer theirs.
@@ -137,7 +139,10 @@ export default function Case() {
     );
   }
 
-  const settled = item.status === 'resolved' || item.status === 'closed';
+  const settled =
+    item.status === 'resolved' || item.status === 'closed' || item.status === 'cancelled';
+  const businessChange = item.subjectType === 'vendor' && item.category === 'business_change';
+  const isRaiser = !canAllocate && item.raisedByUserId === myId && item.assignedToUserId !== myId;
   // An officer has proposed a resolution and it is waiting on an administrator
   // to approve it or send it back — a different screen from settling a fresh
   // case, so the two do not blur into one another.
@@ -160,6 +165,11 @@ export default function Case() {
   const runAction = (action: CaseAction) => {
     if (action.kind === 'escalate') {
       setAsk('escalate');
+      return;
+    }
+    // Said, rather than a press that comes back refused (row 27).
+    if (!resolutionNotes.trim()) {
+      setError('Write what you did about it first. The person who raised the case reads this note.');
       return;
     }
     void run(
@@ -310,13 +320,72 @@ export default function Case() {
         Recording findings and proposing a resolution is the assigned officer's
         step, so an administrator is not shown these controls.
       */}
-      {/* Whoever raised it follows along; the next move is an officer's. */}
-      {!canAllocate && !canInvestigate && !settled && !inReview ? (
-        <Caption tone="faint">
-          {item.status === 'waiting_for_information'
-            ? 'The officer is waiting on more information. Your notifications say what they need.'
-            : 'An officer looks into this and you are told when it moves.'}
-        </Caption>
+      {/* A business change request: grant edit access or cancel it (row 24). */}
+      {canAllocate && businessChange && (item.status === 'open' || item.status === 'triaged') ? (
+        <Card>
+          <SectionTitle>Business change request</SectionTitle>
+          <Caption tone="faint">
+            Grant the vendor temporary edit access to the requested details, or cancel the request.
+            An officer is allocated after the vendor submits the update.
+          </Caption>
+          <Button
+            label="Grant edit access"
+            disabled={!item.requestedFields?.length}
+            onPress={() =>
+              void run(
+                () =>
+                  api.put(`/verification/cases/${item.id}/grant-business-edit-access`, {
+                    fields: item.requestedFields ?? [],
+                  }),
+                'Edit access granted. The vendor has been notified.',
+              )
+            }
+          />
+          <Button label="Cancel Request" variant="outline" onPress={() => setAsk('cancel')} />
+        </Card>
+      ) : null}
+
+      {/* Whoever raised it follows along, and can answer or close it. */}
+      {isRaiser ? (
+        <Card>
+          <SectionTitle>Updates</SectionTitle>
+          {raiserTimeline(item.history, myId).map((h, i) => (
+            <Caption key={i}>
+              {h.label} · {dateTime(h.at)}
+              {h.note ? `: ${h.note}` : ''}
+            </Caption>
+          ))}
+          {canReply(item.status) ? (
+            <>
+              <Textarea
+                label={item.status === 'waiting_for_information' ? 'Answer the question' : 'Add a reply'}
+                value={reply}
+                onChange={setReply}
+                rows={3}
+                maxLength={4000}
+              />
+              <Button
+                label="Send reply"
+                disabled={reply.trim().length < 2}
+                onPress={() =>
+                  void run(
+                    () => api.put(`/verification/cases/${item.id}/reply`, { message: reply.trim() }),
+                    'Reply sent. Whoever is working on it has been told.',
+                  ).then(() => setReply(''))
+                }
+              />
+            </>
+          ) : null}
+          {canClose(item.status) ? (
+            <Button
+              label={settled ? 'Close case' : 'Withdraw and close'}
+              variant="outline"
+              onPress={() =>
+                void run(() => api.put(`/verification/cases/${item.id}/close`, {}), 'Case closed.')
+              }
+            />
+          ) : null}
+        </Card>
       ) : null}
 
       {!canAllocate && canInvestigate && !settled && !inReview && (
@@ -355,7 +424,7 @@ export default function Case() {
               value={resolutionNotes}
               onChange={setResolutionNotes}
               rows={3}
-              placeholder="Optional"
+              placeholder="Required. The person who raised the case reads this."
             />
             {actions.map((action) => (
               <Button
@@ -427,6 +496,22 @@ export default function Case() {
           void run(
             () => api.put(`/verification/cases/${item.id}/await-information`, { reason }),
             'Parked. The clock is on them now, not on you.',
+          );
+        }}
+      />
+
+      <PromptSheet
+        visible={ask === 'cancel'}
+        title="Why is this request being cancelled?"
+        message="The vendor reads this."
+        minLength={3}
+        confirmLabel="Cancel Request"
+        onCancel={() => setAsk(null)}
+        onConfirm={(reason) => {
+          setAsk(null);
+          void run(
+            () => api.put(`/verification/cases/${item.id}/cancel-business-change`, { reason }),
+            'Request cancelled. The vendor has been notified.',
           );
         }}
       />

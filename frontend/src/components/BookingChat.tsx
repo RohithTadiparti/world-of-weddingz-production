@@ -29,6 +29,10 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
         note: string;
       },
     retry: false,
+    // The other side paying the advance or closing the job changes this, and
+    // nothing pushes it here: a thread left saying "opens after payment" on
+    // a paid booking is the bug this re-read prevents (rows 18-19).
+    refetchInterval: 20000,
   });
 
   const { data: thread } = useQuery({

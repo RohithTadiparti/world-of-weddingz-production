@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Permission, can } from '../lib/permissions';
 import { CategoryNames, useCatalogCategories } from '../components/CategoryPicker';
 import { usePermissions } from '../store/auth';
-import RequestDialog from '../components/RequestDialog';
 import { ViewInstagramLink } from '../components/SocialLinks';
 import type { SocialLink } from '../lib/social-links';
 import { EmptyState, Loading } from '../components/ui/Feedback';
@@ -80,7 +79,7 @@ export default function Vendors() {
   const [city, setCity] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('');
-  const [requesting, setRequesting] = useState<Vendor | null>(null);
+  const navigate = useNavigate();
   // Only buyers place bookings. A planner browses this page to find and
   // recommend vendors for the weddings they run, but the couple (or their
   // agent) is who actually books — so a planner sees the listings without the
@@ -95,7 +94,7 @@ export default function Vendors() {
    */
   const canRequestForClient = can(permissions, Permission.BOOKING_REQUEST_FOR_CLIENT);
   const canAsk = canBook || canRequestForClient;
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
 
   const { data, isLoading } = useQuery({
     queryKey: ['vendors', category, city, search, sort],
@@ -136,38 +135,18 @@ export default function Vendors() {
    * independent of whatever the list happens to be showing.
    */
   useEffect(() => {
+    // The request is a full page of its own now (row 14): an old
+    // ?request= link is handed straight to it, with any date and event.
     const wanted = params.get('request');
-    if (!wanted || requesting) return;
-
-    let cancelled = false;
-    const open = (v: Vendor) => {
-      if (cancelled) return;
-      setRequesting(v);
-      params.delete('request');
-      setParams(params, { replace: true });
-    };
-
-    const match = vendors.find((v) => v.id === wanted);
-    if (match) {
-      open(match);
-      return;
+    if (!wanted) return;
+    const next = new URLSearchParams();
+    for (const key of ['date', 'eventId']) {
+      const value = params.get(key);
+      if (value) next.set(key, value);
     }
-    // Not on this page of results — ask for it directly.
-    api
-      .get(`/vendors/${wanted}`)
-      .then((r) => open(r.data as Vendor))
-      .catch(() => {
-        // Withdrawn, or never visible to this account. Clear the parameter so
-        // the page does not sit there looking like it is about to do something.
-        if (cancelled) return;
-        params.delete('request');
-        setParams(params, { replace: true });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [params, vendors, requesting, setParams]);
+    const query = next.toString();
+    navigate(`/vendors/${wanted}/request${query ? `?${query}` : ''}`, { replace: true });
+  }, [params, navigate]);
 
   return (
     <div className="space-y-4">
@@ -389,11 +368,6 @@ export default function Vendors() {
         forty others with the thing they asked for somewhere off-screen
         (EZ1-I179).
       */}
-      {requesting && (
-        <div ref={(el) => el?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-          <RequestDialog vendor={requesting} onClose={() => setRequesting(null)} />
-        </div>
-      )}
     </div>
   );
 }

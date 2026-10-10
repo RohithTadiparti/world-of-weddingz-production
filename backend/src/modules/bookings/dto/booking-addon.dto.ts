@@ -37,7 +37,10 @@ export class CreateBookingAddonDto {
   })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
+  // Zero is not a price: an add-on asked for at nothing would be agreed at
+  // nothing the moment the vendor pressed Accept. Leave it out to have the
+  // vendor quote instead.
+  @Min(0.01, { message: 'An add-on price must be greater than zero' })
   @Max(100_000_000)
   proposedPrice?: number;
 
@@ -50,9 +53,9 @@ export class CreateBookingAddonDto {
 
 /** The vendor's counter-price on a requote. */
 export class RequoteBookingAddonDto {
-  @ApiProperty({ example: 18000, minimum: 0 })
+  @ApiProperty({ example: 18000, minimum: 0.01 })
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
+  @Min(0.01, { message: 'An add-on price must be greater than zero' })
   @Max(100_000_000)
   vendorPrice: number;
 

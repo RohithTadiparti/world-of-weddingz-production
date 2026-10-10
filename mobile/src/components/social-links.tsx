@@ -21,6 +21,7 @@ import {
   MAX_SOCIAL_LINKS,
   MAX_SOCIAL_URL,
   SOCIAL_PLATFORMS,
+  availableSocialPlatforms,
   httpsHost,
   listingInstagramUrl,
   listingSocialLinks,
@@ -65,6 +66,7 @@ export function SocialLinksEditor({
   showErrors = false,
   error,
   saved,
+  uniquePlatforms = false,
 }: {
   value: SocialLink[];
   onChange: (next: SocialLink[]) => void;
@@ -72,9 +74,21 @@ export function SocialLinksEditor({
   error?: string;
   /** The listing as last saved, for the View Instagram check. */
   saved?: SocialLinks | null;
+  /**
+   * One link of each type (`other` excepted), as a vendor listing requires.
+   * A type already on the list is left out of "Add a link" and of the other
+   * rows' pickers, and comes back when its link is removed.
+   */
+  uniquePlatforms?: boolean;
 }) {
   const [touched, setTouched] = useState<boolean[]>([]);
   const full = value.length >= MAX_SOCIAL_LINKS;
+  const optionsFor = (row?: number) =>
+    (uniquePlatforms ? availableSocialPlatforms(value, row) : SOCIAL_PLATFORMS).map((p) => ({
+      value: p.value,
+      label: p.label,
+    }));
+  const addable = optionsFor();
 
   const update = (i: number, patch: Partial<SocialLink>) =>
     onChange(value.map((link, j) => (j === i ? { ...link, ...patch } : link)));
@@ -111,7 +125,7 @@ export function SocialLinksEditor({
             <SelectField
               label={`Link ${i + 1} platform`}
               value={link.platform}
-              options={PLATFORM_OPTIONS}
+              options={uniquePlatforms ? optionsFor(i) : PLATFORM_OPTIONS}
               onChange={(platform) => update(i, { platform: platform as SocialPlatform })}
             />
             <Field
@@ -145,7 +159,20 @@ export function SocialLinksEditor({
           </View>
         );
       })}
-      <Button label="Add a link" variant="outline" small disabled={full} onPress={add} />
+      {uniquePlatforms ? (
+        <SelectField
+          label="Add a link"
+          placeholder="Choose a link type…"
+          value=""
+          options={addable}
+          disabled={full || addable.length === 0}
+          onChange={(platform) => {
+            if (!full && platform) onChange([...value, { platform: platform as SocialPlatform, url: '' }]);
+          }}
+        />
+      ) : (
+        <Button label="Add a link" variant="outline" small disabled={full} onPress={add} />
+      )}
       <Caption tone={full ? 'brand' : 'faint'}>
         {value.length} of {MAX_SOCIAL_LINKS}
       </Caption>

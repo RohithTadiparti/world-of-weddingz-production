@@ -42,6 +42,10 @@ export const AuditAction = {
   CASE_RAISED: 'case.raised',
   CASE_ALLOCATED: 'case.allocated',
   CASE_SETTLED: 'case.settled',
+  CASE_CANCELLED: 'case.cancelled',
+  CASE_REPLIED: 'case.replied',
+  VERIFICATION_RESUBMITTED: 'verification.resubmitted',
+  VERIFICATION_REOPENED: 'verification.reopened',
 
   MATCH_FIXED_PROPOSED: 'match.fixed_proposed',
   MATCH_FIXED_CONFIRMED: 'match.fixed_confirmed',

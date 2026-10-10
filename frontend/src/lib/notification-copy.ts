@@ -60,6 +60,34 @@ export const TYPE_LABEL: Record<string, string> = {
   event_changed_by_planner: 'Planner updated an event',
 
   operational_alert: 'Operational alert',
+
+  verification_progress: 'Verification update',
+  business_change_update: 'Business change request',
+};
+
+/**
+ * The applicant's verification stages, word for word as the server's push copy
+ * (backend VERIFICATION_STAGE_COPY). Status and tracking only.
+ */
+export const VERIFICATION_STAGE_COPY: Record<string, string> = {
+  submitted: 'Your listing was submitted for verification.',
+  resubmitted:
+    'Your updated listing was submitted for verification. A verification officer will be allocated.',
+  officer_assigned: 'A verification officer has been assigned to your listing.',
+  visit_started: 'Your verification visit is under way.',
+  findings_submitted:
+    'The verification visit is complete and is with an administrator for a decision.',
+  additional_review:
+    'An administrator has asked for another review of your listing. A new verification officer will be allocated.',
+};
+
+/** A decided verification's status in the applicant's own words. */
+const DECIDED_COPY: Record<string, string> = {
+  live: 'Your listing was approved and is now live.',
+  approved: 'Your verification was approved.',
+  verified: 'Your listing was verified.',
+  rejected: 'Your verification was rejected.',
+  reverification_required: 'Changes were requested on your listing. Update it and submit it again.',
 };
 
 /** Readable names for the capacity metrics an operational alert can be about. */
@@ -122,7 +150,18 @@ export function describe(n: Notification): string {
     case 'verification_assigned':
       return `A ${str('applicantType') ?? 'business'} verification is on your queue.`;
     case 'verification_requested':
-      return `${str('subjectName') ?? `A ${str('applicantType') ?? 'business'}`} has applied for approval and is waiting to be allocated.`;
+      return p.resubmitted === true
+        ? `${str('subjectName') ?? `A ${str('applicantType') ?? 'business'}`} has resubmitted after corrections and is waiting for a new officer to be allocated.`
+        : `${str('subjectName') ?? `A ${str('applicantType') ?? 'business'}`} has applied for approval and is waiting to be allocated.`;
+    case 'verification_progress':
+      return VERIFICATION_STAGE_COPY[str('stage') ?? ''] ?? 'There is an update on your verification.';
+    case 'business_change_update': {
+      if (str('status') === 'cancelled') {
+        const reason = str('reason');
+        return `Your business change request was cancelled.${reason ? ` Reason: ${reason}` : ''}`;
+      }
+      return 'Edit access was granted. Update the approved details and submit them for verification.';
+    }
     case 'verification_submitted':
       return `An officer recommends ${str('recommendation') ?? 'a decision'}${
         typeof p.issues === 'number' && p.issues > 0 ? `, with ${p.issues} issue(s)` : ''
@@ -133,7 +172,7 @@ export function describe(n: Notification): string {
       // SLA sweep sets a machine sentinel rather than prose, so that one is left
       // to the sentence alone (EZ1-I110).
       const reason = str('reason');
-      const base = `Your verification was ${status}.`;
+      const base = DECIDED_COPY[str('status') ?? ''] ?? `Your verification was ${status}.`;
       return reason && reason !== 'sla_breach' && status !== 'approved'
         ? `${base} Reason: ${reason}`
         : base;

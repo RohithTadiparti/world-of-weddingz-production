@@ -44,6 +44,10 @@ import {
 } from './payment.provider';
 import { PAYMENT_STATUS_RANK, collectedByBooking, isCollected } from './payment-totals';
 import { escrowSummary, summariseQuotations } from './booking-summary';
+import { QuotationEvent } from './entities/quotation-event.entity';
+import { awaitingRequote, customerAsk, requestEvents } from './negotiation';
+import { eventDateMismatch } from './request-schedule';
+import { ServiceOffering } from '../catalog/entities/service-offering.entity';
 import {
   PlannerRequestCard,
   PlannerRequestDetail,
@@ -476,6 +480,26 @@ export class BookingsService {
     // disagree with the slot they held.
     const functionDate = slotDate ?? dto.eventDate ?? null;
 
+    // A time of day only travels with a requested date: a published window
+    // already says when it runs, and a time with no day means nothing.
+    if (dto.requestedTime && (dto.slotId || !dto.eventDate)) {
+      throw new BadRequestException(
+        dto.slotId
+          ? 'A published slot already has its time. Leave the requested time out.'
+          : 'Choose the date you need before the time.',
+      );
+    }
+
+    // The request is for one of the couple's functions, so its day has to be
+    // that function's day. A slot or requested date on another day would book
+    // the vendor for a date nobody is celebrating.
+    if (dto.eventId) {
+      const event = await this.events.findOne({ where: { id: dto.eventId } });
+      if (!event) throw new BadRequestException('That event could not be found');
+      const mismatch = eventDateMismatch(event, functionDate);
+      if (mismatch) throw new BadRequestException(mismatch);
+    }
+
     // What the catalog contributes: the buyer's answers are validated against
     // the same rows the form they filled in was generated from, and the chosen
     // price is proved to belong to the service they chose.
@@ -553,6 +577,7 @@ export class BookingsService {
           amount: (dto.amount ?? 0).toFixed(2),
           currency: this.cfg.payments.currency,
           eventDate: functionDate,
+          requestedTime: !dto.slotId && dto.requestedTime ? dto.requestedTime : null,
           requirements: dto.requirements ?? null,
           vendorServiceId: dto.vendorServiceId ?? slotServiceId,
           offeringId: dto.offeringId ?? null,
@@ -576,6 +601,22 @@ export class BookingsService {
       );
 
       if (dto.slotId) await this.availability.reserve(manager, dto.slotId);
+
+      // Where the negotiation starts: the price the customer picked off the
+      // listing and the budget they named, kept as history from the outset.
+      const opening = requestEvents(booking);
+      if (opening.length > 0) {
+        const events = manager.getRepository(QuotationEvent);
+        await events.save(
+          opening.map((e) =>
+            events.create({
+              ...e,
+              bookingId: booking.id,
+              actorUserId: e.actorRole === 'customer' ? clientUserId : null,
+            }),
+          ),
+        );
+      }
 
       await this.outbox.record(
         {
@@ -1028,61 +1069,110 @@ export class BookingsService {
     if (!booking.offeringId || !booking.estimatedAmount || parseFloat(booking.estimatedAmount) <= 0) {
       throw new BadRequestException('This request has no selected fixed price. Send a quotation instead.');
     }
-
-    return this.dataSource.transaction(async (manager) => {
-      if (booking.slotId) await this.availability.confirm(manager, booking.slotId);
-
-      this.assertTransition(booking.status, BookingStatus.PAYMENT_PENDING);
-      booking.amount = booking.estimatedAmount as string;
-      booking.status = BookingStatus.PAYMENT_PENDING;
-      const saved = await manager.getRepository(Booking).save(booking);
-
-      await this.outbox.record(
-        {
-          eventType: 'booking.confirmed',
-          aggregateType: 'booking',
-          payload: { bookingId, providerId: booking.providerId, amount: booking.amount },
-        },
-        manager,
+    await this.assertNotNegotiating(booking);
+    // A budget below the listed price is the customer asking for less. Taking
+    // the listed price over it would charge them more than they asked to pay.
+    if (
+      Number(booking.expectedBudget ?? 0) > 0 &&
+      toMinor(booking.expectedBudget as string) !== toMinor(booking.estimatedAmount)
+    ) {
+      throw new BadRequestException(
+        `The customer asked for ${booking.currency} ${Number(booking.expectedBudget).toLocaleString('en-IN')}. ` +
+          'Accept their budget, or send a quotation.',
       );
-      return saved;
-    });
+    }
+
+    return this.agreeCustomerPrice(actor, booking, booking.estimatedAmount);
   }
 
   /**
-   * The vendor accepts the amount the customer proposed. A selected catalogue
-   * price wins over a free-form budget because it is the exact immutable total
-   * shown at request time. A budget-only request may be accepted at that budget
-   * too; a request without either still needs a quotation.
+   * The provider accepts the price the customer asked for (ISS-18, row 17).
+   *
+   * The customer's price is the budget they named, else the listed price they
+   * picked -- never the listed price over a lower budget. The provider says
+   * back the amount they were shown; a mismatch is refused rather than agreeing
+   * some other figure. Once a quotation has been sent the price is agreed
+   * through quotations only: a requote request is answered with a revised
+   * quotation, not by falling back to the listing.
    */
-  async acceptRequest(actor: AuthUser, bookingId: string): Promise<Booking> {
+  async acceptRequest(
+    actor: AuthUser,
+    bookingId: string,
+    dto?: { amount?: number },
+  ): Promise<Booking> {
     const booking = await this.loadOrFail(bookingId);
     await this.assertSellerSide(actor, booking);
 
     if (booking.status !== BookingStatus.REQUESTED) {
       throw new BadRequestException('Only a new customer request can be accepted');
     }
+    await this.assertNotNegotiating(booking);
 
-    const listed = Number(booking.estimatedAmount ?? 0) > 0 ? booking.estimatedAmount : null;
-    const budget = Number(booking.expectedBudget ?? 0) > 0 ? booking.expectedBudget : null;
-    const agreedAmount = listed ?? budget;
-    if (!agreedAmount) {
+    const ask = customerAsk(booking);
+    if (!ask) {
       throw new BadRequestException('This request has no customer price or budget. Send a quotation instead.');
     }
+    if (dto?.amount === undefined || dto.amount === null) {
+      throw new BadRequestException('Confirm the amount you are accepting');
+    }
+    if (Math.round(Number(dto.amount) * 100) !== toMinor(ask.amount)) {
+      throw new BadRequestException(
+        `The customer asked for ${booking.currency} ${Number(ask.amount).toLocaleString('en-IN')}. ` +
+          'Accept that amount, or send a quotation.',
+      );
+    }
 
+    return this.agreeCustomerPrice(actor, booking, ask.amount);
+  }
+
+  /**
+   * Refuses a direct acceptance once a quotation exists on the booking.
+   *
+   * After the provider has quoted, the price is whatever the two sides agree
+   * through quotations. Accepting "the request" then could only fall back to
+   * the listing or the budget -- figures the negotiation has already moved
+   * past -- which is how a declined 22,000 counter ended up agreed at the
+   * 25,000 listing.
+   */
+  private async assertNotNegotiating(booking: Booking): Promise<void> {
+    const quotations = await this.quotations.find({ where: { bookingId: booking.id } });
+    if (quotations.length === 0) return;
+    throw new BadRequestException(
+      awaitingRequote(booking.status, quotations)
+        ? 'The customer rejected your quotation and asked for a requote. Send a revised quotation, or cancel.'
+        : 'A quotation is already on this booking. The price is agreed through quotations now.',
+    );
+  }
+
+  private async agreeCustomerPrice(actor: AuthUser, booking: Booking, amount: string): Promise<Booking> {
     return this.dataSource.transaction(async (manager) => {
       if (booking.slotId) await this.availability.confirm(manager, booking.slotId);
 
       this.assertTransition(booking.status, BookingStatus.PAYMENT_PENDING);
-      booking.amount = agreedAmount;
+      booking.amount = Number(amount).toFixed(2);
       booking.status = BookingStatus.PAYMENT_PENDING;
       const saved = await manager.getRepository(Booking).save(booking);
+
+      const events = manager.getRepository(QuotationEvent);
+      await events.save(
+        events.create({
+          bookingId: booking.id,
+          kind: 'request_accepted',
+          amount: booking.amount,
+          currency: booking.currency,
+          actorRole: 'provider',
+          actorUserId: actor.userId,
+          quotationId: null,
+          note: null,
+          occurredAt: new Date(),
+        }),
+      );
 
       await this.outbox.record(
         {
           eventType: 'booking.confirmed',
           aggregateType: 'booking',
-          payload: { bookingId, providerId: booking.providerId, amount: booking.amount },
+          payload: { bookingId: booking.id, providerId: booking.providerId, amount: booking.amount },
         },
         manager,
       );
@@ -1632,6 +1722,54 @@ export class BookingsService {
   }
 
   /**
+   * Transfers everything owed to the calling provider, across all their bookings.
+   *
+   * The Payments page's "Release all available": the same per-booking release,
+   * applied to every booking with an owed payout, skipping any held by an open
+   * case. Refused up front when there is no active payout account, for the
+   * same reason a single release is.
+   */
+  async releaseAllPayouts(actor: AuthUser): Promise<{
+    released: number;
+    bookings: number;
+    skipped: { bookingId: string; reason: string }[];
+  }> {
+    const providerIds = await this.ownedProviderIds(actor);
+    if (providerIds.length === 0) {
+      throw new BadRequestException('There are no listings on this account to pay out');
+    }
+    const owned = await this.bookings.find({
+      where: { providerId: In(providerIds) },
+      select: ['id'],
+    });
+    const pending = owned.length
+      ? await this.payments.find({
+          where: { bookingId: In(owned.map((b) => b.id)), status: PaymentStatus.PENDING_PAYOUT },
+        })
+      : [];
+    const bookingIds = [...new Set(pending.map((p) => p.bookingId))];
+    if (bookingIds.length === 0) {
+      throw new BadRequestException('Nothing is waiting to be paid out');
+    }
+
+    let released = 0;
+    const skipped: { bookingId: string; reason: string }[] = [];
+    for (const bookingId of bookingIds) {
+      try {
+        const result = await this.releasePayout(actor, bookingId);
+        released += result.released;
+        for (const reason of result.notReleased) skipped.push({ bookingId, reason });
+      } catch (err) {
+        // No payout account is the same answer for every booking: say it once.
+        const reason = err instanceof Error ? err.message : 'The transfer was not made';
+        if (/no active payout account/i.test(reason)) throw err;
+        skipped.push({ bookingId, reason });
+      }
+    }
+    return { released, bookings: bookingIds.length, skipped };
+  }
+
+  /**
    * Retries a payout that could not be made when the work was completed.
    *
    * Run on a schedule rather than left for somebody to notice: the usual reason
@@ -2042,7 +2180,19 @@ export class BookingsService {
    * "confirmed" and "confirmed and paid for" are different amounts of
    * commitment.
    */
-  private async withClientContext(rows: Booking[]): Promise<Booking[]> {
+  private async withClientContext(
+    rows: Booking[],
+    options: {
+      /**
+       * Whether the customer's email and phone go on the rows. Off for every
+       * vendor list (WOW-06, row 15): a vendor reaches the customer through the
+       * booking's own chat once the advance is paid, never off-platform before
+       * it. Only the planner request screens, which are not this queue, keep
+       * them.
+       */
+      includeContact?: boolean;
+    } = {},
+  ): Promise<Booking[]> {
     if (rows.length === 0) return rows;
 
     const userIds = [...new Set(rows.map((b) => b.userId))];
@@ -2051,16 +2201,26 @@ export class BookingsService {
     const offeringIds = [...new Set(rows.map((b) => b.offeringId).filter(Boolean))] as string[];
 
     const bookingIds = rows.map((b) => b.id);
-    const [users, profiles, events, payments, serviceNames, offeringNames, quotationRows] =
+    const [users, profiles, events, payments, serviceNames, offeringRows, quotationRows] =
       await Promise.all([
-        this.users.find({ where: { id: In(userIds) }, select: ['id', 'email', 'phone'] }),
+        options.includeContact
+          ? this.users.find({ where: { id: In(userIds) }, select: ['id', 'email', 'phone'] })
+          : Promise.resolve([] as User[]),
         this.profiles.find({ where: { userId: In(userIds) } }),
         eventIds.length ? this.events.find({ where: { id: In(eventIds) } }) : Promise.resolve([]),
         this.payments.find({ where: { bookingId: In(bookingIds) } }),
         serviceNamesByIds(this.serviceRows, serviceIds),
-        this.vendorServices.offeringNamesByIds(offeringIds),
+        this.offeringsFor(offeringIds, serviceIds),
         this.quotations.find({ where: { bookingId: In(bookingIds) } }),
       ]);
+    const offeringById = new Map(offeringRows.map((o) => [o.id, o]));
+    const modelsByService = new Map<string, string[]>();
+    for (const offering of offeringRows) {
+      if (!offering.active) continue;
+      const list = modelsByService.get(offering.vendorServiceId) ?? [];
+      if (!list.includes(offering.pricingModel)) list.push(offering.pricingModel);
+      modelsByService.set(offering.vendorServiceId, list);
+    }
 
     const byUser = new Map(users.map((u) => [u.id, u]));
     const nameByUser = new Map(profiles.map((p) => [p.userId as string, p.displayName]));
@@ -2115,11 +2275,13 @@ export class BookingsService {
       const user = byUser.get(booking.userId);
       const event = booking.eventId ? byEvent.get(booking.eventId) : undefined;
       const clientProfile = profileByUser.get(booking.userId);
-      // A provider's account often has no profile, and a couple's may not yet:
-      // the email still says who it is where "Customer" says nothing.
-      booking.clientName = nameByUser.get(booking.userId) ?? user?.email ?? null;
-      booking.clientEmail = user?.email ?? null;
-      booking.clientPhone = user?.phone ?? null;
+      // The customer's own name. Their email used to stand in when they had no
+      // profile name, which printed the address the contact rule withholds;
+      // the client says "Customer" instead.
+      booking.clientName =
+        nameByUser.get(booking.userId) ?? (options.includeContact ? (user?.email ?? null) : null);
+      booking.clientEmail = options.includeContact ? (user?.email ?? null) : null;
+      booking.clientPhone = options.includeContact ? (user?.phone ?? null) : null;
       booking.clientCity = clientProfile?.city ?? null;
       booking.clientPhoto = profilePhotoOf(clientProfile);
       // Judged before the linked function's date replaces the booking's own,
@@ -2157,10 +2319,20 @@ export class BookingsService {
           ? 'Wedding planning'
           : null;
       booking.quotation = summariseQuotations(quotationsByBooking.get(booking.id) ?? []);
+      booking.requoteRequested = awaitingRequote(
+        booking.status,
+        quotationsByBooking.get(booking.id) ?? [],
+      );
       booking.collectedMilestones = milestonesByBooking.get(booking.id) ?? [];
-      booking.offeringName = booking.offeringId
-        ? (offeringNames.get(booking.offeringId) ?? null)
-        : null;
+      const offering = booking.offeringId ? offeringById.get(booking.offeringId) : undefined;
+      booking.offeringName = offering?.name ?? null;
+      // The chosen package's pricing model; with no package chosen, the
+      // service's own models, so the label still says how it is priced.
+      booking.pricingModel =
+        offering?.pricingModel ??
+        (booking.vendorServiceId
+          ? (modelsByService.get(booking.vendorServiceId) ?? []).join(',') || null
+          : null);
       booking.paymentStatus = paymentByBooking.get(booking.id) ?? null;
       booking.paidAmount = (paidByBooking.get(booking.id) ?? 0).toFixed(2);
       // Who cancelled, for the booking detail (EZ1-I77). withProviderNames has
@@ -2187,6 +2359,21 @@ export class BookingsService {
       }
     }
     return rows;
+  }
+
+  /**
+   * The chosen packages and every package on the booked services, in one read,
+   * for the package name and the pricing-model label on each row.
+   */
+  private async offeringsFor(
+    offeringIds: string[],
+    serviceIds: string[],
+  ): Promise<ServiceOffering[]> {
+    if (offeringIds.length === 0 && serviceIds.length === 0) return [];
+    const where: Record<string, unknown>[] = [];
+    if (offeringIds.length) where.push({ id: In(offeringIds) });
+    if (serviceIds.length) where.push({ vendorServiceId: In(serviceIds) });
+    return this.dataSource.getRepository(ServiceOffering).find({ where });
   }
 
   /**
@@ -2330,7 +2517,9 @@ export class BookingsService {
       order: { createdAt: 'DESC' },
       take: 500,
     });
-    const enriched = await this.withClientContext(await this.withProviderNames(rows));
+    const enriched = await this.withClientContext(await this.withProviderNames(rows), {
+      includeContact: true,
+    });
     return enriched.map(toRequestCard);
   }
 
@@ -2341,7 +2530,9 @@ export class BookingsService {
       throw new NotFoundException('Request not found');
     }
     await this.assertSellerSide(actor, booking);
-    const [row] = await this.withClientContext(await this.withProviderNames([booking]));
+    const [row] = await this.withClientContext(await this.withProviderNames([booking]), {
+      includeContact: true,
+    });
 
     const date = row.eventDate ?? null;
     let openings = 0;
@@ -2420,11 +2611,13 @@ export class BookingsService {
     ledger: {
       paymentId: string;
       bookingId: string;
-      /** Who the booking is for: their profile name, else their email. */
+      /** Who the booking is for: their profile name, never their contact details. */
       clientName: string | null;
       /** What was booked: the service's name, or 'Wedding planning' for a planner. */
       serviceName: string | null;
       eventDate: string | null;
+      /** Where the job itself stands, so a payout row can say what it waits on. */
+      bookingStatus: BookingStatus | null;
       milestone: PaymentMilestone;
       status: PaymentStatus;
       amount: string;
@@ -2438,6 +2631,8 @@ export class BookingsService {
       payoutNote: string | null;
       confirmedAt: Date | null;
       createdAt: Date;
+      /** When the row last moved: for a paid-out row, when it was paid out. */
+      updatedAt: Date;
     }[];
   }> {
     const providerIds = await this.ownedProviderIds(actor);
@@ -2455,7 +2650,7 @@ export class BookingsService {
 
     const bookings = await this.bookings.find({
       where: { providerId: In(providerIds) },
-      select: ['id', 'currency', 'userId', 'providerType', 'vendorServiceId', 'eventDate'],
+      select: ['id', 'currency', 'userId', 'providerType', 'vendorServiceId', 'eventDate', 'status'],
     });
     if (bookings.length === 0) return empty;
 
@@ -2465,15 +2660,19 @@ export class BookingsService {
     });
 
     // A ledger row that says only a booking id cannot be matched to a job, so
-    // each carries who it was for and what was booked.
+    // each carries who it was for and what was booked. The customer's profile
+    // name only: the email fallback other screens use is contact detail a
+    // provider is not shown (WOW-06).
     const bookingById = new Map(bookings.map((b) => [b.id, b]));
-    const [clientNames, serviceNames] = await Promise.all([
-      displayNamesByUserIds(
-        { users: this.users, profiles: this.profiles },
-        bookings.map((b) => b.userId),
-      ),
+    const [clientProfiles, serviceNames] = await Promise.all([
+      this.profiles.find({ where: { userId: In([...new Set(bookings.map((b) => b.userId))]) } }),
       serviceNamesByIds(this.serviceRows, bookings.map((b) => b.vendorServiceId)),
     ]);
+    const clientNames = new Map(
+      clientProfiles
+        .filter((p) => p.userId && p.displayName)
+        .map((p) => [p.userId as string, p.displayName as string]),
+    );
     const serviceNameOf = (b: Booking | undefined) =>
       !b
         ? null
@@ -2534,6 +2733,7 @@ export class BookingsService {
         clientName: clientNames.get(bookingById.get(p.bookingId)?.userId ?? '') ?? null,
         serviceName: serviceNameOf(bookingById.get(p.bookingId)),
         eventDate: bookingById.get(p.bookingId)?.eventDate ?? null,
+        bookingStatus: bookingById.get(p.bookingId)?.status ?? null,
         milestone: p.milestone,
         status: p.status,
         amount: p.amount,
@@ -2548,6 +2748,7 @@ export class BookingsService {
         payoutNote: p.payoutNote ?? null,
         confirmedAt: p.webhookVerifiedAt ?? null,
         createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
       })),
     };
   }
@@ -2579,7 +2780,7 @@ export class BookingsService {
       this.payments.find({ where: { bookingId: booking.id }, order: { createdAt: 'ASC' } }),
       this.users.findOne({
         where: { id: booking.userId },
-        select: ['id', 'email', 'phone', 'role'],
+        select: ['id', 'role'],
       }),
       booking.vendorServiceId
         ? this.serviceRows.findOne({ where: { id: booking.vendorServiceId } })
@@ -2632,12 +2833,12 @@ export class BookingsService {
         guests: context.guests,
         createdAt: booking.createdAt,
       },
+      // Who the money is from, without their email or phone (WOW-06): the
+      // provider talks to the customer in the booking's chat.
       customer: client
         ? {
             id: client.id,
-            name: clientProfile?.displayName ?? client.email ?? null,
-            email: client.email,
-            phone: client.phone,
+            name: clientProfile?.displayName ?? null,
             city: clientProfile?.city ?? null,
           }
         : null,
@@ -2931,9 +3132,20 @@ export class BookingsService {
     return this.assertParticipant(actor, booking);
   }
 
-  /** Whether the advance is in escrow. What opens the booking's chat thread. */
-  advanceHeld(bookingId: string): Promise<boolean> {
-    return this.hasHeld(bookingId, PaymentMilestone.ADVANCE);
+  /**
+   * Whether the advance has been paid. What opens the booking's chat thread.
+   *
+   * Paid, not merely "still in escrow": the advance leaves escrow the moment
+   * the provider starts work, and on an account whose payout onboarding is
+   * not finished it sits as PENDING_PAYOUT. Counting only held/released money
+   * closed the thread for both sides in the middle of the job. Any collected
+   * advance counts; one that was begun, failed or refunded does not.
+   */
+  async advanceHeld(bookingId: string): Promise<boolean> {
+    const advances = await this.payments.find({
+      where: { bookingId, milestone: PaymentMilestone.ADVANCE },
+    });
+    return advances.some((payment) => isCollected(payment.status));
   }
 
   /**

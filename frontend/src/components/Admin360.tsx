@@ -4,6 +4,7 @@ import { MagnifyingGlass } from '@phosphor-icons/react';
 import { api, apiMessage } from '../lib/api';
 import { formatDate } from '../lib/dates';
 import { EmptyState, Loading } from './ui/Feedback';
+import { accountLabel } from '../lib/admin-names';
 
 /**
  * One subject, everything about it, on one screen.
@@ -35,7 +36,7 @@ export default function Admin360() {
       (await api.get('/admin/directory', { params: { q: query } })).data as {
         // Paginated, with email and mobile masked (ISS-11); the search itself
         // matches the stored values.
-        data: { id: string; email: string | null; phone?: string | null; role: string }[];
+        data: { id: string; name?: string | null; email: string | null; phone?: string | null; role: string }[];
       },
     enabled: query.trim().length >= 2,
     retry: false,
@@ -104,7 +105,7 @@ export default function Admin360() {
                 onClick={() => setSubject({ kind: 'account', id: row.id })}
               >
                 <span className="truncate text-gray-900">
-                  {row.email ?? row.phone ?? 'No email on file'}
+                  {accountLabel(row)}
                 </span>
                 <span className="shrink-0 text-xs uppercase tracking-wide text-gray-400">
                   {row.role}

@@ -247,6 +247,22 @@ export enum NotificationType {
    * and nothing else: no credentials, request data or contact details.
    */
   OPERATIONAL_ALERT = 'operational_alert',
+
+  /**
+   * Where the applicant's verification has got to, for the applicant.
+   *
+   * Tracking only: an officer was assigned, the visit was written up and is
+   * with an administrator, another review is being arranged, a resubmission is
+   * waiting to be allocated. It never carries the officer's findings, their
+   * identity or an administrator's internal remarks; the payload is the stage
+   * and the ids it is about. Decisions stay on VERIFICATION_DECIDED.
+   */
+  VERIFICATION_PROGRESS = 'verification_progress',
+  /**
+   * A vendor's request to change verified business details moved: edit access
+   * was granted, or an administrator cancelled the request.
+   */
+  BUSINESS_CHANGE_UPDATE = 'business_change_update',
 }
 
 /**
@@ -852,6 +868,12 @@ export enum CaseStatus {
   ESCALATED = 'escalated',
   /** The complainant is done, or the acknowledgement window lapsed. */
   CLOSED = 'closed',
+  /**
+   * Withdrawn by an administrator before anything was done, such as a business
+   * change request that will not be granted. Terminal, and distinct from
+   * REJECTED (investigated, not upheld) so both sides read what happened.
+   */
+  CANCELLED = 'cancelled',
 }
 
 /** How urgent a case is, decided at triage rather than by the complainant. */

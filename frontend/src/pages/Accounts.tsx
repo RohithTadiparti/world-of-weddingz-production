@@ -8,6 +8,15 @@ import { Loading } from '../components/ui/Feedback';
 import PayoutAccount, { type PayoutAccountView } from '../components/PayoutAccount';
 import { usePermissions } from '../store/auth';
 import { useBusinesses } from '../store/business';
+import { type PaymentFilter, paymentBucket, releaseCondition } from '../lib/booking-rules';
+
+const FILTERS: { key: PaymentFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'escrow', label: 'In escrow' },
+  { key: 'available', label: 'Available for payout' },
+  { key: 'paid', label: 'Paid out' },
+  { key: 'refunded', label: 'Refunded' },
+];
 
 const maskAccountId = (value: string | null | undefined) => {
   if (!value) return 'Not configured';
@@ -31,6 +40,11 @@ interface LedgerRow {
   clientName?: string | null;
   serviceName?: string | null;
   eventDate: string | null;
+  bookingStatus?: string | null;
+  payoutRef?: string | null;
+  /** Why a payout has not gone through, when it has not. */
+  payoutNote?: string | null;
+  updatedAt?: string;
 }
 
 interface Earnings {
@@ -98,6 +112,31 @@ export default function Accounts() {
   const payoutActive = payout?.status === 'active';
   const [releasing, setReleasing] = useState<string | null>(null);
   const [releaseNotice, setReleaseNotice] = useState('');
+  const [filter, setFilter] = useState<PaymentFilter>('all');
+
+  /** Every owed instalment at once, across all bookings. */
+  async function releaseAll() {
+    setReleasing('all');
+    setReleaseNotice('');
+    try {
+      const { data: result } = await api.put<{
+        released: number;
+        bookings: number;
+        skipped: { bookingId: string; reason: string }[];
+      }>('/bookings/payouts/release');
+      setReleaseNotice(
+        result.released > 0
+          ? `${result.released} payment${result.released === 1 ? '' : 's'} released to your payout account.` +
+              (result.skipped.length ? ` ${result.skipped.length} could not be sent: ${result.skipped[0].reason}` : '')
+          : (result.skipped[0]?.reason ?? 'Nothing was released. It may already be on its way.'),
+      );
+      await qc.invalidateQueries({ queryKey: ['earnings'] });
+    } catch (err) {
+      setReleaseNotice(apiMessage(err, 'Those payments could not be released.'));
+    } finally {
+      setReleasing(null);
+    }
+  }
 
   async function releasePayment(row: LedgerRow) {
     setReleasing(row.paymentId);
@@ -132,6 +171,17 @@ export default function Accounts() {
     () => (data?.ledger ?? []).filter((row) => ['held_in_escrow', 'disputed'].includes(row.status)),
     [data?.ledger],
   );
+  const paidRows = useMemo(
+    () => (data?.ledger ?? []).filter((row) => paymentBucket(row.status) === 'paid'),
+    [data?.ledger],
+  );
+  const ledgerRows = useMemo(
+    () =>
+      (data?.ledger ?? []).filter((row) => filter === 'all' || paymentBucket(row.status) === filter),
+    [data?.ledger, filter],
+  );
+  const countFor = (key: PaymentFilter) =>
+    (data?.ledger ?? []).filter((row) => key === 'all' || paymentBucket(row.status) === key).length;
 
   return (
     <div className="space-y-6">
@@ -163,10 +213,26 @@ export default function Accounts() {
             <div className="card space-y-3 lg:col-span-2">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="section-title">Eligible payouts</h2>
-                <span className="rounded-full bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">
-                  Available: {money(data.pendingPayout)}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">
+                    Available: {money(data.pendingPayout)}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={releasing !== null || !payoutActive || eligibleRows.length === 0}
+                    title={payoutActive ? undefined : 'Set up an active payout account first'}
+                    onClick={() => void releaseAll()}
+                  >
+                    {releasing === 'all' ? 'Releasing…' : 'Release all available'}
+                  </button>
+                </div>
               </div>
+              {!payoutActive && eligibleRows.length > 0 && (
+                <p className="text-xs text-caution-fg">
+                  Add and verify a payout account above to release these payments.
+                </p>
+              )}
               {releaseNotice && (
                 <p className="rounded-sm bg-sky-50 p-2 text-sm text-sky-800">{releaseNotice}</p>
               )}
@@ -198,7 +264,12 @@ export default function Accounts() {
                           <td className="py-3">{MILESTONE_LABEL[row.milestone] ?? row.milestone}</td>
                           <td className="py-3 text-right">{money(row.amount)}</td>
                           <td className="py-3 text-right">{money(row.releasedAmount)}</td>
-                          <td className="py-3 text-right font-medium">{money(row.availableAmount)}</td>
+                          <td className="py-3 text-right font-medium">
+                            {money(row.availableAmount)}
+                            {row.payoutNote && (
+                              <span className="block text-xs font-normal text-gray-500">{row.payoutNote}</span>
+                            )}
+                          </td>
                           <td className="py-3 text-right">
                             <button
                               type="button"
@@ -261,12 +332,17 @@ export default function Accounts() {
                     <th className="pb-2">Milestone</th>
                     <th className="pb-2 text-right">Amount</th>
                     <th className="pb-2">Status</th>
-                    <th className="pb-2">Expected release</th>
+                    <th className="pb-2">Released when</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y" style={{ fontVariantNumeric: 'tabular-nums' }}>
                   {escrowRows.map((row) => (
-                    <tr key={row.paymentId}>
+                    <tr
+                      key={row.paymentId}
+                      onClick={() => navigate(`/accounts/transactions/${row.paymentId}`)}
+                      className="cursor-pointer hover:bg-surface-sunken"
+                      title="Open transaction details"
+                    >
                       <td className="py-2 font-mono text-xs text-gray-700">{row.bookingId.slice(0, 8)}</td>
                       <td className="py-2 text-gray-700">{row.clientName ?? 'Customer'}</td>
                       <td className="py-2">{MILESTONE_LABEL[row.milestone] ?? row.milestone}</td>
@@ -276,7 +352,51 @@ export default function Accounts() {
                           {paymentStatusLabel(row.status, 'provider')}
                         </span>
                       </td>
-                      <td className="py-2 text-gray-600">{row.confirmedAt ? new Date(row.confirmedAt).toLocaleDateString() : 'Awaiting confirmation'}</td>
+                      <td className="py-2 text-gray-600">{releaseCondition(row)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* What has reached the bank, with the transfer reference. */}
+          <div className="card overflow-x-auto">
+            <div className="mb-3 flex items-baseline justify-between gap-3">
+              <h2 className="font-semibold text-gray-900">Payouts</h2>
+              <span className="text-xs text-gray-400">Paid out: {money(data.released)}</span>
+            </div>
+            {paidRows.length === 0 ? (
+              <div className="py-4 text-center text-sm text-gray-500">Nothing has been paid out yet.</div>
+            ) : (
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs uppercase tracking-wide text-gray-500">
+                    <th className="pb-2">Paid on</th>
+                    <th className="pb-2">Booking</th>
+                    <th className="pb-2">Instalment</th>
+                    <th className="pb-2 text-right">Paid to you</th>
+                    <th className="pb-2">Reference</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {paidRows.map((row) => (
+                    <tr
+                      key={row.paymentId}
+                      onClick={() => navigate(`/accounts/transactions/${row.paymentId}`)}
+                      className="cursor-pointer hover:bg-surface-sunken"
+                    >
+                      <td className="py-2 text-gray-600">
+                        {new Date(row.updatedAt ?? row.createdAt).toLocaleDateString()}
+                      </td>
+                      <td className="py-2 text-gray-700">
+                        {[row.clientName ?? 'Customer', row.serviceName].filter(Boolean).join(' · ')}
+                      </td>
+                      <td className="py-2">{MILESTONE_LABEL[row.milestone] ?? row.milestone}</td>
+                      <td className="py-2 text-right font-medium">{money(row.releasedAmount)}</td>
+                      <td className="py-2 font-mono text-xs text-gray-600">
+                        {row.payoutRef ?? (row.status === 'partially_settled' ? 'Settlement' : 'Cash / direct')}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -285,9 +405,28 @@ export default function Accounts() {
           </div>
 
           <div className="card overflow-x-auto">
-            <div className="mb-3 flex items-baseline justify-between gap-3">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
               <h2 className="font-semibold text-gray-900">Ledger</h2>
               <span className="text-xs text-gray-400">Select a row for full transaction details</span>
+            </div>
+            <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter payments">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={
+                    filter === f.key
+                      ? 'rounded-sm bg-brand px-3 py-1 text-xs font-medium text-brand-fg'
+                      : 'rounded-sm bg-surface-sunken px-3 py-1 text-xs text-gray-600 hover:bg-gray-100'
+                  }
+                >
+                  {f.label}
+                  <span className="ml-1.5 font-mono opacity-70">{countFor(f.key)}</span>
+                </button>
+              ))}
             </div>
             <table className="w-full min-w-[720px] text-sm">
               <thead>
@@ -302,7 +441,7 @@ export default function Accounts() {
                 </tr>
               </thead>
               <tbody className="divide-y" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {data.ledger.map((row) => (
+                {ledgerRows.map((row) => (
                   <tr
                     key={row.paymentId}
                     onClick={() => navigate(`/accounts/transactions/${row.paymentId}`)}
@@ -340,10 +479,10 @@ export default function Accounts() {
                     </td>
                   </tr>
                 ))}
-                {data.ledger.length === 0 && (
+                {ledgerRows.length === 0 && (
                   <tr>
                     <td colSpan={7} className="py-4 text-center text-gray-400">
-                      No payments yet.
+                      {data.ledger.length === 0 ? 'No payments yet.' : 'No payments in this view.'}
                     </td>
                   </tr>
                 )}

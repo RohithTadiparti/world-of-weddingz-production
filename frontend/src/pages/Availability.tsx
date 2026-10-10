@@ -5,6 +5,13 @@ import { useBusinesses } from '../store/business';
 import { usePermissions } from '../store/auth';
 import { Permission, can } from '../lib/permissions';
 import { DAY_STATE_LABEL, SLOT_STATE_LABEL, SlotState } from '../lib/permissions';
+import {
+  MAX_SLOT_CAPACITY,
+  MIN_SLOT_CAPACITY,
+  serviceOptionName,
+  slotCapacityError,
+  slotServiceLabel,
+} from '../lib/catalog-rules';
 
 /**
  * A published window, exactly as the server reports it.
@@ -59,6 +66,8 @@ interface VendorService {
   id: string;
   displayName: string | null;
   definition: { name: string } | null;
+  /** Switched-off services cannot have time published for them. */
+  active?: boolean;
 }
 
 type Bucket = 'published' | 'open' | 'requested' | 'booked' | 'full' | 'blocked';
@@ -337,6 +346,7 @@ export default function Availability() {
               >
                 <span className="text-sm font-medium text-gray-900">
                   {formatLongDate(slot.date)} · {hhmm(slot.startTime)}–{hhmm(slot.endTime)}
+                  {!isPlanner && ` · ${slotServiceLabel(slot.vendorServiceId, services)}`}
                 </span>
                 <SlotCounts slot={slot} />
               </button>
@@ -391,6 +401,11 @@ export default function Availability() {
                   <div>
                     <p className="font-medium text-gray-900">
                       {hhmm(slot.startTime)} – {hhmm(slot.endTime)}
+                      {!isPlanner && (
+                        <span className="ml-2 text-sm font-normal text-gray-600">
+                          · {slotServiceLabel(slot.vendorServiceId, services)}
+                        </span>
+                      )}
                     </p>
                     <div className="mt-1">
                       <SlotCounts slot={slot} />
@@ -483,7 +498,7 @@ export default function Availability() {
 
           <NewSlot
             date={selected}
-            services={services}
+            services={services.filter((s) => s.active !== false)}
             onCreate={(body) =>
               act(
                 () => api.post(`${base}/${vendorId}/availability/slots`, body),
@@ -571,14 +586,16 @@ function NewSlot({
   const [end, setEnd] = useState('13:00');
   // Availability is per service (EZ1-I28): a window must name the service it is
   // for, so publishing time for one service does not make every service look
-  // bookable. Defaults to the vendor's first service.
-  const [serviceId, setServiceId] = useState(services[0]?.id ?? '');
+  // bookable. Nothing is chosen for the vendor: it used to default to the first
+  // service, and a window published for something else was listed under it.
+  const [serviceId, setServiceId] = useState('');
   const [capacity, setCapacity] = useState('');
   const [note, setNote] = useState('');
   const [problem, setProblem] = useState('');
 
+  // A choice that is no longer offered (switched off, removed) is cleared.
   useEffect(() => {
-    if (!serviceId && services.length > 0) setServiceId(services[0].id);
+    if (serviceId && !services.some((s) => s.id === serviceId)) setServiceId('');
   }, [services, serviceId]);
 
   // Capacity follows the service unless the vendor overrides it for this one
@@ -592,14 +609,15 @@ function NewSlot({
       setProblem('The end time has to be after the start time.');
       return;
     }
-    if (!Number.isInteger(effectiveCapacity) || effectiveCapacity < 1) {
-      setProblem('Capacity has to be a whole number, at least one.');
-      return;
-    }
     // A window with no service would show under every service (EZ1-I28), so a
     // vendor who has services must pick the one this window is for.
     if (services.length > 0 && !serviceId) {
-      setProblem('Choose the service this window is for.');
+      setProblem('Choose the service this window is for');
+      return;
+    }
+    const capacityProblem = slotCapacityError(effectiveCapacity);
+    if (capacityProblem) {
+      setProblem(capacityProblem);
       return;
     }
     setProblem('');
@@ -649,9 +667,12 @@ function NewSlot({
                 setCapacity('');
               }}
             >
+              <option value="" disabled>
+                Choose a service…
+              </option>
               {services.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.displayName ?? s.definition?.name ?? 'Service'}
+                  {serviceOptionName(s)}
                 </option>
               ))}
             </select>
@@ -662,7 +683,9 @@ function NewSlot({
           <input
             className="input mt-1 w-24"
             type="number"
-            min={1}
+            min={MIN_SLOT_CAPACITY}
+            max={MAX_SLOT_CAPACITY}
+            step={1}
             placeholder="1"
             value={capacity}
             onChange={(e) => setCapacity(e.target.value)}
@@ -680,8 +703,8 @@ function NewSlot({
         <button className="btn">Publish window</button>
       </div>
       <p className="text-xs text-gray-500">
-        Capacity is how many bookings this window can take at once: five if you can run five teams,
-        one for a hall.
+        Capacity is how many bookings this window can take at once, 1 to {MAX_SLOT_CAPACITY}: five if
+        you can run five teams, one for a hall.
       </p>
       {problem && <p className="text-sm text-red-600">{problem}</p>}
     </form>
@@ -724,9 +747,15 @@ function EditSlot({
       return;
     }
     const n = Number(capacity);
-    if (!Number.isInteger(n) || n < 1) {
-      setProblem('Capacity has to be a whole number, at least one.');
-      return;
+    // Only a changed capacity is checked and sent: a window published before
+    // the 20-booking ceiling keeps its figure until the vendor changes it.
+    const changed = n !== slot.capacity;
+    if (changed) {
+      const capacityProblem = slotCapacityError(capacity);
+      if (capacityProblem) {
+        setProblem(capacityProblem);
+        return;
+      }
     }
     if (n < slot.confirmed) {
       setProblem(`This window already holds ${slot.confirmed} confirmed booking(s).`);
@@ -735,7 +764,7 @@ function EditSlot({
     setProblem('');
     onSave({
       ...(slot.actions.canRetime ? { startTime: start, endTime: end } : {}),
-      capacity: n,
+      ...(changed ? { capacity: n } : {}),
       note: note.trim(),
     });
   }
@@ -768,7 +797,9 @@ function EditSlot({
           <input
             className="input mt-1 w-24"
             type="number"
-            min={Math.max(1, slot.confirmed)}
+            min={Math.max(MIN_SLOT_CAPACITY, slot.confirmed)}
+            max={Math.max(MAX_SLOT_CAPACITY, slot.capacity)}
+            step={1}
             value={capacity}
             onChange={(e) => setCapacity(e.target.value)}
           />

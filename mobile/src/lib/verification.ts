@@ -1,5 +1,6 @@
 import type { Tone } from '@/components/chrome';
 import type { CaseStatus, VerificationStatus } from '@/shared/permissions';
+import type { CaseHistoryEntry } from '@/shared/support-cases';
 
 /**
  * The in-person verification portal's records and the way its queue sorts.
@@ -69,6 +70,11 @@ export interface SupportCase {
   raisedByName?: string | null;
   raisedByEmail?: string | null;
   raisedByRole?: string | null;
+  /** 'business_change' for a vendor's request to change verified details. */
+  category?: string | null;
+  requestedFields?: string[] | null;
+  /** The timeline; the raiser's copy carries only what is addressed to them. */
+  history?: CaseHistoryEntry[];
   booking?: {
     id: string;
     status: string;

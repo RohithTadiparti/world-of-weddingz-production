@@ -5,6 +5,8 @@ import { Payment } from './entities/payment.entity';
 import { WeddingEvent } from '../events/entities/event.entity';
 import { VendorService } from '../catalog/entities/vendor-service.entity';
 import { Quotation } from './entities/quotation.entity';
+import { QuotationEvent } from './entities/quotation-event.entity';
+import { ServiceOffering } from '../catalog/entities/service-offering.entity';
 import { BookingAddon } from './entities/booking-addon.entity';
 import { Profile } from '../users/entities/profile.entity';
 import { User } from '../auth/entities/user.entity';
@@ -36,6 +38,9 @@ import {
       Booking,
       Payment,
       Quotation,
+      // How each price was arrived at: listed price, budget, every offer and
+      // its answer, and the price agreed (row 16).
+      QuotationEvent,
       BookingAddon,
       Vendor,
       PlannerProfile,
@@ -46,6 +51,8 @@ import {
       User,
       WeddingEvent,
       VendorService,
+      // Read-only: the package name and pricing model beside each booked service.
+      ServiceOffering,
       // Read/write, to auto-engage a planner on their client's plan when the
       // booking is confirmed (EZ1-I116).
       WeddingPlan,

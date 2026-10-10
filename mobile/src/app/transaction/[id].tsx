@@ -72,7 +72,7 @@ interface TransactionDetail {
     city?: string | null;
     guests?: number | null;
   };
-  customer: { id: string; name: string | null; email: string; phone: string | null; city: string | null } | null;
+  customer: { id: string; name: string | null; city: string | null } | null;
   service: { id: string | null; name: string | null; offering: string | null; quantity: number | null; total: string };
   event: {
     id: string;
@@ -221,9 +221,8 @@ export default function Transaction() {
         <SectionTitle>Customer</SectionTitle>
         {customer ? (
           <DetailGrid>
-            <DetailRow label="Customer">{customer.name ?? customer.email}</DetailRow>
-            <DetailRow label="Email">{customer.email}</DetailRow>
-            <DetailRow label="Mobile">{customer.phone ?? '—'}</DetailRow>
+            {/* No email or phone: the customer is reached in the booking's chat (WOW-06). */}
+            <DetailRow label="Customer">{customer.name ?? 'Customer'}</DetailRow>
             {customer.city ? <DetailRow label="City">{customer.city}</DetailRow> : null}
           </DetailGrid>
         ) : (

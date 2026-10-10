@@ -18,6 +18,7 @@ import {
   SOCIAL_PLATFORMS,
   SocialLink,
   SocialPlatform,
+  availableSocialPlatforms,
   httpsHost,
   listingInstagramUrl,
   socialLinkError,
@@ -53,22 +54,34 @@ export function SocialLinksEditor({
   onChange,
   showErrors = false,
   error,
+  uniquePlatforms = false,
 }: {
   value: SocialLink[];
   onChange: (next: SocialLink[]) => void;
   showErrors?: boolean;
   /** A problem with the list as a whole, e.g. from the server. */
   error?: string;
+  /**
+   * One link of each type (`other` excepted), as a vendor listing requires.
+   * A type already on the list is left out of "Add a link" and of the other
+   * rows' pickers, and comes back when its link is removed.
+   */
+  uniquePlatforms?: boolean;
 }) {
   const id = useId();
   const [touched, setTouched] = useState<boolean[]>([]);
   const full = value.length >= MAX_SOCIAL_LINKS;
+  const addable = uniquePlatforms ? availableSocialPlatforms(value) : SOCIAL_PLATFORMS;
 
   const update = (i: number, patch: Partial<SocialLink>) =>
     onChange(value.map((link, j) => (j === i ? { ...link, ...patch } : link)));
   const remove = (i: number) => {
     onChange(value.filter((_, j) => j !== i));
     setTouched((t) => t.filter((_, j) => j !== i));
+  };
+  const addOf = (platform: SocialPlatform) => {
+    if (full) return;
+    onChange([...value, { platform, url: '' }]);
   };
   const add = () => {
     if (full) return;
@@ -112,7 +125,7 @@ export function SocialLinksEditor({
                     value={link.platform}
                     onChange={(e) => update(i, { platform: e.target.value as SocialPlatform })}
                   >
-                    {SOCIAL_PLATFORMS.map((p) => (
+                    {(uniquePlatforms ? availableSocialPlatforms(value, i) : SOCIAL_PLATFORMS).map((p) => (
                       <option key={p.value} value={p.value}>
                         {p.label}
                       </option>
@@ -182,9 +195,33 @@ export function SocialLinksEditor({
         })}
       </ul>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="btn-outline btn-sm" onClick={add} disabled={full}>
-          Add a link
-        </button>
+        {uniquePlatforms ? (
+          <>
+            <label className="sr-only" htmlFor={`${id}-add`}>
+              Add a link
+            </label>
+            <select
+              id={`${id}-add`}
+              className="input w-auto"
+              value=""
+              disabled={full || addable.length === 0}
+              onChange={(e) => {
+                if (e.target.value) addOf(e.target.value as SocialPlatform);
+              }}
+            >
+              <option value="">Add a link…</option>
+              {addable.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <button type="button" className="btn-outline btn-sm" onClick={add} disabled={full}>
+            Add a link
+          </button>
+        )}
         <span className={`text-xs ${full ? 'text-caution-fg' : 'text-gray-500'}`}>
           {value.length} of {MAX_SOCIAL_LINKS}
         </span>

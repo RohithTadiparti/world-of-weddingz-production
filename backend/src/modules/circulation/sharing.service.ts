@@ -62,12 +62,14 @@ export interface ShareResult {
  * A share grants READ ONLY. It never lets the recipient edit the profile or act
  * as it; that stays with the owner and the steward.
  */
-/** Who circulated a profile, as the receiving agent needs to see it. */
+/**
+ * Who circulated a profile, as the receiving agent sees it: the agency, and
+ * nothing to ring or write to (WOW-07). The card is for deciding whether to
+ * take the profile seriously; the sharer's mobile and email are theirs to give,
+ * and putting them on every card they sent handed them to each recipient.
+ */
 export interface SharerView {
   agencyName: string | null;
-  city: string | null;
-  contactPhone: string | null;
-  email: string | null;
 }
 
 @Injectable()
@@ -541,7 +543,7 @@ export class SharingService {
       this.profiles.find({ where: { id: In(shares.map((s) => s.profileId)) } }),
       this.users.find({
         where: { id: In(shares.map((s) => s.sharedByUserId)) },
-        select: ['id', 'email'],
+        select: ['id'],
       }),
       this.agencies.find({ where: { ownerUserId: In(shares.map((s) => s.sharedByUserId)) } }),
     ]);
@@ -568,18 +570,8 @@ export class SharingService {
         {
           share,
           profile,
-          sharedBy: agency
-            ? {
-                agencyName: agency.agencyName,
-                city: agency.city ?? null,
-                // The agency's own contact, not the sharer's login. An agent
-                // ringing about a client should reach the desk.
-                contactPhone: agency.contactPhone ?? null,
-                email: user?.email ?? null,
-              }
-            : user
-              ? { agencyName: null, city: null, contactPhone: null, email: user.email }
-              : null,
+          // The agency and nothing more (WOW-07): no contact number, no email.
+          sharedBy: agency ? { agencyName: agency.agencyName } : user ? { agencyName: null } : null,
         },
       ];
     });

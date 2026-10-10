@@ -8,6 +8,7 @@ import { BookingsService } from './bookings.service';
 import { Booking } from './entities/booking.entity';
 import { Payment } from './entities/payment.entity';
 import { Quotation } from './entities/quotation.entity';
+import { QuotationEvent } from './entities/quotation-event.entity';
 import { VendorReview } from '../vendors/entities/vendor-review.entity';
 import { PlannerReview } from '../wedding-planners/entities/planner-review.entity';
 import { WeddingPlan } from '../planner/entities/wedding-plan.entity';
@@ -120,10 +121,29 @@ describe('BookingsService', () => {
   const outbox = { record: jest.fn() } as unknown as OutboxService;
   // confirm() takes the vendor's date inside a transaction, so the stub has to
   // hand back a manager that behaves like the booking repository.
+  // Negotiation steps are written through the same manager; they go to their
+  // own double so they never overwrite the booking under test.
+  const eventsRepo = {
+    save: jest.fn(async (e) => e),
+    create: jest.fn((x) => x),
+  };
+  const offeringsRepo = { find: jest.fn(async () => []) };
+  const quotationsRepo = {
+    find: jest.fn(async (): Promise<Partial<Quotation>[]> => []),
+    findOne: jest.fn(),
+    save: jest.fn(),
+    create: jest.fn(),
+  };
+  const eventsTable = {
+    find: jest.fn(async () => []),
+    findOne: jest.fn(async (): Promise<Partial<WeddingEvent> | null> => null),
+  };
+  const repoFor = (entity: unknown) => (entity === QuotationEvent ? eventsRepo : bookingsRepo);
   const dataSource = {
     transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-      fn({ getRepository: () => bookingsRepo }),
+      fn({ getRepository: repoFor }),
     ),
+    getRepository: jest.fn(() => offeringsRepo),
   } as unknown as DataSource;
   const gateway = { createEscrowHold: jest.fn(), release: jest.fn(), refund: jest.fn() };
   const baseBooking = (over: Partial<Booking> = {}): Booking =>
@@ -159,10 +179,7 @@ describe('BookingsService', () => {
         { provide: getRepositoryToken(Payment), useValue: paymentsRepo },
         // Quotations joined the service after this suite was written; nothing
         // here goes down a quotation path, so an inert double is enough.
-        {
-          provide: getRepositoryToken(Quotation),
-          useValue: { find: jest.fn().mockResolvedValue([]), findOne: jest.fn(), save: jest.fn(), create: jest.fn() },
-        },
+        { provide: getRepositoryToken(Quotation), useValue: quotationsRepo },
         { provide: getRepositoryToken(Vendor), useValue: vendorsRepo },
         // Both joined the service after this suite was written, and neither is
         // reached by anything here: reviews are written on completion paths the
@@ -186,7 +203,7 @@ describe('BookingsService', () => {
         { provide: getRepositoryToken(User), useValue: usersRepo },
         // Read-only in the service: they put a client and a venue on a
         // provider's booking row, and nothing in these tests reads them.
-        { provide: getRepositoryToken(WeddingEvent), useValue: { find: jest.fn().mockResolvedValue([]) } },
+        { provide: getRepositoryToken(WeddingEvent), useValue: eventsTable },
         { provide: getRepositoryToken(VendorService), useValue: { find: jest.fn().mockResolvedValue([]) } },
         { provide: AppConfigService, useValue: cfg },
         { provide: OutboxService, useValue: outbox },
@@ -200,6 +217,43 @@ describe('BookingsService', () => {
       ],
     }).compile();
     service = moduleRef.get(BookingsService);
+  });
+
+  describe('placing a request (rows 13 and 14)', () => {
+    const bride = () => asUser('u1', UserRole.BRIDE);
+    const request = (over: Record<string, unknown> = {}) =>
+      ({ providerType: ProviderType.VENDOR, providerId: 'v1', ...over }) as never;
+
+    it('refuses a date that does not match the chosen event', async () => {
+      eventsTable.findOne.mockResolvedValueOnce({ id: 'e1', name: 'Mehendi', eventDate: '2026-12-10' });
+      await expect(
+        service.create(bride(), request({ eventId: 'e1', eventDate: '2026-12-11' })),
+      ).rejects.toThrow('Mehendi is on 2026-12-10, but the date you chose is 2026-12-11');
+      expect(bookingsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('accepts a requested date with a time on the event day, and keeps the time', async () => {
+      eventsTable.findOne.mockResolvedValueOnce({ id: 'e1', name: 'Mehendi', eventDate: '2026-12-10' });
+      const booking = await service.create(
+        bride(),
+        request({ eventId: 'e1', eventDate: '2026-12-10', requestedTime: '18:30', expectedBudget: 20000 }),
+      );
+      expect(booking).toMatchObject({ eventDate: '2026-12-10', requestedTime: '18:30', slotId: null });
+      expect(eventsRepo.save).toHaveBeenCalledWith([
+        expect.objectContaining({ kind: 'budget', amount: '20000.00', actorRole: 'customer' }),
+      ]);
+    });
+
+    it('refuses a requested time with no date', async () => {
+      await expect(service.create(bride(), request({ requestedTime: '18:30' }))).rejects.toThrow(
+        'Choose the date you need before the time.',
+      );
+    });
+
+    it('needs only one of the two options: a requested date alone is a whole request', async () => {
+      const booking = await service.create(bride(), request({ eventDate: '2026-12-12' }));
+      expect(booking).toMatchObject({ eventDate: '2026-12-12', slotId: null, requestedTime: null });
+    });
   });
 
   describe('state machine', () => {
@@ -268,29 +322,148 @@ describe('BookingsService', () => {
         estimatedAmount: null,
       });
 
-      const result = await service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1');
+      const result = await service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1', {
+        amount: 12500,
+      });
 
       expect(result).toMatchObject({ status: BookingStatus.PAYMENT_PENDING, amount: '12500.00' });
+      expect(eventsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'request_accepted', amount: '12500.00' }),
+      );
       expect(outbox.record).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'booking.confirmed', payload: expect.objectContaining({ amount: '12500.00' }) }),
         expect.anything(),
       );
       await expect(
-        service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1'),
+        service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1', { amount: 12500 }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('uses the selected listed total over a customer budget', async () => {
+    it("accepts the customer's budget over the listed price, never the listing silently", async () => {
+      current = baseBooking({
+        status: BookingStatus.REQUESTED,
+        amount: '0.00',
+        estimatedAmount: '25000.00',
+        expectedBudget: '20000.00',
+      });
+      await expect(
+        service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1', { amount: 25000 }),
+      ).rejects.toThrow(/asked for .*20,000/);
+      const result = await service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1', {
+        amount: 20000,
+      });
+      expect(result.amount).toBe('20000.00');
+    });
+
+    it('accepts the listed total when the customer gave no budget', async () => {
       current = baseBooking({
         status: BookingStatus.REQUESTED,
         amount: '0.00',
         estimatedAmount: '10000.00',
-        expectedBudget: '12500.00',
+        expectedBudget: null,
       });
-
-      const result = await service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1');
-
+      const result = await service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1', {
+        amount: 10000,
+      });
       expect(result.amount).toBe('10000.00');
+    });
+
+    it('refuses an accept that does not say the amount', async () => {
+      current = baseBooking({ status: BookingStatus.REQUESTED, amount: '0.00', expectedBudget: '5000.00' });
+      await expect(
+        service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1'),
+      ).rejects.toThrow('Confirm the amount you are accepting');
+    });
+
+    it('refuses Accept after the customer rejected a quotation: only a requote or cancel remain', async () => {
+      current = baseBooking({
+        status: BookingStatus.REQUESTED,
+        amount: '0.00',
+        estimatedAmount: '25000.00',
+        expectedBudget: '20000.00',
+      });
+      quotationsRepo.find.mockResolvedValueOnce([
+        { status: 'rejected' as never, createdAt: new Date('2026-10-01') },
+      ]);
+      await expect(
+        service.acceptRequest(asUser('vendor-owner', UserRole.VENDOR), 'b1', { amount: 20000 }),
+      ).rejects.toThrow(/asked for a requote/);
+      expect(current.status).toBe(BookingStatus.REQUESTED);
+      expect(current.amount).toBe('0.00');
+    });
+
+    it('refuses the listed-price accept once a quotation is on the booking', async () => {
+      current = baseBooking({
+        status: BookingStatus.REQUESTED,
+        amount: '0.00',
+        offeringId: 'o1',
+        estimatedAmount: '25000.00',
+      });
+      quotationsRepo.find.mockResolvedValueOnce([
+        { status: 'rejected' as never, createdAt: new Date('2026-10-01') },
+      ]);
+      await expect(
+        service.acceptListedPrice(asUser('vendor-owner', UserRole.VENDOR), 'b1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses the listed price over a lower customer budget', async () => {
+      current = baseBooking({
+        status: BookingStatus.REQUESTED,
+        amount: '0.00',
+        offeringId: 'o1',
+        estimatedAmount: '25000.00',
+        expectedBudget: '20000.00',
+      });
+      await expect(
+        service.acceptListedPrice(asUser('vendor-owner', UserRole.VENDOR), 'b1'),
+      ).rejects.toThrow(/Accept their budget/);
+    });
+
+    it('opens chat on a collected advance, including one awaiting its payout', async () => {
+      paymentsRepo.find.mockResolvedValueOnce([{ milestone: 'advance', status: 'pending_payout' }] as never);
+      await expect(service.advanceHeld('b1')).resolves.toBe(true);
+      paymentsRepo.find.mockResolvedValueOnce([{ milestone: 'advance', status: 'released' }] as never);
+      await expect(service.advanceHeld('b1')).resolves.toBe(true);
+      paymentsRepo.find.mockResolvedValueOnce([{ milestone: 'advance', status: 'failed' }] as never);
+      await expect(service.advanceHeld('b1')).resolves.toBe(false);
+      paymentsRepo.find.mockResolvedValueOnce([] as never);
+      await expect(service.advanceHeld('b1')).resolves.toBe(false);
+    });
+
+    it('refuses to accept delivery while an issue is open', async () => {
+      current = baseBooking({
+        status: BookingStatus.COMPLETED_PENDING_FINAL_PAYMENT,
+        deliveredAt: new Date(),
+        deliveryAcceptedAt: null,
+      });
+      (cases.hasOpenCaseFor as jest.Mock).mockResolvedValueOnce(true);
+      await expect(
+        service.confirmDelivery(asUser('u1', UserRole.BRIDE), 'b1'),
+      ).rejects.toThrow(/open case/);
+      expect(current.deliveryAcceptedAt).toBeNull();
+    });
+
+    it('accepts delivery when no issue is open', async () => {
+      current = baseBooking({
+        status: BookingStatus.COMPLETED_PENDING_FINAL_PAYMENT,
+        deliveredAt: new Date(),
+        deliveryAcceptedAt: null,
+      });
+      const result = await service.confirmDelivery(asUser('u1', UserRole.BRIDE), 'b1');
+      expect(result.deliveryAcceptedAt).toBeInstanceOf(Date);
+    });
+
+    it('keeps Mark as completed refused while the balance is paid but delivery is not accepted', async () => {
+      current = baseBooking({
+        status: BookingStatus.COMPLETED_PENDING_FINAL_PAYMENT,
+        deliveredAt: new Date(),
+        deliveryAcceptedAt: null,
+      });
+      paymentsRepo.find.mockResolvedValueOnce([{ milestone: 'final', status: 'held_in_escrow' }] as never);
+      await expect(
+        service.markCompleted(asUser('vendor-owner', UserRole.VENDOR), 'b1'),
+      ).rejects.toThrow(/not confirmed the delivery/);
     });
 
     it('rejects an illegal transition COMPLETED to CONFIRMED', async () => {

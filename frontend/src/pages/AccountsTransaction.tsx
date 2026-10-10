@@ -1,5 +1,6 @@
-import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CaretLeft } from '@phosphor-icons/react';
 import { api, apiMessage } from '../lib/api';
 import { formatDate, formatDateTime } from '../lib/dates';
@@ -53,8 +54,7 @@ interface TransactionDetail {
   customer: {
     id: string;
     name: string | null;
-    email: string;
-    phone: string | null;
+
     city: string | null;
   } | null;
   service: {
@@ -111,6 +111,32 @@ export default function AccountsTransaction() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
 
+  const qc = useQueryClient();
+  const [releasing, setReleasing] = useState(false);
+  const [notice, setNotice] = useState('');
+
+  async function release() {
+    if (!data) return;
+    setReleasing(true);
+    setNotice('');
+    try {
+      const { data: result } = await api.put<{ released: number; notReleased: string[] }>(
+        `/bookings/${data.booking.id}/release-payout?milestone=${encodeURIComponent(data.payment.milestone)}`,
+      );
+      setNotice(
+        result.released > 0
+          ? 'Payment released to your payout account.'
+          : (result.notReleased[0] ?? 'Nothing was released. It may already be on its way.'),
+      );
+      await qc.invalidateQueries({ queryKey: ['accounts-transaction', id] });
+      await qc.invalidateQueries({ queryKey: ['earnings'] });
+    } catch (err) {
+      setNotice(apiMessage(err, 'That payment could not be released.'));
+    } finally {
+      setReleasing(false);
+    }
+  }
+
   const { data, isLoading, error } = useQuery<TransactionDetail>({
     queryKey: ['accounts-transaction', id],
     queryFn: async () => (await api.get(`/bookings/transactions/${id}`)).data,
@@ -147,8 +173,24 @@ export default function AccountsTransaction() {
             {formatDateTime(payment.createdAt)}
           </p>
         </div>
-        <StatusPill status={payment.status} />
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusPill status={payment.status} />
+          <Link to={`/bookings?highlight=${booking.id}`} className="btn-outline btn-sm">
+            Open booking
+          </Link>
+          {payment.status === 'pending_payout' && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={releasing}
+              onClick={() => void release()}
+            >
+              {releasing ? 'Releasing…' : 'Release payment'}
+            </button>
+          )}
+        </div>
       </div>
+      {notice && <p className="rounded-sm bg-sky-50 p-2 text-sm text-sky-800">{notice}</p>}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Section title="Transaction">
@@ -181,9 +223,9 @@ export default function AccountsTransaction() {
         <Section title="Customer">
           {customer ? (
             <>
-              <Row label="Customer">{customer.name ?? customer.email}</Row>
-              <Row label="Email">{customer.email}</Row>
-              <Row label="Mobile">{customer.phone ?? '—'}</Row>
+              {/* No email or phone: the customer is reached through the
+                  booking's chat (WOW-06). */}
+              <Row label="Customer">{customer.name ?? 'Customer'}</Row>
               {customer.city && <Row label="City">{customer.city}</Row>}
             </>
           ) : (

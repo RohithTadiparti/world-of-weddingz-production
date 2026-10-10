@@ -159,15 +159,66 @@ export function socialLinkError(link: SocialLink): string | null {
  * A row with no address is not checked: it is an "Add a link" row nobody
  * filled in, and `normaliseSocialLinks` drops it rather than sending it.
  */
-export function socialLinkErrors(links: readonly SocialLink[]): {
+export function socialLinkErrors(
+  links: readonly SocialLink[],
+  options: { uniquePlatforms?: boolean } = {},
+): {
   rows: (string | null)[];
   list: string | null;
   any: boolean;
 } {
   const rows = links.map((link) => ((link.url ?? '').trim() ? socialLinkError(link) : null));
-  const filled = links.filter((link) => (link.url ?? '').trim()).length;
-  const list = filled > MAX_SOCIAL_LINKS ? `Add at most ${MAX_SOCIAL_LINKS} links` : null;
+  const filled = links.filter((link) => (link.url ?? '').trim());
+  const repeated = options.uniquePlatforms ? duplicateSocialPlatforms(filled) : [];
+  const list =
+    filled.length > MAX_SOCIAL_LINKS
+      ? `Add at most ${MAX_SOCIAL_LINKS} links`
+      : repeated.length > 0
+        ? `Add each type of link once: ${repeated
+            .map((p) => socialPlatformRule(p)?.label ?? p)
+            .join(', ')} is listed more than once`
+        : null;
   return { rows, list, any: Boolean(list) || rows.some(Boolean) };
+}
+
+/**
+ * Platforms a listing may name once only. `other` is the catch-all with its
+ * own name ("Behance", "Wedding films"), so a listing may have several. The
+ * vendor API refuses a repeat of any other type (CreateVendorDto).
+ */
+export function isSingleUsePlatform(platform: SocialPlatform): boolean {
+  return platform !== 'other';
+}
+
+/** The single-use platforms named more than once, in first-seen order. */
+export function duplicateSocialPlatforms(links: readonly SocialLink[]): SocialPlatform[] {
+  const seen = new Set<SocialPlatform>();
+  const repeated: SocialPlatform[] = [];
+  for (const link of links) {
+    if (!isSingleUsePlatform(link.platform)) continue;
+    if (seen.has(link.platform) && !repeated.includes(link.platform)) repeated.push(link.platform);
+    seen.add(link.platform);
+  }
+  return repeated;
+}
+
+/**
+ * The platforms still free to choose: every type not already on another row.
+ * With `forRow`, that row's own type stays in the list so its picker can show
+ * it; without, this is what "Add a link" offers. Removing a link frees its
+ * type again, since the list is worked out from the rows each time.
+ */
+export function availableSocialPlatforms(
+  links: readonly SocialLink[],
+  forRow?: number,
+): SocialPlatformRule[] {
+  const taken = new Set(
+    links
+      .filter((_, i) => i !== forRow)
+      .map((l) => l.platform)
+      .filter(isSingleUsePlatform),
+  );
+  return SOCIAL_PLATFORMS.filter((p) => !taken.has(p.value));
 }
 
 /** The same page twice, whatever the case of its host. */

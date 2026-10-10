@@ -149,6 +149,9 @@ const ALLOWED: Record<BusinessStatus, BusinessStatus[]> = {
     BusinessStatus.VERIFIED,
     BusinessStatus.REVERIFICATION_REQUIRED,
     BusinessStatus.REJECTED,
+    // An administrator asked for another review by a different officer. The
+    // listing stays locked and waits for that visit; the vendor edits nothing.
+    BusinessStatus.PENDING_VERIFICATION,
   ],
   [BusinessStatus.VERIFIED]: [BusinessStatus.LIVE, BusinessStatus.REVERIFICATION_REQUIRED],
   [BusinessStatus.LIVE]: [BusinessStatus.REVERIFICATION_REQUIRED],
@@ -228,6 +231,8 @@ export const POST_VERIFICATION_EDITABLE_FIELDS = [
   'description',
   'contactPhone',
   'portfolio',
+  // Which portfolio image is the profile picture; it moves with the portfolio.
+  'profileImage',
   ...SOCIAL_LINK_FIELDS,
 ] as const;
 

@@ -7,6 +7,11 @@ import { formatDate } from '../../lib/dates';
 import { BOOKING_STATUS_LABEL, VERIFICATION_LABEL } from '../../lib/permissions';
 import { BUSINESS_STATUS_LABEL, bookingAmountLabel, labelFrom } from '../../lib/labels';
 import { EmptyState, Loading } from '../../components/ui/Feedback';
+import {
+  ContactRevealButton,
+  useContactReveal,
+  type RevealedContact,
+} from '../../components/AdminContactReveal';
 
 /**
  * One vendor business in full (EZ1-I188).
@@ -72,7 +77,16 @@ interface BusinessDetail {
     createdAt: string;
     updatedAt: string;
   };
-  owner: { id: string; email: string; role: string; isActive: boolean; phone: string | null; createdAt: string } | null;
+  /** Masked by the server (WOW-05); the owner account's reveal has them whole. */
+  owner: {
+    id: string;
+    name?: string | null;
+    email: string | null;
+    role: string;
+    isActive: boolean;
+    phone: string | null;
+    createdAt: string;
+  } | null;
   services: ServiceRow[];
   verifications: {
     id: string;
@@ -115,6 +129,30 @@ const price = (o: Offering) =>
         o.unitLabel ? ` / ${o.unitLabel}` : ''
       }`;
 
+/**
+ * The contact values this page shows: the masked ones the server sent, or the
+ * whole ones once the owner account's audited reveal has returned them
+ * (WOW-05). The reveal names this business's line by id.
+ */
+export function businessContact(
+  data: Pick<BusinessDetail, 'business' | 'owner'>,
+  revealed: RevealedContact | null,
+) {
+  if (!revealed) {
+    return {
+      businessPhone: data.business.contactPhone,
+      ownerEmail: data.owner?.email ?? null,
+      ownerPhone: data.owner?.phone ?? null,
+    };
+  }
+  const line = revealed.businesses?.find((x) => x.id === data.business.id);
+  return {
+    businessPhone: line ? line.contactPhone : data.business.contactPhone,
+    ownerEmail: revealed.email,
+    ownerPhone: revealed.phone,
+  };
+}
+
 export default function AdminBusinessDetail() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -124,6 +162,8 @@ export default function AdminBusinessDetail() {
     queryFn: async () => (await api.get(`/admin/businesses/${id}`)).data,
     retry: false,
   });
+  // The owner's audited reveal also returns this business's contact line.
+  const contactReveal = useContactReveal(data?.owner?.id ?? '');
 
   const back = (
     <button onClick={() => navigate(-1)} className="btn-ghost btn-sm -ml-2 text-gray-500">
@@ -177,7 +217,25 @@ export default function AdminBusinessDetail() {
             {b.ratingCount > 0 ? `${b.ratingAvg.toFixed(1)} (${b.ratingCount})` : 'No ratings'}
           </Row>
           <Row label="Trading since">{b.tradingSince ? formatDate(b.tradingSince) : '—'}</Row>
-          <Row label="Contact">{dash(b.contactPhone)}</Row>
+          {(() => {
+            // Masked as served (WOW-05) until the owner's details are revealed.
+            const shown = businessContact(data, contactReveal.contact);
+            return (
+              <>
+                <Row label="Contact">{dash(shown.businessPhone)}</Row>
+                {data.owner && (
+                  <>
+                    <Row label="Owner">{data.owner.name ?? '—'}</Row>
+                    <Row label="Owner email">{dash(shown.ownerEmail)}</Row>
+                    <Row label="Owner mobile">{dash(shown.ownerPhone)}</Row>
+                    <div className="mt-1">
+                      <ContactRevealButton state={contactReveal} />
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
           {data.owner && (
             <Link className="btn-outline btn-sm mt-2 w-full justify-center" to={`/admin/vendors/${data.owner.id}`}>
               Open owner account

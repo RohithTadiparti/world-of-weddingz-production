@@ -33,8 +33,12 @@ export interface IncomingBooking {
   /** Planner requests only: the services the couple ticked, as catalogue keys. */
   requestedServices?: string[];
   clientName: string | null;
-  clientEmail: string | null;
-  clientPhone: string | null;
+  /** How the vendor prices the booked service, e.g. "fixed" (WOW-06). */
+  pricingModel?: string | null;
+  /** The customer declined the latest quotation (row 17). */
+  requoteRequested?: boolean;
+  /** HH:MM asked for on a request for an unpublished date (row 13). */
+  requestedTime?: string | null;
   clientCity?: string | null;
   clientPhoto?: string | null;
   /** A note the customer added to the request, distinct from requirements. */
@@ -115,40 +119,6 @@ export const QUOTATION_STAGE_TONE: Record<QuotationStage, Tone> = {
   superseded: 'neutral',
 };
 
-/**
- * Actions the seller side may take, by current status.
- *
- * A request with a listed price or customer budget can be accepted as-is;
- * otherwise the provider sends a quotation.
- */
-export const ACTIONS: Record<string, { label: string; path: string; primary?: boolean }[]> = {
-  requested: [{ label: 'Decline', path: 'cancel' }],
-  // Takes the offer back and leaves the request with the provider to re-price.
-  // It used to cancel the whole booking (EZ1-I266).
-  quotation_sent: [{ label: 'Withdraw quotation', path: 'quotations/withdraw' }],
-  quotation_accepted: [{ label: 'Cancel', path: 'cancel' }],
-  payment_pending: [{ label: 'Cancel', path: 'cancel' }],
-  // Historic: nothing enters `pending` any more, and the server moves it only to
-  // confirmed or cancelled, which "Accept the job" never produced.
-  pending: [{ label: 'Cancel', path: 'cancel' }],
-  // From confirmed the server allows starting or cancelling; delivery comes
-  // after the work has started, so "Mark delivered" here always failed.
-  confirmed: [
-    { label: 'Start work', path: 'start', primary: true },
-    { label: 'Cancel', path: 'cancel' },
-  ],
-  in_progress: [{ label: 'Mark delivered', path: 'complete', primary: true }],
-  // Once the balance is in and the customer has accepted the delivery (EZ1-I266).
-  completed_pending_final_payment: [
-    { label: 'Mark as completed', path: 'mark-completed', primary: true },
-  ],
-  completed: [],
-  disputed: [],
-  cancelled: [],
-};
-
-/** A provider can quote while the job is still unpriced or being re-priced. */
-export const QUOTABLE = ['requested', 'quotation_sent'];
 
 /**
  * The same statuses, said from the seller's side of the table.

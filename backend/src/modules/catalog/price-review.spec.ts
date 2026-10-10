@@ -41,6 +41,7 @@ describe('catalog price review', () => {
 
   const upsert = {
     name: 'Silver package',
+    description: 'Eight hours of coverage, one photographer and an edited online album.',
     pricingModel: PricingModel.FIXED,
     price: '20000.00',
   };
@@ -159,5 +160,47 @@ describe('catalog price review', () => {
 
   it('refuses to decide an offering with nothing waiting on it', async () => {
     await expect(service.decidePriceChange('o1', true)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  describe('pricing name, amount and description', () => {
+    const create = (body: Partial<typeof upsert>) =>
+      service.addOffering(owner, 'v1', 'vs1', { ...upsert, ...body });
+
+    beforeEach(() => {
+      (offerings as unknown as { create: jest.Mock }).create = jest.fn((o) => o);
+    });
+
+    it('stores the name title-cased and the description trimmed', async () => {
+      const saved = await create({
+        name: '  pre-wedding-shoot  ',
+        description: `   ${upsert.description}   `,
+      });
+      expect(saved.name).toBe('Pre-wedding-shoot');
+      expect(saved.description).toBe(upsert.description);
+    });
+
+    it('title-cases the name on an update as well', async () => {
+      const saved = await service.updateOffering(owner, 'v1', 'vs1', 'o1', {
+        ...upsert,
+        name: 'gold package',
+        price: '10500.00',
+      });
+      expect(saved.name).toBe('Gold Package');
+    });
+
+    it.each([
+      [{ name: '   ' }, 'Pricing name is required'],
+      [{ price: '0' }, 'Pricing amount must be greater than 0'],
+      [{ price: '-100' }, 'Pricing amount must be greater than 0'],
+      [{ description: undefined }, 'Description is required'],
+      [{ description: 'Too short to say anything useful.' }, 'Description must be at least 50'],
+      [{ description: 'x'.repeat(501) }, 'Description must be at most 500 characters'],
+    ])('refuses %j', async (body, message) => {
+      await expect(create(body)).rejects.toThrow(message);
+      await expect(
+        service.updateOffering(owner, 'v1', 'vs1', 'o1', { ...upsert, ...body }),
+      ).rejects.toThrow(message);
+      expect(offerings.save).not.toHaveBeenCalled();
+    });
   });
 });

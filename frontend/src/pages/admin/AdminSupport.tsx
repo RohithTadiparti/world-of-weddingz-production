@@ -12,6 +12,7 @@ import {
   type Officer,
   type SupportCase,
 } from '../Verification';
+import { useDeepLink } from '../../lib/deep-link';
 
 /**
  * The admin Support inbox: support/dispute cases, relocated here from the
@@ -155,6 +156,8 @@ export default function AdminSupport() {
   }
 
   const caseRows: SupportCase[] = cases?.data ?? [];
+  // A notification link (?case=) opens on that case (row 21b).
+  const linkedCase = useDeepLink('case', 'case', caseRows.length > 0);
   // Already filtered by the server; nothing to narrow here.
   const shown = caseRows;
   const totalCases: number = cases?.meta?.total ?? caseRows.length;
@@ -240,6 +243,7 @@ export default function AdminSupport() {
               officers={activeOfficers}
               canAllocate={canAllocate}
               onRun={run}
+              highlighted={linkedCase === c.id}
             />
           ))
         )}

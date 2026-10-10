@@ -142,7 +142,14 @@ export class SupportCase {
   closedByUserId: string | null;
 
   @Column({ type: 'jsonb', default: [] })
-  history: { at: string; byUserId: string; status: string; note?: string }[];
+  history: {
+    at: string;
+    byUserId: string;
+    status: string;
+    note?: string;
+    /** 'reply' marks a message from the person who raised the case. */
+    kind?: 'reply';
+  }[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
@@ -206,6 +213,20 @@ export class SupportCase {
     verifiedAt: Date | null;
     decisionReason: string | null;
     revisionCount: number;
+    /**
+     * The rest of the listing, so an administrator and the allocated officer
+     * see the complete business on a listing case (row 27) without opening
+     * Verification. Optional because a planner's listing has none of these.
+     */
+    description?: string | null;
+    registeredAddress?: string | null;
+    registrationNumber?: string | null;
+    contactPhone?: string | null;
+    complianceDocuments?: string[];
+    portfolio?: string[];
+    correctionFields?: string[] | null;
+    submittedAt?: Date | null;
+    archivedAt?: Date | null;
   } | null;
   account?: {
     email: string | null;

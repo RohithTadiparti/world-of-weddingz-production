@@ -7,6 +7,12 @@ import { Badge, Divider, type Tone } from '@/components/chrome';
 import { SelectField, TimeField, readableTime } from '@/components/form';
 import { Alert, Body, Button, Caption, Field, SectionTitle } from '@/components/ui';
 import { rgb, space, useTheme } from '@/theme';
+import {
+  MAX_SLOT_CAPACITY,
+  serviceOptionName,
+  slotCapacityError,
+  slotServiceLabel,
+} from '@/shared/catalog-rules';
 
 /**
  * A published window, exactly as the server reports it.
@@ -40,14 +46,13 @@ const SLOT_TONE: Record<SlotState, Tone> = {
   cancelled: 'neutral',
 };
 
-interface ServiceOption {
+export interface ServiceOption {
   id: string;
   displayName: string | null;
   definition: { name: string } | null;
+  /** Switched-off services cannot have time published for them. */
+  active?: boolean;
 }
-
-const serviceName = (service: ServiceOption) =>
-  service.displayName ?? service.definition?.name ?? 'Service';
 
 /**
  * The four numbers that matter, always shown together.
@@ -81,6 +86,7 @@ function SlotCounts({ slot }: { slot: Slot }) {
 
 export function SlotRow({
   slot,
+  serviceLabel,
   stateLabel,
   onSave,
   onBlock,
@@ -88,6 +94,8 @@ export function SlotRow({
   onDelete,
 }: {
   slot: Slot;
+  /** Which service the window is for; omitted for a planner, who has none. */
+  serviceLabel?: string;
   stateLabel: string;
   onSave: (body: Record<string, unknown>) => void;
   onBlock: () => void;
@@ -118,6 +126,7 @@ export function SlotRow({
           <Body>
             {readableTime(hhmm(slot.startTime))} – {readableTime(hhmm(slot.endTime))}
           </Body>
+          {serviceLabel ? <Caption>{serviceLabel}</Caption> : null}
           <SlotCounts slot={slot} />
           {slot.note || slot.blockReason ? (
             <Caption tone="faint">
@@ -195,9 +204,15 @@ function EditSlot({
       return;
     }
     const n = Number(capacity);
-    if (!Number.isInteger(n) || n < 1) {
-      setProblem('Capacity has to be a whole number, at least one.');
-      return;
+    // Only a changed capacity is checked and sent: a window published before
+    // the 20-booking ceiling keeps its figure until the vendor changes it.
+    const changed = n !== slot.capacity;
+    if (changed) {
+      const capacityProblem = slotCapacityError(capacity);
+      if (capacityProblem) {
+        setProblem(capacityProblem);
+        return;
+      }
     }
     if (n < slot.confirmed) {
       setProblem(`This window already holds ${slot.confirmed} confirmed booking(s).`);
@@ -206,7 +221,7 @@ function EditSlot({
     setProblem('');
     onSave({
       ...(slot.actions.canRetime ? { startTime: start, endTime: end } : {}),
-      capacity: n,
+      ...(changed ? { capacity: n } : {}),
       note: note.trim(),
     });
   }
@@ -255,16 +270,16 @@ export function NewSlot({
   const [end, setEnd] = useState('13:00');
   // Availability is per service: a window must name the service it is for, so
   // publishing time for one service does not make every service look bookable.
-  const [serviceId, setServiceId] = useState(services[0]?.id ?? '');
+  // Nothing is chosen for the vendor; it used to default to the first service.
+  const [serviceId, setServiceId] = useState('');
   const [capacity, setCapacity] = useState('');
   const [note, setNote] = useState('');
   const [problem, setProblem] = useState('');
 
+  // A choice that is no longer offered (switched off, removed) is cleared.
   useEffect(() => {
-    if (!serviceId && services.length > 0) setServiceId(services[0].id);
+    if (serviceId && !services.some((s) => s.id === serviceId)) setServiceId('');
   }, [services, serviceId]);
-
-  const service = services.find((s) => s.id === serviceId);
   // Capacity follows the service unless the vendor overrides it for this one
   // window, which is where "five teams, but only three free that Saturday"
   // gets said.
@@ -275,14 +290,15 @@ export function NewSlot({
       setProblem('The end time has to be after the start time.');
       return;
     }
-    if (!Number.isInteger(effectiveCapacity) || effectiveCapacity < 1) {
-      setProblem('Capacity has to be a whole number, at least one.');
-      return;
-    }
     // A window with no service would show under every service, so a vendor who
     // has services must pick the one this window is for.
     if (services.length > 0 && !serviceId) {
-      setProblem('Choose the service this window is for.');
+      setProblem('Choose the service this window is for');
+      return;
+    }
+    const capacityProblem = slotCapacityError(effectiveCapacity);
+    if (capacityProblem) {
+      setProblem(capacityProblem);
       return;
     }
     setProblem('');
@@ -295,6 +311,8 @@ export function NewSlot({
       note: note.trim() || undefined,
     });
     setNote('');
+    setServiceId('');
+    setCapacity('');
     setOpen(false);
   }
 
@@ -316,12 +334,14 @@ export function NewSlot({
       {services.length > 0 && (
         <SelectField
           label="Service"
+          required
+          placeholder="Choose a service…"
           value={serviceId}
           onChange={(value) => {
             setServiceId(value);
             setCapacity('');
           }}
-          options={services.map((s) => ({ value: s.id, label: serviceName(s) }))}
+          options={services.map((s) => ({ value: s.id, label: serviceOptionName(s) }))}
         />
       )}
       <Field
@@ -330,7 +350,7 @@ export function NewSlot({
         onChangeText={setCapacity}
         keyboardType="number-pad"
         placeholder="1"
-        hint="How many bookings this window can take at once: five if you can run five teams, one for a hall."
+        hint={`How many bookings this window can take at once, 1 to ${MAX_SLOT_CAPACITY}: five if you can run five teams, one for a hall.`}
       />
       <Field label="Note" value={note} onChangeText={setNote} placeholder="Morning sitting" />
       {problem ? <Alert tone="critical">{problem}</Alert> : null}
@@ -338,4 +358,9 @@ export function NewSlot({
       <Button label="Cancel" variant="outline" onPress={() => setOpen(false)} />
     </View>
   );
+}
+
+/** The service a window is for, as its row reads it. */
+export function slotServiceText(slot: Slot, services: readonly ServiceOption[]): string {
+  return slotServiceLabel(slot.vendorServiceId, services);
 }

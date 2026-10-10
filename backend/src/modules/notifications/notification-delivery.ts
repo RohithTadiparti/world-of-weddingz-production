@@ -42,6 +42,23 @@ const job = (payload: Record<string, unknown>): string => {
   return parts.join(' · ') || 'your booking';
 };
 
+/**
+ * The applicant-facing sentence for each verification stage. Status and
+ * tracking only: nothing here, or in the payload it reads, names the officer or
+ * repeats their findings or an administrator's internal remarks.
+ */
+export const VERIFICATION_STAGE_COPY: Record<string, string> = {
+  submitted: 'Your listing was submitted for verification.',
+  resubmitted:
+    'Your updated listing was submitted for verification. A verification officer will be allocated.',
+  officer_assigned: 'A verification officer has been assigned to your listing.',
+  visit_started: 'Your verification visit is under way.',
+  findings_submitted:
+    'The verification visit is complete and is with an administrator for a decision.',
+  additional_review:
+    'An administrator has asked for another review of your listing. A new verification officer will be allocated.',
+};
+
 export const DELIVERY: Record<NotificationType, DeliverySpec> = {
   [NotificationType.MATCH_INTEREST]: {
     title: 'Someone is interested',
@@ -239,6 +256,21 @@ export const DELIVERY: Record<NotificationType, DeliverySpec> = {
       const limit = [str(p, 'thresholdValue', '?'), unit].filter(Boolean).join(' ');
       return `${lead}: ${str(p, 'metric', 'a capacity metric')} is ${value} (threshold ${limit}).`;
     },
+    whatsappTemplate: null,
+  },
+
+  [NotificationType.VERIFICATION_PROGRESS]: {
+    title: 'Verification update',
+    body: (p) =>
+      VERIFICATION_STAGE_COPY[str(p, 'stage')] ?? 'There is an update on your verification.',
+    whatsappTemplate: null,
+  },
+  [NotificationType.BUSINESS_CHANGE_UPDATE]: {
+    title: 'Business change request',
+    body: (p) =>
+      str(p, 'status') === 'cancelled'
+        ? `Your business change request was cancelled.${str(p, 'reason') ? ` Reason: ${str(p, 'reason')}` : ''}`
+        : 'Edit access was granted. Update the approved details and submit them for verification.',
     whatsappTemplate: null,
   },
 };

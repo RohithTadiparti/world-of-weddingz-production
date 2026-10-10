@@ -10,7 +10,13 @@ import { MonthCalendar, formatLongDate, todayIso, type DayTone } from '@/compone
 import { Badge, StatTile, TileGrid, type Tone } from '@/components/chrome';
 import { PromptSheet } from '@/components/prompt';
 import { BusinessSwitcher } from '@/components/business/switcher';
-import { NewSlot, SlotRow, type Slot } from '@/components/availability/slots';
+import {
+  NewSlot,
+  SlotRow,
+  slotServiceText,
+  type ServiceOption,
+  type Slot,
+} from '@/components/availability/slots';
 import {
   Alert,
   Body,
@@ -49,12 +55,6 @@ interface Summary {
   blockedSlots: number;
   confirmedBookings: number;
   pendingRequests: number;
-}
-
-interface ServiceOption {
-  id: string;
-  displayName: string | null;
-  definition: { name: string } | null;
 }
 
 type Bucket = 'published' | 'open' | 'requested' | 'booked' | 'full' | 'blocked';
@@ -301,7 +301,7 @@ export default function Availability() {
           {bucketSlots.map((slot) => (
             <Button
               key={slot.id}
-              label={`${formatLongDate(slot.date)} · ${hhmm(slot.startTime)}–${hhmm(slot.endTime)}`}
+              label={`${formatLongDate(slot.date)} · ${hhmm(slot.startTime)}–${hhmm(slot.endTime)}${isPlanner ? '' : ` · ${slotServiceText(slot, services)}`}`}
               variant="ghost"
               small
               onPress={() => {
@@ -338,6 +338,7 @@ export default function Availability() {
             <SlotRow
               key={slot.id}
               slot={slot}
+              serviceLabel={isPlanner ? undefined : slotServiceText(slot, services)}
               stateLabel={SLOT_STATE_LABEL[slot.state]}
               onSave={(body) =>
                 act(
@@ -367,7 +368,7 @@ export default function Availability() {
 
           <NewSlot
             date={selected}
-            services={services}
+            services={services.filter((s) => s.active !== false)}
             onCreate={(body) =>
               act(
                 () => api.post(`${base}/${vendorId}/availability/slots`, body),

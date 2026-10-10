@@ -12,6 +12,7 @@ import {
   type QuotationStage,
   type QuotationSummary,
 } from '../lib/booking-progress';
+import { negotiationActor, type NegotiationEntryView } from '../lib/booking-rules';
 
 export type PriceSource = 'quotation' | 'listed' | 'budget' | 'direct' | null;
 
@@ -67,6 +68,12 @@ export interface BookingSummaryData {
     grandTotal: string;
   };
   quotation: QuotationSummary | null;
+  /** Every step of the price negotiation (row 16); older servers omit it. */
+  negotiation?: {
+    entries: NegotiationEntryView[];
+    finalPrice: { amount: string; currency: string; at: string; source: string } | null;
+    requoteRequested: boolean;
+  };
   quotations: {
     id: string;
     amount: string;
@@ -182,11 +189,73 @@ export function PriceBreakdown({ summary }: { summary: BookingSummaryData }) {
   );
 }
 
+const NEGOTIATION_TONE: Record<string, string> = {
+  listed: 'bg-surface-sunken text-gray-700',
+  requested: 'bg-caution-bg text-caution-fg',
+  awaiting_customer: 'bg-brand-soft text-brand-strong',
+  superseded: 'bg-surface-sunken text-gray-600',
+  expired: 'bg-caution-bg text-caution-fg',
+  rejected: 'bg-critical-bg text-critical-fg',
+  withdrawn: 'bg-caution-bg text-caution-fg',
+  accepted: 'bg-positive-bg text-positive-fg',
+};
+
+/**
+ * How the price was arrived at (row 16): the vendor's listed price, the
+ * customer's budget, every quotation and counteroffer, and the final accepted
+ * price -- each with who moved, its status and when.
+ */
+export function NegotiationHistory({
+  summary,
+  viewer,
+}: {
+  summary: BookingSummaryData;
+  viewer: 'customer' | 'provider';
+}) {
+  const entries = summary.negotiation?.entries ?? [];
+  if (entries.length === 0) return null;
+  const money = moneyIn(summary.currency);
+  const final = summary.negotiation?.finalPrice;
+  return (
+    <Section title="Quotation history">
+      <ol className="space-y-1.5 sm:col-span-2" aria-label="Quotation history">
+        {entries.map((e, i) => (
+          <li key={`${e.kind}-${i}`} className="rounded-sm bg-surface-sunken p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-gray-800">{e.label}</span>
+              {e.amount && <span className="font-mono font-medium">{money(e.amount)}</span>}
+              <span className={`rounded-sm px-2 py-0.5 ${NEGOTIATION_TONE[e.status] ?? 'bg-surface-sunken'}`}>
+                {e.statusLabel}
+              </span>
+            </div>
+            <p className="mt-0.5 text-gray-500">
+              {negotiationActor(e.by, viewer)} · {formatDateTime(e.at)}
+            </p>
+            {e.note && <p className="mt-0.5 text-gray-700">Note: {e.note}</p>}
+          </li>
+        ))}
+      </ol>
+      <p className="sm:col-span-2">
+        <span className="text-gray-400">Final accepted price: </span>
+        {final ? (
+          <span className="font-medium">
+            {money(final.amount)} · {formatDateTime(final.at)}
+          </span>
+        ) : summary.negotiation?.requoteRequested ? (
+          'Not agreed yet - the customer asked for a requote'
+        ) : (
+          'Not agreed yet'
+        )}
+      </p>
+    </Section>
+  );
+}
+
 export function QuotationHistory({ summary }: { summary: BookingSummaryData }) {
   if (summary.quotations.length === 0) return null;
   const money = moneyIn(summary.currency);
   return (
-    <Section title="Quotation history">
+    <Section title="Quotations sent">
       <ol className="space-y-1.5 sm:col-span-2">
         {summary.quotations.map((q) => (
           <li key={q.id} className="rounded-sm bg-surface-sunken p-2">

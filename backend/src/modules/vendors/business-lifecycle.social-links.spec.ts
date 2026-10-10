@@ -6,7 +6,7 @@ import { Vendor } from './entities/vendor.entity';
 
 /** Only the synchronous edit guard is exercised; it touches no dependency. */
 const service = new BusinessLifecycleService(
-  ...(Array.from({ length: 7 }, () => ({})) as ConstructorParameters<
+  ...(Array.from({ length: 9 }, () => ({})) as ConstructorParameters<
     typeof BusinessLifecycleService
   >),
 );

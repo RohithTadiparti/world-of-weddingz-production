@@ -12,6 +12,9 @@ import { AppConfigService } from '../src/config/app-config.service';
 import { UserRole } from '../src/common/enums';
 import { User } from '../src/modules/auth/entities/user.entity';
 import { AgentProfile } from '../src/modules/agents/entities/agent-profile.entity';
+import { Profile } from '../src/modules/users/entities/profile.entity';
+import { PlannerProfile } from '../src/modules/wedding-planners/entities/planner-profile.entity';
+import { AuditAction } from '../src/platform/audit/audit.service';
 
 /**
  * Administrator lists against a real Postgres: contact details masked while
@@ -108,6 +111,97 @@ describe('Admin lists (e2e)', () => {
 
     const none = await get('/api/admin/officers').query({ q: `nobody-${tag}` }).expect(200);
     expect(none.body).toEqual([]);
+  });
+
+  it('names list rows by person and business, and masks every detail page (WOW-01..05)', async () => {
+    const profiles = db.getRepository(Profile);
+    const agencies = db.getRepository(AgentProfile);
+    const planners = db.getRepository(PlannerProfile);
+
+    // An agent with their own name and an agency.
+    const agent = await makeUser(UserRole.AGENT, { phone: '+91 9876512345' });
+    await profiles.save(profiles.create({ userId: agent.id, displayName: `Ravi ${tag}` }));
+    await agencies.save(
+      agencies.create({ ownerUserId: agent.id, agencyName: `Bandhan ${tag}`, city: 'Hyderabad' }),
+    );
+
+    const agents = await get('/api/admin/directory')
+      .query({ role: UserRole.AGENT, q: `Bandhan ${tag}` })
+      .expect(200);
+    const agentRow = agents.body.data.find((r: { id: string }) => r.id === agent.id);
+    expect(agentRow).toMatchObject({
+      name: `Ravi ${tag}`,
+      businessName: `Bandhan ${tag}`,
+      email: 'w***@gmail.com',
+      phone: '********2345',
+    });
+    // The person's name finds the account too.
+    const byName = await get('/api/admin/directory').query({ q: `ravi ${tag}` }).expect(200);
+    expect(byName.body.data.map((r: { id: string }) => r.id)).toEqual([agent.id]);
+
+    // A planner: the business sits beside the name; its contact lines are masked
+    // on the detail page and come back whole only through the account reveal.
+    const planner = await makeUser(UserRole.PLANNER);
+    const business = await planners.save(
+      planners.create({
+        ownerUserId: planner.id,
+        agencyName: `Sharma Weddings ${tag}`,
+        city: 'Hyderabad',
+        contactPhone: '9988776655',
+        contactEmail: `hello.${tag}@sharma.in`,
+      }),
+    );
+    const plannerRows = await get('/api/admin/directory')
+      .query({ role: UserRole.PLANNER, q: String(planner.email) })
+      .expect(200);
+    expect(plannerRows.body.data[0]).toMatchObject({
+      id: planner.id,
+      name: `Sharma Weddings ${tag}`,
+      businessName: `Sharma Weddings ${tag}`,
+    });
+    const plannerDetail = await get(`/api/admin/accounts/${planner.id}`).expect(200);
+    expect(plannerDetail.body.plannerBusinesses[0]).toMatchObject({
+      contactPhone: '******6655',
+      contactEmail: 'h***@sharma.in',
+    });
+    expect(JSON.stringify(plannerDetail.body)).not.toContain('9988776655');
+    const plannerReveal = await get(`/api/admin/accounts/${planner.id}/contact`).expect(200);
+    expect(plannerReveal.body.plannerBusinesses).toEqual([
+      { id: business.id, contactPhone: '9988776655', contactEmail: `hello.${tag}@sharma.in` },
+    ]);
+
+    // "View full profile": the profile's own contact lines, masked, with their
+    // own audited reveal.
+    const client = await profiles.save(
+      profiles.create({
+        displayName: `Meera ${tag}`,
+        managedByUserId: agent.id,
+        contactPhone: '+91 9123456789',
+        contactEmail: `meera.${tag}@example.org`,
+      }),
+    );
+    try {
+      const full = await get(`/api/admin/profiles/${client.id}`).expect(200);
+      expect(full.body.profile).toMatchObject({
+        contactPhone: '********6789',
+        contactEmail: 'm***@example.org',
+      });
+      expect(full.body.steward).toMatchObject({ id: agent.id, name: `Ravi ${tag}`, email: 'w***@gmail.com' });
+      expect(JSON.stringify(full.body)).not.toContain('9123456789');
+      expect(JSON.stringify(full.body)).not.toContain(String(agent.email));
+
+      const revealed = await get(`/api/admin/profiles/${client.id}/contact`).expect(200);
+      expect(revealed.body).toEqual({
+        id: client.id,
+        email: `meera.${tag}@example.org`,
+        phone: '+91 9123456789',
+      });
+      const trail = await get('/api/admin/audit').query({ resourceId: client.id }).expect(200);
+      expect(JSON.stringify(trail.body)).toContain(AuditAction.ADMIN_CONTACT_REVEALED);
+    } finally {
+      await profiles.delete(client.id);
+      await planners.delete(business.id);
+    }
   });
 
   it('keeps rejected agencies out of the pending queue and its badge', async () => {

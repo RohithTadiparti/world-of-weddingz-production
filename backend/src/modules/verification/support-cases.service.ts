@@ -5,11 +5,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { SupportCase } from './entities/support-case.entity';
+import { VerificationService } from './verification.service';
 import { BusinessLifecycleService } from '../vendors/business-lifecycle.service';
 import { canTransition } from '../vendors/business-lifecycle';
 import { User } from '../auth/entities/user.entity';
@@ -30,8 +32,10 @@ import { displayNamesByUserIds } from '../users/display-names';
 import { OfficerAvailability, isOnLeaveNow } from './entities/officer-availability.entity';
 import {
   AllocateCaseDto,
+  CancelCaseDto,
   CaseQueryDto,
   GrantBusinessChangeAccessDto,
+  ReplyCaseDto,
   BUSINESS_CHANGE_CATEGORY,
   RaiseCaseDto,
   RecordFindingsDto,
@@ -82,7 +86,26 @@ const UNLOCK_LISTING = 'unlock_listing';
  * thing left to happen to it — them closing it, or the acknowledgement window
  * running out.
  */
-const TERMINAL: CaseStatus[] = [CaseStatus.CLOSED, CaseStatus.REJECTED];
+const TERMINAL: CaseStatus[] = [CaseStatus.CLOSED, CaseStatus.REJECTED, CaseStatus.CANCELLED];
+
+/** Stands in for the officer's id in the raiser's view of a case. */
+const ASSIGNED_MARKER = 'assigned';
+
+/** Resolution actions that reopen the vendor's listing when an administrator approves them. */
+const UNLOCKING_ACTIONS = [UNLOCK_LISTING, 'request_correction'];
+
+/**
+ * History statuses whose note is addressed to the person who raised the case.
+ * Every other note is the desk's own working (an officer's findings, an
+ * allocation note, a reason for sending a proposal back) and stays internal.
+ */
+const RAISER_VISIBLE_NOTES = new Set<string>([
+  CaseStatus.OPEN,
+  CaseStatus.WAITING_FOR_INFORMATION,
+  CaseStatus.RESOLVED,
+  CaseStatus.CANCELLED,
+  CaseStatus.CLOSED,
+]);
 
 /**
  * Every state in which a case is still holding something up.
@@ -137,6 +160,11 @@ export class SupportCasesService {
      */
     @Inject(forwardRef(() => BookingsService))
     private readonly bookingsService: BookingsService,
+    // Reopening a refused listing through a support case also has to put its
+    // refused verification request back in play, or it can never be resubmitted.
+    @Optional()
+    @Inject(forwardRef(() => VerificationService))
+    private readonly verification?: VerificationService,
   ) {}
 
   /**
@@ -343,9 +371,24 @@ export class SupportCasesService {
     const ownerIds = [
       ...new Set(businessCases.map((r) => r.raisedByUserId).filter(Boolean)),
     ] as string[];
-    const ownedVendors = ownerIds.length
-      ? await this.vendors.find({ where: { ownerUserId: In(ownerIds) } })
+    // The linked business first (row 27): an owner with two listings must see
+    // the one the case is about, not whichever row was keyed last.
+    const linkedIds = [
+      ...new Set(
+        businessCases
+          .filter((r) => r.subjectType === CaseSubject.VENDOR && r.subjectId)
+          .map((r) => r.subjectId as string),
+      ),
+    ];
+    const ownedVendors = ownerIds.length || linkedIds.length
+      ? await this.vendors.find({
+          where: [
+            ...(ownerIds.length ? [{ ownerUserId: In(ownerIds) }] : []),
+            ...(linkedIds.length ? [{ id: In(linkedIds) }] : []),
+          ],
+        })
       : [];
+    const vendorById = new Map(ownedVendors.map((v) => [v.id, v]));
     const vendorByOwner = new Map(ownedVendors.map((v) => [v.ownerUserId, v]));
 
     // "My business listing" is offered to planners as well, and their listing
@@ -385,7 +428,10 @@ export class SupportCasesService {
         continue;
       }
 
-      const vendor = row.raisedByUserId ? vendorByOwner.get(row.raisedByUserId) : null;
+      const linked = row.subjectType === CaseSubject.VENDOR && row.subjectId
+        ? vendorById.get(row.subjectId)
+        : undefined;
+      const vendor = linked ?? (row.raisedByUserId ? vendorByOwner.get(row.raisedByUserId) : null);
       const planner = row.raisedByUserId ? plannerByOwner.get(row.raisedByUserId) : null;
       if (row.subjectType === CaseSubject.VENDOR) {
         row.business = vendor
@@ -405,6 +451,15 @@ export class SupportCasesService {
               verifiedAt: vendor.verifiedAt,
               decisionReason: vendor.decisionReason,
               revisionCount: vendor.revisionCount,
+              description: vendor.description ?? null,
+              registeredAddress: vendor.registeredAddress ?? null,
+              registrationNumber: vendor.registrationNumber ?? null,
+              contactPhone: vendor.contactPhone ?? null,
+              complianceDocuments: vendor.complianceDocuments ?? [],
+              portfolio: vendor.portfolio ?? [],
+              correctionFields: vendor.correctionFields ?? null,
+              submittedAt: vendor.submittedAt ?? null,
+              archivedAt: vendor.archivedAt ?? null,
             }
           : planner
             ? {
@@ -468,6 +523,19 @@ export class SupportCasesService {
       }
     } else if (dto.requestedFields?.length) {
       throw new BadRequestException('Requested fields only apply to a business change request');
+    } else if (dto.subjectType === CaseSubject.VENDOR && dto.subjectId) {
+      // A "My business listing" case linked to a business (the Contact Support
+      // link on a refused listing, row 27). The link is what tells the officer
+      // which listing to open, so it has to be the caller's own.
+      const [vendor, planner] = await Promise.all([
+        this.vendors.findOne({ where: { id: dto.subjectId } }),
+        this.planners.findOne({ where: { id: dto.subjectId } }),
+      ]);
+      const owner = vendor?.ownerUserId ?? planner?.ownerUserId ?? null;
+      if (!owner) throw new NotFoundException('Business not found');
+      if (owner !== actor.userId && actor.role !== UserRole.ADMIN) {
+        throw new ForbiddenException('That business is not yours');
+      }
     }
     // Read where the booking stands before freezing it, so the settlement can
     // put it back rather than guess.
@@ -553,24 +621,183 @@ export class SupportCasesService {
       dto.fields,
       actor,
     );
-    item.status = CaseStatus.WAITING_FOR_INFORMATION;
+    /*
+     * Granting edit access is the answer to the request, so the request is
+     * resolved here (row 26). It used to be parked on WAITING_FOR_INFORMATION,
+     * which both portals render as "Waiting on you" — and nothing ever moved it
+     * on, so after the vendor had edited, resubmitted, been visited and been
+     * approved, the request still said it was waiting on them. What happens to
+     * the edited listing is the verification queue's business from here, with
+     * its own tracking notifications.
+     */
+    const now = new Date();
+    item.status = CaseStatus.RESOLVED;
     item.category = BUSINESS_CHANGE_CATEGORY;
     item.requestedFields = dto.fields;
+    item.resolutionAction = 'grant_edit_access';
+    item.settlementNotes = dto.note?.trim() || null;
+    item.resolvedAt = now;
+    item.resolvedByUserId = actor.userId;
     this.pushHistory(item, {
-      at: new Date().toISOString(),
+      at: now.toISOString(),
       byUserId: actor.userId,
-      status: CaseStatus.WAITING_FOR_INFORMATION,
+      status: CaseStatus.RESOLVED,
       note: `Edit access granted for: ${dto.fields.join(', ')}`,
     });
     const saved = await this.cases.save(item);
-    await this.notifications.create(item.raisedByUserId, NotificationType.VERIFICATION_DECIDED, {
+    await this.audit.record({
+      action: AuditAction.CASE_SETTLED,
+      actor,
+      resourceType: 'support_case',
+      resourceId: item.id,
+      metadata: { businessChange: 'edit_access_granted', fields: dto.fields, subjectId: item.subjectId },
+    });
+    await this.notifications.create(item.raisedByUserId, NotificationType.BUSINESS_CHANGE_UPDATE, {
       businessId: item.subjectId,
       caseId: item.id,
       status: 'edit_access_granted',
       fields: dto.fields,
-      message: 'Edit access has been granted. Update the approved fields and submit them for review.',
     });
     return saved;
+  }
+
+  /**
+   * An administrator declines a business change request outright (row 24).
+   *
+   * Only before edit access is granted: once it has been, the request is
+   * resolved and the listing is in the vendor's hands. The listing itself is
+   * untouched. Audited, and the vendor is told with the reason when one is
+   * given.
+   */
+  async cancelBusinessChange(actor: AuthUser, caseId: string, dto: CancelCaseDto): Promise<SupportCase> {
+    if (actor.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only an administrator can cancel a business change request');
+    }
+    const item = await this.loadOrFail(caseId);
+    if (item.subjectType !== CaseSubject.VENDOR || item.category !== BUSINESS_CHANGE_CATEGORY) {
+      throw new BadRequestException('This is not a vendor business-details change request');
+    }
+    if (item.status !== CaseStatus.OPEN && item.status !== CaseStatus.TRIAGED) {
+      throw new BadRequestException(
+        'Only a request that has not been granted can be cancelled. This one is no longer actionable.',
+      );
+    }
+
+    const reason = dto.reason?.trim() || null;
+    const now = new Date();
+    item.status = CaseStatus.CANCELLED;
+    item.resolutionAction = 'cancelled';
+    item.settlementNotes = reason;
+    item.closedAt = now;
+    item.closedByUserId = actor.userId;
+    this.pushHistory(item, {
+      at: now.toISOString(),
+      byUserId: actor.userId,
+      status: CaseStatus.CANCELLED,
+      note: reason ?? 'Cancelled by an administrator',
+    });
+    const saved = await this.cases.save(item);
+    await this.audit.record({
+      action: AuditAction.CASE_CANCELLED,
+      actor,
+      resourceType: 'support_case',
+      resourceId: item.id,
+      metadata: { businessChange: true, subjectId: item.subjectId, reason },
+    });
+    await this.notifications.create(item.raisedByUserId, NotificationType.BUSINESS_CHANGE_UPDATE, {
+      businessId: item.subjectId,
+      caseId: item.id,
+      status: 'cancelled',
+      reason,
+    });
+    return saved;
+  }
+
+  /**
+   * The person who raised a case answers on it (vendor Support "reply").
+   *
+   * The desk could park a case on its raiser ("waiting on you") and nothing on
+   * either client let them answer, so the case sat there. A reply is recorded
+   * on the timeline, any new proof is attached, and a case that was waiting on
+   * them goes back to whoever is working it, who is told.
+   */
+  async reply(actor: AuthUser, caseId: string, dto: ReplyCaseDto): Promise<SupportCase> {
+    const item = await this.loadOrFail(caseId);
+    if (item.raisedByUserId !== actor.userId) {
+      throw new ForbiddenException('Only the person who raised a case can reply on it');
+    }
+    if (TERMINAL.includes(item.status) || item.status === CaseStatus.RESOLVED) {
+      throw new BadRequestException('That case is finished. Raise a new one if something is still wrong.');
+    }
+
+    const message = dto.message.trim();
+    if (dto.evidence?.length) {
+      item.evidence = [...new Set([...(item.evidence ?? []), ...dto.evidence])];
+    }
+    if (item.status === CaseStatus.WAITING_FOR_INFORMATION) {
+      item.status = item.assignedToUserId ? CaseStatus.IN_PROGRESS : CaseStatus.TRIAGED;
+    }
+    item.history = [
+      ...item.history,
+      {
+        at: new Date().toISOString(),
+        byUserId: actor.userId,
+        status: item.status,
+        note: message,
+        kind: 'reply',
+      },
+    ];
+    const saved = await this.cases.save(item);
+    await this.audit.record({
+      action: AuditAction.CASE_REPLIED,
+      actor,
+      resourceType: 'support_case',
+      resourceId: item.id,
+      metadata: { evidence: dto.evidence?.length ?? 0 },
+    });
+
+    const update = { caseId: item.id, message: `The raiser replied on: ${item.title}` };
+    if (item.assignedToUserId) {
+      await this.notifications.create(item.assignedToUserId, NotificationType.DISPUTE_UPDATE, update);
+    } else {
+      await this.notifications.createForRole(UserRole.ADMIN, NotificationType.DISPUTE_UPDATE, update);
+    }
+    return this.forRaiser(saved, actor);
+  }
+
+  /**
+   * A case as the person who raised it may read it (row 11, vendor Support).
+   *
+   * The desk's working stays with the desk: the officer's findings, notes on
+   * allocations and send-backs, and who exactly is investigating. What the
+   * raiser reads is the status, the timeline, the answer addressed to them
+   * (settlement notes and the resolution), questions put to them and their own
+   * replies.
+   */
+  private forRaiser(row: SupportCase, actor: AuthUser): SupportCase {
+    return {
+      ...row,
+      findings: null,
+      // Whether somebody has it, not who: the officer is not named to the raiser.
+      assignedToUserId: row.assignedToUserId ? ASSIGNED_MARKER : null,
+      assignedToName: null,
+      history: (row.history ?? []).map((h) => {
+        const own = h.byUserId === actor.userId;
+        const keepNote = own || (h.kind !== 'reply' && RAISER_VISIBLE_NOTES.has(h.status));
+        return {
+          at: h.at,
+          status: h.status,
+          byUserId: own ? actor.userId : 'support',
+          ...(h.kind ? { kind: h.kind } : {}),
+          ...(keepNote && h.note ? { note: h.note } : {}),
+        };
+      }),
+    } as SupportCase;
+  }
+
+  /** Staff working a case read it whole; anybody else reads the raiser's view. */
+  private seesWholeCase(row: SupportCase, actor: AuthUser): boolean {
+    return actor.role === UserRole.ADMIN || row.assignedToUserId === actor.userId;
   }
 
   /**
@@ -1010,7 +1237,8 @@ export class SupportCasesService {
     }
 
     supportCase.evidence = [...new Set([...supportCase.evidence, ...urls])];
-    return this.cases.save(supportCase);
+    const saved = await this.cases.save(supportCase);
+    return this.seesWholeCase(saved, actor) ? saved : this.forRaiser(saved, actor);
   }
 
   /**
@@ -1180,9 +1408,13 @@ export class SupportCasesService {
     // beyond the record: it reopens the vendor's listing for editing so they can
     // fix whatever the case was about (EZ1-I181). Everything else is recorded
     // and the case simply closes.
+    // "Request correction" says the same thing in the officer's words — the
+    // vendor has to fix the listing — so approving it unlocks the listing too
+    // rather than closing the case and leaving the listing locked (row 27).
     if (
       item.subjectType === CaseSubject.VENDOR &&
-      item.resolutionAction === UNLOCK_LISTING
+      item.resolutionAction &&
+      UNLOCKING_ACTIONS.includes(item.resolutionAction)
     ) {
       await this.unlockListingFor(item, actor);
     }
@@ -1210,28 +1442,47 @@ export class SupportCasesService {
   /**
    * Reopen the raiser's listing for editing (EZ1-I181).
    *
-   * A "My Business Listing" case is raised by the vendor whose listing it is, so
-   * the business is resolved from the raiser — these cases carry no subject id.
-   * Only a listing the state machine can actually move to REVERIFICATION_REQUIRED
-   * is touched; one already editable or rejected is left as it is, and the
-   * resolution is still recorded either way.
+   * The business is the one the case is linked to (the Contact Support link on
+   * My Business carries it), falling back to the raiser's listing for older
+   * cases raised without one.
+   *
+   * A refused listing is reopened too (row 27): that is precisely the case the
+   * "Contact Support" button on a refused listing raises, and approving the
+   * officer's "unlock" used to do nothing at all because refusal is terminal in
+   * the state machine. The refused verification request is put back in play
+   * with it, so the vendor can correct and resubmit. A listing already open for
+   * editing is left as it is; the resolution is recorded either way.
    */
   private async unlockListingFor(item: SupportCase, actor: AuthUser): Promise<void> {
-    if (!item.raisedByUserId) return;
-    const vendor = await this.vendors.findOne({
-      where: { ownerUserId: item.raisedByUserId },
-    });
+    const vendor = await this.caseVendor(item);
     if (!vendor) return;
-    if (
-      !canTransition(vendor.status as BusinessStatus, BusinessStatus.REVERIFICATION_REQUIRED)
-    ) {
+    const reason =
+      item.settlementNotes?.trim() ||
+      `Listing reopened to resolve support case ${item.id.slice(0, 8)}`;
+
+    if (vendor.status === BusinessStatus.REJECTED) {
+      await this.lifecycle.reopenRejected(vendor.id, reason, actor);
+      await this.verification?.reopenRejected(actor, vendor.id, reason);
       return;
     }
-    await this.lifecycle.requireReverification(
-      vendor.id,
-      item.settlementNotes?.trim() ||
-        `Listing reopened to resolve support case ${item.id.slice(0, 8)}`,
-      actor,
+    if (!canTransition(vendor.status as BusinessStatus, BusinessStatus.REVERIFICATION_REQUIRED)) {
+      return;
+    }
+    await this.lifecycle.requireReverification(vendor.id, reason, actor);
+  }
+
+  /** The vendor listing a case is about: its linked business, else the raiser's newest. */
+  private async caseVendor(item: SupportCase): Promise<Vendor | null> {
+    if (item.subjectId) {
+      const linked = await this.vendors.findOne({ where: { id: item.subjectId } });
+      if (linked) return linked;
+    }
+    if (!item.raisedByUserId) return null;
+    return (
+      (await this.vendors.findOne({
+        where: { ownerUserId: item.raisedByUserId },
+        order: { createdAt: 'DESC' },
+      })) ?? null
     );
   }
 
@@ -1324,7 +1575,9 @@ export class SupportCasesService {
         'A case is closed by the person who raised it, or by an administrator',
       );
     }
-    if (item.status === CaseStatus.CLOSED) return item;
+    const view = (row: SupportCase) => (this.seesWholeCase(row, actor) ? row : this.forRaiser(row, actor));
+    // Cancelled is already final; closing it again would only rewrite the record.
+    if (item.status === CaseStatus.CLOSED || item.status === CaseStatus.CANCELLED) return view(item);
     if (item.status !== CaseStatus.RESOLVED && item.status !== CaseStatus.REJECTED && !mine) {
       throw new BadRequestException(
         'That case has not been decided yet. Resolve it before closing it.',
@@ -1340,7 +1593,7 @@ export class SupportCasesService {
       status: CaseStatus.CLOSED,
       note: mine ? 'Closed by the person who raised it' : 'Closed by an administrator',
     });
-    return this.cases.save(item);
+    return view(await this.cases.save(item));
   }
 
   async list(actor: AuthUser, q: CaseQueryDto): Promise<PaginatedResult<SupportCase>> {
@@ -1378,7 +1631,9 @@ export class SupportCasesService {
      * them. An officer's queue and a raiser's own cases are unchanged.
      */
     return paginate(
-      actor.role === UserRole.ADMIN ? rows.map((row) => maskPii(row)) : rows,
+      actor.role === UserRole.ADMIN
+        ? rows.map((row) => maskPii(row))
+        : rows.map((row) => (this.seesWholeCase(row, actor) ? row : this.forRaiser(row, actor))),
       total,
       q.page,
       q.limit,
@@ -1393,7 +1648,7 @@ export class SupportCasesService {
       throw new ForbiddenException('That case is not yours');
     }
     const [enriched] = await this.withContext([item]);
-    return enriched;
+    return this.seesWholeCase(enriched, actor) ? enriched : this.forRaiser(enriched, actor);
   }
 
   async metrics(officerUserId?: string): Promise<Record<string, number>> {
