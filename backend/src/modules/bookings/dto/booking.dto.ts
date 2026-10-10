@@ -11,6 +11,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -214,6 +215,17 @@ export class CreateBookingDto {
   @IsDateString()
   eventDate?: string;
 
+  /**
+   * The time of day asked for on a "Request on Date" -- a date with no
+   * published window. Only meaningful with `eventDate` and without `slotId`;
+   * a published window already says when it runs.
+   */
+  @ApiPropertyOptional({ example: '18:30', description: 'HH:MM, 24-hour.' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Give the time as HH:MM' })
+  requestedTime?: string;
+
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional()
   @IsString()
@@ -255,6 +267,22 @@ export class PayDto {
   @IsOptional()
   @IsEnum(PaymentMethod)
   method?: PaymentMethod;
+}
+
+/**
+ * The provider accepting the customer's own price, said back to the server.
+ *
+ * The amount is required so a press of "Accept" can only ever agree the figure
+ * the provider was shown: if the request moved underneath them, or the client
+ * would have fallen back to some other price, the server refuses rather than
+ * agreeing a number nobody looked at.
+ */
+export class AcceptRequestDto {
+  @ApiProperty({ example: 20000, minimum: 1, maximum: 100_000_000 })
+  @IsStrictNumber({ maxDecimalPlaces: 2 })
+  @Min(1, { message: 'Confirm the amount you are accepting' })
+  @Max(100_000_000)
+  amount: number;
 }
 
 export class CancelBookingDto {

@@ -14,6 +14,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiHeader } from '@nestjs/swagger
 import { BookingsService } from './bookings.service';
 import { QuotationsService } from './quotations.service';
 import {
+  AcceptRequestDto,
   BookingMessageDto,
   BookingSearchDto,
   CancelBookingDto,
@@ -448,11 +449,18 @@ export class BookingsController {
   @ApiOperation({
     summary: 'Accept a customer request',
     description:
-      'Accepts a new request at the customer\'s selected package total or stated budget and makes the advance payable.',
+      'Accepts a new request at the price the customer asked for (their stated budget, else the ' +
+      'package total they picked) and makes the advance payable. The body repeats that amount; ' +
+      'any other figure is refused. Refused once a quotation exists on the booking: a requote ' +
+      'request is answered with a revised quotation.',
   })
   @Put(':id/accept')
-  accept(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
-    return this.bookings.acceptRequest(actor, id);
+  accept(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AcceptRequestDto,
+  ) {
+    return this.bookings.acceptRequest(actor, id, dto);
   }
 
   /** @deprecated Kept for clients released before the general Accept action. */
@@ -529,6 +537,18 @@ export class BookingsController {
   @Put(':id/settle')
   settle(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.bookings.settle(actor, id);
+  }
+
+  @RequirePermissions(Permission.BOOKING_COMPLETE)
+  @ApiOperation({
+    summary: 'Release every pending payout owed to the provider',
+    description:
+      'The Payments page action: transfers each owed instalment across the provider bookings, ' +
+      'skipping any held by an open case. Refused without an active payout account.',
+  })
+  @Put('payouts/release')
+  releaseAllPayouts(@CurrentUser() actor: AuthUser) {
+    return this.bookings.releaseAllPayouts(actor);
   }
 
   @RequirePermissions(Permission.BOOKING_COMPLETE)

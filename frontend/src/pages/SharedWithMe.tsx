@@ -6,11 +6,12 @@ import BiodataCard, { Biodata } from '../components/BiodataCard';
 import ProfileSelector from '../components/ProfileSelector';
 import { Loading } from '../components/ui/Feedback';
 
+/**
+ * Which agency a profile came from — and nothing to contact it by (WOW-07).
+ * The sharer's mobile and email are theirs to give, not every recipient's.
+ */
 interface Sharer {
   agencyName: string | null;
-  city: string | null;
-  contactPhone: string | null;
-  email: string | null;
 }
 
 interface SharedRow {
@@ -138,13 +139,9 @@ export default function SharedWithMe() {
               <p>
                 <span className="text-gray-400">Shared by </span>
                 <span className="font-medium text-gray-800">
-                  {row.sharedBy?.agencyName ?? row.sharedBy?.email ?? 'an agent'}
+                  {row.sharedBy?.agencyName ?? 'another agency'}
                 </span>
-                {row.sharedBy?.city && <span className="text-gray-400"> · {row.sharedBy.city}</span>}
               </p>
-              {row.sharedBy?.contactPhone && (
-                <p className="text-gray-500">{row.sharedBy.contactPhone}</p>
-              )}
               <p className="text-gray-400">
                 {new Date(row.sharedAt).toLocaleDateString()}
               </p>

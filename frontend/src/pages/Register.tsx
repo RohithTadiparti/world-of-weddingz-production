@@ -6,6 +6,7 @@ import { useAuth } from '../store/auth';
 import PasswordField from '../components/PasswordField';
 import type { AccountType } from '../lib/permissions';
 import { EMAIL_PATTERN, MOBILE_10_PATTERN, NAME_PATTERN } from '../lib/permissions';
+import { usernameRequired, validateUsername } from '../lib/vendor-listing-rules';
 
 /**
  * Sign-up is a two-step choice: first *what kind of account*, then the details.
@@ -99,9 +100,10 @@ export default function Register() {
     } else if (!name) errors.displayName = 'Enter your name';
 
     if (!EMAIL_PATTERN.test(email.trim())) errors.email = 'Enter a valid email address';
-    if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username.trim().toLowerCase())) {
-      errors.username = 'Use 3-40 lowercase letters, numbers, dots, underscores or hyphens';
-    }
+    // Optional for a vendor, who signs in with the email or mobile number
+    // given here; still checked when one is typed.
+    const usernameError = validateUsername(username, accountType);
+    if (usernameError) errors.username = usernameError;
 
     if (phoneRequired && !digits) errors.phone = 'Enter your mobile number';
     else if (digits && !MOBILE_10_PATTERN.test(digits)) {
@@ -133,11 +135,12 @@ export default function Register() {
     try {
       const payload: Record<string, unknown> = {
         email: email.trim(),
-        username: username.trim().toLowerCase(),
         password,
         accountType,
         displayName: name,
       };
+      // Left out when blank: an optional username is not an empty one.
+      if (username.trim()) payload.username = username.trim().toLowerCase();
       if (phone.trim()) payload.phone = phone.replace(/\s|-/g, '');
       // `role` is only meaningful where the server said the type needs one; it
       // derives the role from accountType for every other persona.
@@ -330,7 +333,12 @@ export default function Register() {
             )}
           </div>
           <div>
-            <label className="label" htmlFor="username">Username</label>
+            <label className="label" htmlFor="username">
+              Username{' '}
+              {!usernameRequired(accountType) && (
+                <span className="font-normal text-gray-400">(optional)</span>
+              )}
+            </label>
             <input
               id="username"
               className="input"

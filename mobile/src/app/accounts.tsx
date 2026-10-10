@@ -19,6 +19,7 @@ import { PayoutAccount, type PayoutAccountView } from '@/components/accounts/pay
 import { ListScreen } from '@/components/layout';
 import { BusinessSwitcher } from '@/components/business/switcher';
 import { Body, Button, Caption, Card, PageSubtitle, SectionTitle } from '@/components/ui';
+import { releaseCondition } from '@/shared/booking-rules';
 import { selectPermissions, useAuth } from '@/store/auth';
 import { useBusinesses } from '@/store/business';
 import { rgb, space, useTheme } from '@/theme';
@@ -125,6 +126,8 @@ export default function Accounts() {
   const { activeId } = useBusinesses();
   // Null is every payment, which is what somebody arriving at the page wants.
   const [card, setCard] = useState<string | null>(null);
+  const [releasingAll, setReleasingAll] = useState(false);
+  const [releaseNotice, setReleaseNotice] = useState('');
 
   const queryClient = useQueryClient();
 
@@ -235,6 +238,38 @@ export default function Accounts() {
                   <SectionTitle>Eligible payouts</SectionTitle>
                   <Badge tone="brand">Available {rupeesExact(data.pendingPayout)}</Badge>
                 </View>
+                {eligibleRows.length > 0 ? (
+                  <Button
+                    label={releasingAll ? 'Releasing…' : 'Release all available'}
+                    small
+                    busy={releasingAll}
+                    disabled={releasingAll || payout?.status !== 'active'}
+                    onPress={async () => {
+                      setReleasingAll(true);
+                      setReleaseNotice('');
+                      try {
+                        const { data: result } = await api.put<{
+                          released: number;
+                          skipped: { bookingId: string; reason: string }[];
+                        }>('/bookings/payouts/release');
+                        setReleaseNotice(
+                          result.released > 0
+                            ? `${result.released} payment${result.released === 1 ? '' : 's'} released to your payout account.`
+                            : (result.skipped[0]?.reason ?? 'Nothing was released. It may already be on its way.'),
+                        );
+                        await queryClient.invalidateQueries({ queryKey: ['earnings'] });
+                      } catch (err) {
+                        setReleaseNotice(apiMessage(err, 'Those payments could not be released.'));
+                      } finally {
+                        setReleasingAll(false);
+                      }
+                    }}
+                  />
+                ) : null}
+                {payout?.status !== 'active' && eligibleRows.length > 0 ? (
+                  <Caption tone="muted">Add and verify a payout account to release these payments.</Caption>
+                ) : null}
+                {releaseNotice ? <Caption>{releaseNotice}</Caption> : null}
                 {eligibleRows.length === 0 ? (
                   <Caption tone="faint">No milestones are currently eligible for release.</Caption>
                 ) : (
@@ -273,7 +308,12 @@ export default function Accounts() {
               <SectionTitle>Escrow</SectionTitle>
               <View style={{ gap: space(2) }}>
                 {escrowRows.map((row) => (
-                  <View key={row.paymentId} style={{ borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.08)', paddingTop: space(2) }}>
+                  <Pressable
+                    key={row.paymentId}
+                    accessibilityRole="button"
+                    onPress={() => router.push({ pathname: '/transaction/[id]', params: { id: row.paymentId } })}
+                    style={{ borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.08)', paddingTop: space(2) }}
+                  >
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: space(2) }}>
                       <Body>{MILESTONE_LABEL[row.milestone] ?? row.milestone}</Body>
                       <Badge tone={row.status === 'disputed' ? 'critical' : 'caution'}>
@@ -285,9 +325,9 @@ export default function Accounts() {
                     </Caption>
                     <View style={{ marginTop: space(1), gap: space(0.5) }}>
                       <Line label="Amount" value={rupeesExact(row.payoutAmount)} strong />
-                      <Line label="Expected release" value={row.confirmedAt ? shortDate(row.confirmedAt) : 'Awaiting confirmation'} />
+                      <Line label="Released when" value={releaseCondition(row)} />
                     </View>
-                  </View>
+                  </Pressable>
                 ))}
               </View>
             </Card>

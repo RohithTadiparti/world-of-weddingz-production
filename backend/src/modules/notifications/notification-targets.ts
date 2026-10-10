@@ -137,4 +137,14 @@ export const NOTIFICATION_TARGET: Record<NotificationType, NotificationTarget> =
     action: 'review',
     idKey: 'alertId',
   },
+
+  // The applicant's own listing is where they follow their verification, so
+  // the business is the target (the same one a decision carries).
+  [NotificationType.VERIFICATION_PROGRESS]: {
+    module: 'verification',
+    action: 'view',
+    idKey: 'businessId',
+  },
+  // Opens the change request itself on the vendor's Support page.
+  [NotificationType.BUSINESS_CHANGE_UPDATE]: { module: 'support', action: 'view', idKey: 'caseId' },
 };

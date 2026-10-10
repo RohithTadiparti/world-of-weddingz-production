@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PaperPlaneRight } from 'phosphor-react-native';
@@ -25,14 +25,20 @@ import { radius, rgb, space, useTheme } from '@/theme';
 export function BookingChat({
   bookingId,
   label = 'Message the client',
+  defaultOpen = false,
 }: {
   bookingId: string;
   label?: string;
+  /** Opened on arrival, for a screen whose Message button brought the user here. */
+  defaultOpen?: boolean;
 }) {
   const theme = useTheme();
   const qc = useQueryClient();
   const me = useAuth((s) => s.user?.id);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
@@ -46,6 +52,9 @@ export function BookingChat({
         note: string;
       },
     retry: false,
+    // Paying the advance or completing the job changes this on the other
+    // side's screen too, and nothing pushes it (rows 18-19).
+    refetchInterval: 20_000,
   });
 
   const { data: thread } = useQuery({

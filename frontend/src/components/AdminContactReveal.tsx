@@ -7,6 +7,10 @@ export interface RevealedContact {
   id: string;
   email: string | null;
   phone: string | null;
+  /** An account reveal also returns the contact line of each vendor business it owns. */
+  businesses?: { id: string; contactPhone: string | null }[];
+  /** ...and of each planner business. */
+  plannerBusinesses?: { id: string; contactPhone: string | null; contactEmail: string | null }[];
 }
 
 /**
@@ -17,7 +21,14 @@ export interface RevealedContact {
  * writes an audit row, so the button says what it does: the reveal is
  * recorded against the administrator who pressed it.
  */
-export function useContactReveal(accountId: string) {
+export function useContactReveal(
+  accountId: string,
+  /**
+   * Where the full values come from. An account by default; a marriage profile
+   * carries contact lines of its own, revealed at `/admin/profiles/:id/contact`.
+   */
+  url = `/admin/accounts/${accountId}/contact`,
+) {
   const permissions = usePermissions();
   const [contact, setContact] = useState<RevealedContact | null>(null);
   const [error, setError] = useState('');
@@ -27,7 +38,7 @@ export function useContactReveal(accountId: string) {
     setError('');
     setBusy(true);
     try {
-      setContact((await api.get(`/admin/accounts/${accountId}/contact`)).data as RevealedContact);
+      setContact((await api.get(url)).data as RevealedContact);
     } catch (err) {
       setError(apiMessage(err, 'Those details could not be revealed.'));
     } finally {

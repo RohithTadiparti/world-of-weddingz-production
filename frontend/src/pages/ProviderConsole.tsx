@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, apiMessage } from '../lib/api';
@@ -10,7 +10,13 @@ import { usePermissions } from '../store/auth';
 import { useBusinesses } from '../store/business';
 import { LoadingCards } from '../components/ui/Feedback';
 import CategoryPicker, { useCategoryNames } from '../components/CategoryPicker';
-import VendorServices, { priceLabel } from '../components/VendorServices';
+import VendorServices from '../components/VendorServices';
+import {
+  CatalogSummaryList,
+  PortfolioGallery,
+  SubmittedSocialLinks,
+} from '../components/CatalogSummary';
+import { SummaryService, catalogStep, uniquePortfolio } from '../lib/catalog-rules';
 import PhotoUploader from '../components/PhotoUploader';
 import {
   HTTPS_URL,
@@ -25,6 +31,7 @@ import {
 import { PlannerWedding } from '../lib/planner-profile';
 import RequiredMark, { RequiredNote } from '../components/ui/RequiredMark';
 import { SocialLinksEditor, SocialLinksList, ViewInstagramLink } from '../components/SocialLinks';
+import { businessSupportLink } from '../lib/support-cases';
 import {
   SocialLink,
   listingInstagramUrl,
@@ -32,6 +39,25 @@ import {
   normaliseSocialLinks,
   socialLinkErrors,
 } from '../lib/social-links';
+import {
+  BUSINESS_NAME_MAX,
+  COMPLIANCE_DOCUMENT_ACCEPT,
+  COMPLIANCE_DOCUMENT_HELP,
+  COMPLIANCE_DOCUMENT_TYPES,
+  MAX_COMPLIANCE_DOCUMENTS,
+  MAX_PORTFOLIO_IMAGES,
+  REGISTERED_ADDRESS_MAX,
+  REGISTRATION_NUMBER_MAX,
+  addPortfolioImages,
+  businessNameError,
+  complianceFileProblem,
+  orderedPortfolio,
+  portfolioSlotsLeft,
+  profileImageOf,
+  registrationFieldErrors,
+  removePortfolioImage,
+  titleCaseCity,
+} from '../lib/vendor-listing-rules';
 import {
   CORRECTABLE_FIELD_KEYS,
   CORRECTION_FIELD_LABELS,
@@ -107,7 +133,8 @@ export default function ProviderConsole() {
             The account is locked while it is rejected — Business Details, Services, Availability and
             Bookings cannot be changed. If you think this is a mistake, raise it on Support.
           </p>
-          <Link className="btn w-fit" to="/support">
+          {/* Opens Support with the case already about this listing (row 27). */}
+          <Link className="btn w-fit" to={businessSupportLink(current.id)}>
             Contact support
           </Link>
         </div>
@@ -160,7 +187,11 @@ interface VendorListing {
   registeredAddress: string | null;
   contactPhone: string | null;
   portfolio: string[];
+  /** Which portfolio image is the business's profile picture; absent from an older server. */
+  profileImage?: string | null;
   complianceDocuments: string[];
+  /** The type of each compliance document, by position; absent from an older server. */
+  complianceDocumentTypes?: (string | null)[];
   /** Absent from a server that predates the list; see `listingSocialLinks`. */
   socialLinks?: SocialLink[];
   website?: string | null;
@@ -218,6 +249,14 @@ function VendorBusinessWizard({
   const isVerifiedLive = current?.status === 'verified' || current?.status === 'live';
   const steps = isVerifiedLive ? WIZARD_STEPS.filter((s) => s.key !== 'review') : WIZARD_STEPS;
 
+  // Review & Submit opens only once every selected category has a service and
+  // every service a live price, by the server's own checklist. A listing that
+  // has already been submitted can always be read back.
+  const { data: completion } = useCompletion(vendorId);
+  const catalog = catalogStep(completion);
+  const alreadySubmitted = Boolean(completion && !completion.rules.submit);
+  const reviewOpen = catalog.ready || alreadySubmitted;
+
   useEffect(() => {
     if (pendingStep !== null && (pendingStep === 0 || hasBusiness)) {
       setStep(Math.max(0, Math.min(steps.length - 1, pendingStep)));
@@ -240,7 +279,7 @@ function VendorBusinessWizard({
     <div className="space-y-4">
       <ol className="flex flex-wrap gap-2">
         {steps.map((s, i) => {
-          const disabled = i > 0 && !hasBusiness;
+          const disabled = (i > 0 && !hasBusiness) || (s.key === 'review' && !reviewOpen);
           const tone =
             i === step
               ? 'bg-brand text-white'
@@ -269,7 +308,12 @@ function VendorBusinessWizard({
         fix what nobody named. Read from the owner-only route, so a competitor
         cannot look it up.
       */}
-      {current?.decisionReason && (
+      {/*
+        Only while the listing is actually sent back. The reason stays on the
+        record after a resubmission, and showing it then kept "edits to be
+        made" on screen over a listing already submitted for verification.
+      */}
+      {current?.decisionReason && current.status === 'reverification_required' && (
         <div className="rounded-sm border border-amber-200 bg-amber-50 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
             {current.correctionFields && current.correctionFields.length > 0
@@ -330,9 +374,20 @@ function VendorBusinessWizard({
           />
           {/* No Review & Submit once verified/live — there is nothing left to
               submit, so the step and its button are both gone (EZ1-I207). */}
+          {!isVerifiedLive && !reviewOpen && catalog.issues.length > 0 && (
+            <div className="alert-caution space-y-1" role="status">
+              <p className="text-sm font-medium">Finish your catalog before Review &amp; Submit:</p>
+              <ul className="list-disc pl-5 text-sm">
+                {catalog.issues.map((issue) => (
+                  <li key={issue}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <WizardNav
             onBack={() => go(0)}
             onNext={isVerifiedLive ? undefined : () => go(2)}
+            nextDisabled={!reviewOpen}
             nextLabel="Review & Submit →"
           />
         </div>
@@ -363,11 +418,13 @@ function WizardNav({
   onNext,
   onEdit,
   nextLabel,
+  nextDisabled = false,
 }: {
   onBack?: () => void;
   onNext?: () => void;
   onEdit?: () => void;
   nextLabel?: string;
+  nextDisabled?: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
@@ -385,7 +442,7 @@ function WizardNav({
           </button>
         )}
         {onNext && (
-          <button type="button" className="btn" onClick={onNext}>
+          <button type="button" className="btn" onClick={onNext} disabled={nextDisabled}>
             {nextLabel ?? 'Next →'}
           </button>
         )}
@@ -394,47 +451,54 @@ function WizardNav({
   );
 }
 
-/** A vendor service and its priced offerings, as the review reads them (EZ1-I152). */
-interface ReviewService {
-  id: string;
-  displayName: string | null;
-  description: string | null;
-  definition: { name?: string } | null;
-  category: { name?: string } | null;
-  offerings: {
-    id: string;
-    name: string;
-    pricingModel: string;
-    price: string | null;
-    currency: string;
-    unitLabel: string | null;
-  }[];
-}
+/** What the status reads as once a listing has been sent to an officer. */
+const SUBMITTED_STATUSES = ['pending_verification', 'verification_in_progress'];
 
-/** The whole listing, read-only, before it is submitted for verification. */
+/**
+ * The whole listing, read-only, before it is submitted for verification, and
+ * after: once submitted the same page says so at the top and keeps the full
+ * submission on screen, with no reload.
+ *
+ * Status comes from the completion checklist, the same query the Submit button
+ * writes into, so the banner and the button change together the moment the
+ * submission is accepted.
+ */
 function ReviewSummary({ current }: { current: VendorListing }) {
   const category = useCategoryNames()(current.categories).join(', ') || 'Not chosen yet';
+  const { data: completion } = useCompletion(current.id);
+  const status = completion?.status ?? current.status;
+  const submitted = SUBMITTED_STATUSES.includes(status);
 
   // The catalog the vendor actually built, so Review is the complete submission
   // rather than a count of it — no "2 Services" / "3 Documents" (EZ1-I152).
-  const { data: services = [] } = useQuery<ReviewService[]>({
+  const { data: services = [] } = useQuery<SummaryService[]>({
     queryKey: ['vendor-services', current.id],
     queryFn: async () => (await api.get(`/vendors/${current.id}/services`)).data,
     enabled: Boolean(current.id),
     retry: false,
   });
 
-  const portfolio = current.portfolio ?? [];
   const documents = current.complianceDocuments ?? [];
-  const links = listingSocialLinks(current);
 
   return (
     <div className="card space-y-4">
+      {submitted && (
+        <div className="flex items-start gap-2 rounded-sm border border-positive-fg/30 bg-positive-bg p-3 text-sm text-positive-fg">
+          <span className="font-semibold">Submitted for verification.</span>
+          <span>
+            {status === 'verification_in_progress'
+              ? 'An officer is verifying it now.'
+              : 'An officer will be assigned and will visit the registered address.'}{' '}
+            This is what was submitted.
+          </span>
+        </div>
+      )}
       <div>
-        <h2 className="section-title">Review</h2>
+        <h2 className="section-title">{submitted ? 'Your submission' : 'Review'}</h2>
         <p className="text-sm text-gray-600">
-          Everything you have entered, read-only. Go back to change anything, then submit for
-          verification below.
+          {submitted
+            ? 'Everything you submitted, read-only while it is being verified.'
+            : 'Everything you have entered, read-only. Go back to change anything, then submit for verification below.'}
         </p>
       </div>
 
@@ -461,40 +525,22 @@ function ReviewSummary({ current }: { current: VendorListing }) {
         </div>
       )}
 
+      {/*
+        Each link once. The list used to be followed by a separate "View
+        Instagram" button for the same profile, and a profile saved in two
+        spellings was listed twice, so Instagram appeared two or three times.
+      */}
       <div className="border-t pt-3">
         <p className="mb-1 text-sm font-medium text-gray-900">Social media and website</p>
-        {links.length > 0 ? (
-          <>
-            <SocialLinksList links={links} />
-            <ViewInstagramLink listing={current} className="mt-3" />
-          </>
-        ) : (
-          <p className="text-sm text-gray-500">
-            None added. Optional, but couples like to see more of your work.
-          </p>
-        )}
+        <SubmittedSocialLinks listing={current} />
       </div>
 
-      {/* The actual portfolio images, not a count of them (EZ1-I152). */}
+      {/* The actual portfolio images, each opening full size (EZ1-I152). */}
       <div className="border-t pt-3">
         <p className="mb-1 text-sm font-medium text-gray-900">
-          Portfolio ({portfolio.length})
+          Portfolio ({uniquePortfolio(current.portfolio).length})
         </p>
-        {portfolio.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {portfolio.map((url) => (
-              <img
-                key={url}
-                src={url}
-                alt=""
-                className="h-20 w-28 rounded-sm object-cover"
-                loading="lazy"
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-amber-700">No photos added yet.</p>
-        )}
+        <PortfolioGallery urls={current.portfolio ?? []} title={`${current.name} portfolio`} />
       </div>
 
       {/* Each compliance document by name, as a link (EZ1-I152). */}
@@ -505,14 +551,14 @@ function ReviewSummary({ current }: { current: VendorListing }) {
         {documents.length > 0 ? (
           <ul className="flex flex-wrap gap-2">
             {documents.map((url, i) => (
-              <li key={url}>
+              <li key={`${i}-${url}`}>
                 <a
                   className="text-sm text-brand-strong underline"
                   href={url}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  {decodeURIComponent(url.split('/').pop() ?? `Document ${i + 1}`)}
+                  {decodeURIComponent(url.split('?')[0].split('/').pop() ?? `Document ${i + 1}`)}
                 </a>
               </li>
             ))}
@@ -522,43 +568,16 @@ function ReviewSummary({ current }: { current: VendorListing }) {
         )}
       </div>
 
-      {/* Catalogs, services and their priced offerings in full (EZ1-I152). */}
-      {services.length > 0 && (
-        <div className="border-t pt-3">
-          <p className="mb-2 text-sm font-medium text-gray-900">
-            Catalog &amp; services ({services.length})
-          </p>
-          <div className="space-y-2">
-            {services.map((svc) => (
-              <div key={svc.id} className="rounded-sm bg-gray-50 p-2">
-                <p className="text-sm font-medium text-gray-800">
-                  {svc.displayName ?? svc.definition?.name ?? 'Service'}
-                  {svc.category?.name && (
-                    <span className="ml-2 text-xs font-normal text-gray-500">
-                      {svc.category.name}
-                    </span>
-                  )}
-                </p>
-                {svc.description && (
-                  <p className="mt-0.5 text-xs text-gray-600">{svc.description}</p>
-                )}
-                {svc.offerings.length > 0 ? (
-                  <ul className="mt-1 space-y-0.5 text-sm text-gray-700">
-                    {svc.offerings.map((off) => (
-                      <li key={off.id} className="flex justify-between gap-3">
-                        <span>{off.name}</span>
-                        <span className="tabular-nums text-gray-600">{priceLabel(off)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-1 text-xs text-gray-400">No offerings priced yet.</p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/*
+        Catalog & services in full: category, service, pricing name, pricing
+        details and description for every price (EZ1-I152).
+      */}
+      <div className="border-t pt-3">
+        <p className="mb-2 text-sm font-medium text-gray-900">
+          Catalog &amp; services ({services.length})
+        </p>
+        <CatalogSummaryList services={services} />
+      </div>
     </div>
   );
 }
@@ -635,7 +654,10 @@ function VendorListingForm({
   // One to five catalogue categories, first one first (EZ1-I263).
   const [categories, setCategories] = useState<string[]>([]);
   const [portfolio, setPortfolio] = useState<string[]>([]);
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   const [documents, setDocuments] = useState<string[]>([]);
+  // The type of each document, by position in `documents`.
+  const [documentTypes, setDocumentTypes] = useState<(string | null)[]>([]);
   const [socialLinks, setSocialLinks] = useState<SocialLink[]>([]);
   const [msg, setMsg] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -665,7 +687,11 @@ function VendorListingForm({
     });
     setCategories(current.categories ?? []);
     setPortfolio(current.portfolio ?? []);
+    setProfileImage(profileImageOf(current.portfolio ?? [], current.profileImage));
     setDocuments(current.complianceDocuments ?? []);
+    setDocumentTypes(
+      (current.complianceDocuments ?? []).map((_, i) => current.complianceDocumentTypes?.[i] ?? null),
+    );
     // The stored list as it is, so a link the rules now refuse is shown to be
     // fixed rather than silently dropped; the three single fields only when the
     // server has no list to give.
@@ -677,7 +703,8 @@ function VendorListingForm({
 
   /** The link rows' problems, folded into the form's errors under one key. */
   function socialLinksError(): string | undefined {
-    const check = socialLinkErrors(socialLinks);
+    // One link of each type on a vendor listing; the API refuses a repeat.
+    const check = socialLinkErrors(socialLinks, { uniquePlatforms: true });
     if (!check.any) return undefined;
     return check.list ?? 'Fix the highlighted links.';
   }
@@ -687,13 +714,10 @@ function VendorListingForm({
     const errors: Record<string, string> = {};
     const descriptionError = validateBusinessDescription(form.description, current?.description);
     if (descriptionError) errors.description = descriptionError;
-    const businessName = form.name.trim();
-    if (!businessName) errors.name = 'Business name is required.';
-    else if (businessName.length < 2 || businessName.length > 100) {
-      errors.name = 'Business name must be between 2 and 100 characters.';
-    } else if (!/^(?=.*[\p{L}\p{N}])[\p{L}\p{N} .&'-]+$/u.test(businessName)) {
-      errors.name = 'Please enter a valid business name.';
-    }
+    const nameError = businessNameError(form.name);
+    if (nameError) errors.name = nameError;
+    // Trading since is required; registration number and address are capped.
+    Object.assign(errors, registrationFieldErrors(form));
     // Category, city, registered address, a portfolio image and a compliance
     // document are all mandatory to submit a listing for verification
     // (EZ1-I152) — an officer cannot verify a business that has named none of
@@ -705,9 +729,13 @@ function VendorListingForm({
     }
     if (portfolio.length === 0) {
       errors.portfolio = 'Add at least one portfolio photo';
+    } else if (portfolio.length > MAX_PORTFOLIO_IMAGES) {
+      errors.portfolio = `Add at most ${MAX_PORTFOLIO_IMAGES} portfolio images — remove ${portfolio.length - MAX_PORTFOLIO_IMAGES}`;
     }
     if (documents.length === 0) {
       errors.complianceDocuments = 'Upload at least one compliance document';
+    } else if (documents.length > MAX_COMPLIANCE_DOCUMENTS) {
+      errors.complianceDocuments = `Upload at most ${MAX_COMPLIANCE_DOCUMENTS} compliance documents — remove ${documents.length - MAX_COMPLIANCE_DOCUMENTS}`;
     }
     if (form.gstNumber && !GSTIN_PATTERN.test(form.gstNumber.toUpperCase())) {
       errors.gstNumber = 'A GSTIN is 15 characters, like 29ABCDE1234F1Z5';
@@ -747,6 +775,9 @@ function VendorListingForm({
     const descriptionError = validateBusinessDescription(form.description, current?.description);
     if (descriptionError) errors.description = descriptionError;
     if (portfolio.length === 0) errors.portfolio = 'Add at least one portfolio photo';
+    else if (portfolio.length > MAX_PORTFOLIO_IMAGES) {
+      errors.portfolio = `Add at most ${MAX_PORTFOLIO_IMAGES} portfolio images — remove ${portfolio.length - MAX_PORTFOLIO_IMAGES}`;
+    }
     if (!form.contactPhone.trim()) {
       errors.contactPhone = 'A contact mobile number is required';
     } else if (!/^(\+91)?[6-9]\d{9}$/.test(form.contactPhone.replace(/\s|-/g, ''))) {
@@ -769,11 +800,17 @@ function VendorListingForm({
       // A verified/live listing may only change the presentational fields, so
       // the payload carries just those — the legal fields are not sent, not
       // merely disabled (EZ1-I207).
+      // The city goes in title case ("hyderabad" -> "Hyderabad"), and the
+      // form shows what was saved. The API applies the same rule.
+      const city = titleCaseCity(form.city);
+      if (city !== form.city) setForm((f) => ({ ...f, city }));
+      const picture = profileImageOf(portfolio, profileImage);
       const payload: Record<string, unknown> = presentationalOnly
         ? {
             description: form.description.trim(),
             contactPhone: form.contactPhone.trim(),
             portfolio,
+            profileImage: picture,
             socialLinks: normaliseSocialLinks(socialLinks),
           }
         : {
@@ -783,12 +820,14 @@ function VendorListingForm({
             // the last photo has to be able to reach the server. The links
             // likewise, so removing the last one clears them.
             portfolio,
+            profileImage: picture,
             complianceDocuments: documents,
+            complianceDocumentTypes: documents.map((_, i) => documentTypes[i] ?? null),
             socialLinks: normaliseSocialLinks(socialLinks),
           };
       if (!presentationalOnly) {
+        if (city) payload.city = city;
         for (const key of [
-          'city',
           'description',
           'gstNumber',
           'panNumber',
@@ -815,7 +854,9 @@ function VendorListingForm({
       // next are the ones just saved rather than a flash of the old ones.
       await qc.invalidateQueries({ queryKey: ['my-listing'] });
       setEditing(false);
-      qc.invalidateQueries({ queryKey: ['business-completion'] });
+      // Awaited: Review & Submit reads the checklist and status from it, and a
+      // resubmission must show the new state without a manual refresh.
+      await qc.invalidateQueries({ queryKey: ['business-completion'] });
       // The business switcher drives which listing the wizard is about; without
       // refreshing it, a just-created first listing never becomes "active" and
       // the wizard cannot leave step one.
@@ -921,20 +962,7 @@ function VendorListingForm({
         </div>
 
         {current.portfolio?.length > 0 && (
-          <div className="border-t pt-3">
-            <p className="mb-2 text-sm font-medium text-gray-900">Portfolio</p>
-            <div className="flex flex-wrap gap-2">
-              {current.portfolio.map((url) => (
-                <img
-                  key={url}
-                  src={url}
-                  alt=""
-                  className="h-20 w-28 rounded-sm object-cover"
-                  loading="lazy"
-                />
-              ))}
-            </div>
-          </div>
+          <SavedPortfolio portfolio={current.portfolio} profileImage={current.profileImage} />
         )}
 
         {/*
@@ -988,41 +1016,18 @@ function VendorListingForm({
           showErrors={showLinkErrors}
           error={fieldErrors.socialLinks}
           saved={current}
+          uniquePlatforms
         />
 
-        <div className="border-t pt-3">
-          <h3 className="section-title">
-            Portfolio
-            <RequiredMark />
-          </h3>
-          {fieldErrors.portfolio && <p className="mb-2 alert-critical">{fieldErrors.portfolio}</p>}
-          {portfolio.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {portfolio.map((url) => (
-                <div key={url} className="relative">
-                  <img
-                    src={url}
-                    alt=""
-                    className="h-20 w-28 rounded-sm object-cover"
-                    loading="lazy"
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-1 top-1 rounded-sm bg-surface/90 px-1.5 text-xs text-gray-700"
-                    onClick={() => setPortfolio((p) => p.filter((u) => u !== url))}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <PhotoUploader
-            kind="photo"
-            label="Upload photos"
-            onUploaded={(url: string) => setPortfolio((p) => [...p, url])}
-          />
-        </div>
+        <PortfolioEditor
+          portfolio={portfolio}
+          profileImage={profileImage}
+          onChange={(next, picture) => {
+            setPortfolio(next);
+            setProfileImage(picture);
+          }}
+          error={fieldErrors.portfolio}
+        />
 
         <div className="flex gap-2">
           <button className="btn">Save changes</button>
@@ -1049,11 +1054,21 @@ function VendorListingForm({
             aria-required="true"
             value={form.name}
             onChange={set('name')}
-            maxLength={100}
+            maxLength={BUSINESS_NAME_MAX}
           />
+          <p className="mt-1 text-right text-xs text-gray-500">
+            {form.name.length}/{BUSINESS_NAME_MAX}
+          </p>
         </Field>
         <Field label="City" required error={fieldErrors.city}>
-          <input className="input" aria-required="true" value={form.city} onChange={set('city')} />
+          {/* Saved in title case: "hyderabad" becomes "Hyderabad". */}
+          <input
+            className="input"
+            aria-required="true"
+            value={form.city}
+            onChange={set('city')}
+            onBlur={() => setForm((f) => ({ ...f, city: titleCaseCity(f.city) }))}
+          />
         </Field>
       </div>
 
@@ -1090,48 +1105,28 @@ function VendorListingForm({
         showErrors={showLinkErrors}
         error={fieldErrors.socialLinks}
         saved={current}
+        uniquePlatforms
       />
 
-      <div className="border-t pt-3">
-        <h3 className="section-title">
-          Portfolio
-          <RequiredMark />
-        </h3>
-        <p className="mb-2 text-sm text-gray-600">
-          At least one photo is required (EZ1-I152). Clients rarely book from a listing with none.
-        </p>
-        {fieldErrors.portfolio && <p className="mb-2 alert-critical">{fieldErrors.portfolio}</p>}
-        {portfolio.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {portfolio.map((url) => (
-              <div key={url} className="relative">
-                <img src={url} alt="" className="h-20 w-28 rounded-sm object-cover" loading="lazy" />
-                <button
-                  type="button"
-                  className="absolute right-1 top-1 rounded-sm bg-surface/90 px-1.5 text-xs text-gray-700"
-                  onClick={() => setPortfolio((p) => p.filter((u) => u !== url))}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {/*
-          From the device, not from a URL.
+      {/*
+        From the device, not from a URL.
 
-          This asked for a link, which a vendor photographing their own venue
-          on a phone does not have — and the ones that were pasted showed as
-          broken images, because a pasted link is whatever the person pasted.
-          The uploader stores the file and hands back a URL the platform
-          serves, so the picture that appears is the picture that was chosen.
-        */}
-        <PhotoUploader
-          kind="photo"
-          label="Upload photos"
-          onUploaded={(url: string) => setPortfolio((p) => [...p, url])}
-        />
-      </div>
+        This asked for a link, which a vendor photographing their own venue
+        on a phone does not have — and the ones that were pasted showed as
+        broken images, because a pasted link is whatever the person pasted.
+        The uploader stores the file and hands back a URL the platform
+        serves, so the picture that appears is the picture that was chosen.
+      */}
+      <PortfolioEditor
+        portfolio={portfolio}
+        profileImage={profileImage}
+        onChange={(next, picture) => {
+          setPortfolio(next);
+          setProfileImage(picture);
+        }}
+        error={fieldErrors.portfolio}
+        intro="At least one photo is required (EZ1-I152). Clients rarely book from a listing with none."
+      />
 
       {/*
         The papers the officer asks to see.
@@ -1147,17 +1142,17 @@ function VendorListingForm({
         </h3>
         <p className="mb-2 text-sm text-gray-600">
           At least one is required (EZ1-I152). Your PAN document is what the officer checks first.
-          GST and any trade licence are useful if you have them. PDF, JPG or PNG.
+          Say what each document is so the officer knows what they are looking at.
         </p>
         {fieldErrors.complianceDocuments && (
           <p className="mb-2 alert-critical">{fieldErrors.complianceDocuments}</p>
         )}
         {documents.length > 0 && (
           <ul className="mb-2 divide-y divide-gray-200 rounded-sm border border-gray-200">
-            {documents.map((url) => (
-              <li key={url} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+            {documents.map((url, i) => (
+              <li key={url} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
                 <a
-                  className="min-w-0 flex-1 truncate text-brand-strong"
+                  className="min-w-0 flex-1 basis-40 truncate text-brand-strong"
                   href={url}
                   target="_blank"
                   rel="noreferrer"
@@ -1166,10 +1161,35 @@ function VendorListingForm({
                       something anybody reads. */}
                   {decodeURIComponent(url.split('/').pop() ?? 'Document')}
                 </a>
+                <label className="sr-only" htmlFor={`document-type-${i}`}>
+                  Document type for document {i + 1}
+                </label>
+                <select
+                  id={`document-type-${i}`}
+                  className="input w-full sm:w-64"
+                  value={documentTypes[i] ?? ''}
+                  onChange={(e) =>
+                    setDocumentTypes((types) => {
+                      const next = documents.map((_, j) => types[j] ?? null);
+                      next[i] = e.target.value || null;
+                      return next;
+                    })
+                  }
+                >
+                  <option value="">Document type…</option>
+                  {COMPLIANCE_DOCUMENT_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   className="btn-ghost btn-sm text-critical-fg"
-                  onClick={() => setDocuments((d) => d.filter((u) => u !== url))}
+                  onClick={() => {
+                    setDocuments((d) => d.filter((_, j) => j !== i));
+                    setDocumentTypes((types) => types.filter((_, j) => j !== i));
+                  }}
                 >
                   Remove
                 </button>
@@ -1179,9 +1199,19 @@ function VendorListingForm({
         )}
         <PhotoUploader
           kind="attachment"
-          label="Upload a document"
-          onUploaded={(url: string) => setDocuments((d) => [...d, url])}
+          label="Upload documents"
+          multiple
+          maxFiles={MAX_COMPLIANCE_DOCUMENTS - documents.length}
+          accept={COMPLIANCE_DOCUMENT_ACCEPT}
+          checkFile={(file) => complianceFileProblem(file)}
+          onUploaded={(url: string) => {
+            setDocuments((d) => (d.includes(url) ? d : [...d, url]));
+          }}
         />
+        <p className="mt-2 text-xs text-gray-600">{COMPLIANCE_DOCUMENT_HELP}</p>
+        <p className="text-xs text-gray-500">
+          {documents.length} of {MAX_COMPLIANCE_DOCUMENTS} documents
+        </p>
       </div>
 
       <div className="border-t pt-3">
@@ -1210,14 +1240,15 @@ function VendorListingForm({
               onChange={(e) => setForm((f) => ({ ...f, panNumber: e.target.value.toUpperCase() }))}
             />
           </Field>
-          <Field label="Registration number">
+          <Field label="Registration number" error={fieldErrors.registrationNumber}>
             <input
               className="input"
+              maxLength={REGISTRATION_NUMBER_MAX}
               value={form.registrationNumber}
               onChange={set('registrationNumber')}
             />
           </Field>
-          <Field label="Trading since">
+          <Field label="Trading since" required error={fieldErrors.tradingSince}>
             {/* A date, not a year (EZ1-I21) — the same question the agency form
                 answers, so families can see how long the business has run.
                 Today or earlier only; a future trading-since date is not a real
@@ -1225,6 +1256,7 @@ function VendorListingForm({
             <input
               className="input"
               type="date"
+              aria-required="true"
               max={new Date().toISOString().slice(0, 10)}
               value={form.tradingSince}
               onChange={set('tradingSince')}
@@ -1235,9 +1267,13 @@ function VendorListingForm({
               <input
                 className="input"
                 aria-required="true"
+                maxLength={REGISTERED_ADDRESS_MAX}
                 value={form.registeredAddress}
                 onChange={set('registeredAddress')}
               />
+              <p className="mt-1 text-right text-xs text-gray-500">
+                {form.registeredAddress.length}/{REGISTERED_ADDRESS_MAX}
+              </p>
             </Field>
           </div>
           <Field label="Contact number" required error={fieldErrors.contactPhone}>
@@ -1262,6 +1298,165 @@ function VendorListingForm({
         )}
       </div>
     </form>
+  );
+}
+
+/**
+ * The portfolio editor: up to ten images, several chosen at once, one of them
+ * set as the business's profile picture. The picture is shown first and
+ * labelled; the rest are the portfolio. Removing the picture's image hands the
+ * role to the first remaining image, and the API keeps it to the same rule.
+ */
+function PortfolioEditor({
+  portfolio,
+  profileImage,
+  onChange,
+  error,
+  intro,
+}: {
+  portfolio: string[];
+  profileImage: string | null;
+  onChange: (portfolio: string[], profileImage: string | null) => void;
+  error?: string;
+  intro?: string;
+}) {
+  // Several chosen files finish one after another; each is added to the list
+  // as it stands after the previous one, not the list the picker opened on.
+  const latest = useRef(portfolio);
+  latest.current = portfolio;
+  const { profile, rest } = orderedPortfolio(portfolio, profileImage);
+  const slots = portfolioSlotsLeft(portfolio);
+  return (
+    <div className="border-t pt-3">
+      <h3 className="section-title">
+        Portfolio
+        <RequiredMark />
+      </h3>
+      <p className="mb-2 text-sm text-gray-600">
+        {intro ? `${intro} ` : ''}Up to {MAX_PORTFOLIO_IMAGES} images. Choose “Set as Profile
+        Picture” on the one that represents your business; the rest show as your portfolio.
+      </p>
+      {error && <p className="mb-2 alert-critical">{error}</p>}
+      {profile && (
+        <div className="mb-3">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+            Profile picture
+          </p>
+          <PortfolioTile url={profile} isProfile onRemove={() => onChange(...removed(profile))} />
+        </div>
+      )}
+      {rest.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {rest.map((url) => (
+            <PortfolioTile
+              key={url}
+              url={url}
+              onRemove={() => onChange(...removed(url))}
+              onMakeProfile={() => onChange(portfolio, url)}
+            />
+          ))}
+        </div>
+      )}
+      <PhotoUploader
+        kind="photo"
+        label="Upload photos"
+        multiple
+        maxFiles={slots}
+        hint={`${portfolio.length} of ${MAX_PORTFOLIO_IMAGES} images. You can select several at once.`}
+        onUploaded={(url: string) => {
+          latest.current = addPortfolioImages(latest.current, [url]).portfolio;
+          onChange(latest.current, profileImageOf(latest.current, profileImage));
+        }}
+      />
+    </div>
+  );
+
+  function removed(url: string): [string[], string | null] {
+    const next = removePortfolioImage(portfolio, url, profileImage);
+    return [next.portfolio, next.profileImage];
+  }
+}
+
+function PortfolioTile({
+  url,
+  isProfile = false,
+  onRemove,
+  onMakeProfile,
+}: {
+  url: string;
+  isProfile?: boolean;
+  onRemove: () => void;
+  onMakeProfile?: () => void;
+}) {
+  return (
+    <div className="w-28">
+      <div className="relative">
+        <img
+          src={url}
+          alt={isProfile ? 'Business profile picture' : ''}
+          className={`h-20 w-28 rounded-sm object-cover ${isProfile ? 'ring-2 ring-brand' : ''}`}
+          loading="lazy"
+        />
+        <button
+          type="button"
+          className="absolute right-1 top-1 rounded-sm bg-surface/90 px-1.5 text-xs text-gray-700"
+          onClick={onRemove}
+        >
+          Remove
+        </button>
+      </div>
+      {onMakeProfile && (
+        <button
+          type="button"
+          className="mt-1 w-full text-center text-xs text-brand-strong underline"
+          onClick={onMakeProfile}
+        >
+          Set as Profile Picture
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The saved portfolio, read-only: the profile picture first and labelled, then the rest. */
+function SavedPortfolio({
+  portfolio,
+  profileImage,
+}: {
+  portfolio: string[];
+  profileImage?: string | null;
+}) {
+  const { profile, rest } = orderedPortfolio(portfolio, profileImage);
+  return (
+    <div className="space-y-2 border-t pt-3">
+      {profile && (
+        <div>
+          <p className="mb-1 text-sm font-medium text-gray-900">Profile picture</p>
+          <img
+            src={profile}
+            alt="Business profile picture"
+            className="h-24 w-32 rounded-sm object-cover"
+            loading="lazy"
+          />
+        </div>
+      )}
+      {rest.length > 0 && (
+        <div>
+          <p className="mb-1 text-sm font-medium text-gray-900">Portfolio</p>
+          <div className="flex flex-wrap gap-2">
+            {rest.map((url) => (
+              <img
+                key={url}
+                src={url}
+                alt=""
+                className="h-20 w-28 rounded-sm object-cover"
+                loading="lazy"
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1309,11 +1504,14 @@ function SocialLinksSection({
   showErrors,
   error,
   saved,
+  uniquePlatforms = false,
 }: {
   links: SocialLink[];
   onChange: (next: SocialLink[]) => void;
   showErrors: boolean;
   error?: string;
+  /** One link of each type, as a vendor listing requires (the API refuses repeats). */
+  uniquePlatforms?: boolean;
   /** The listing as last saved, for the View Instagram check. */
   saved?: Parameters<typeof listingInstagramUrl>[0];
 }) {
@@ -1324,7 +1522,13 @@ function SocialLinksSection({
         Optional. Where couples can see more of your work: your website, Instagram, YouTube,
         Facebook, Pinterest and the like. Each link must start with https://.
       </p>
-      <SocialLinksEditor value={links} onChange={onChange} showErrors={showErrors} error={error} />
+      <SocialLinksEditor
+        value={links}
+        onChange={onChange}
+        showErrors={showErrors}
+        error={error}
+        uniquePlatforms={uniquePlatforms}
+      />
       {/* The saved link, not the one being typed: this is the button couples
           get, so it is what the provider needs to see open their profile. */}
       {listingInstagramUrl(saved) && (

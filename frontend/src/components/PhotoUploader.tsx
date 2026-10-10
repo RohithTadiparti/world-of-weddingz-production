@@ -28,9 +28,28 @@ export default function PhotoUploader({
   label = 'Upload a photo',
   kind = 'photo',
   purpose,
+  multiple = false,
+  maxFiles,
+  checkFile,
+  accept,
+  hint,
 }: {
+  /** Called once per file, in the order chosen, as each upload completes. */
   onUploaded: (url: string) => void | Promise<void>;
   label?: string;
+  /** Let several files be chosen at once; each is uploaded in turn. */
+  multiple?: boolean;
+  /**
+   * How many more files may be added. Extra files chosen past it are not
+   * uploaded, and the person is told so. Zero disables the button.
+   */
+  maxFiles?: number;
+  /** A stricter rule for this field (formats, size); its message is shown and the file skipped. */
+  checkFile?: (file: File) => string | null;
+  /** Overrides the file picker's filter, to match `checkFile`. */
+  accept?: string;
+  /** A line under the button, e.g. the formats accepted. */
+  hint?: string;
   /**
    * What is being attached.
    *
@@ -51,10 +70,40 @@ export default function PhotoUploader({
   const [error, setError] = useState('');
 
   async function pick(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
+    const chosen = Array.from(event.target.files ?? []);
+    if (chosen.length === 0) return;
     setError('');
+
+    const room = maxFiles ?? Number.POSITIVE_INFINITY;
+    const files = multiple ? chosen.slice(0, Math.max(0, room)) : chosen.slice(0, 1);
+    const problems: string[] = [];
+    if (multiple && chosen.length > files.length) {
+      problems.push(
+        files.length === 0
+          ? 'No more files can be added.'
+          : `Only ${files.length} more could be added; the rest were left out.`,
+      );
+    }
+
+    setBusy(true);
+    try {
+      for (const file of files) {
+        const problem = await uploadOne(file);
+        if (problem) problems.push(files.length > 1 ? `${file.name}: ${problem}` : problem);
+      }
+    } finally {
+      setBusy(false);
+      setError(problems.join(' '));
+      // Clearing the input matters: without it, choosing the same file twice
+      // fires no change event and looks like the button has stopped working.
+      if (input.current) input.current.value = '';
+    }
+  }
+
+  /** Uploads one file; the reason it was refused, or null once it is attached. */
+  async function uploadOne(file: File): Promise<string | null> {
+    const ruled = checkFile?.(file);
+    if (ruled) return ruled;
     /*
      * Judged on the extension as well as the reported type, because the type is
      * not always reported. Windows hands over an empty `file.type` for HEIC and
@@ -67,19 +116,14 @@ export default function PhotoUploader({
     const isDocument =
       kind === 'attachment' && (file.type === 'application/pdf' || extension === 'pdf');
     if (!looksLikeImage && !isDocument) {
-      setError(
-        kind === 'attachment'
-          ? 'Choose an image or a PDF.'
-          : 'Choose an image file: JPEG, PNG, WebP, HEIC and the rest are all fine.',
-      );
-      return;
+      return kind === 'attachment'
+        ? 'Choose an image or a PDF.'
+        : 'Choose an image file: JPEG, PNG, WebP, HEIC and the rest are all fine.';
     }
     if (file.size > 10 * 1024 * 1024) {
-      setError('That photo is over 10MB. Choose a smaller one.');
-      return;
+      return 'That photo is over 10MB. Choose a smaller one.';
     }
 
-    setBusy(true);
     try {
       /*
        * The size and type go with the request so the storage can hold the
@@ -106,19 +150,15 @@ export default function PhotoUploader({
       await api.post('/media/complete', { key: data.key, ...(purpose ? { purpose } : {}) });
 
       await onUploaded(data.publicUrl);
+      return null;
     } catch (err) {
-      setError(
-        err instanceof StorageUploadError
-          ? err.message
-          : apiMessage(err, 'That file could not be uploaded.'),
-      );
-    } finally {
-      setBusy(false);
-      // Clearing the input matters: without it, choosing the same file twice
-      // fires no change event and looks like the button has stopped working.
-      if (input.current) input.current.value = '';
+      return err instanceof StorageUploadError
+        ? err.message
+        : apiMessage(err, 'That file could not be uploaded.');
     }
   }
+
+  const full = maxFiles !== undefined && maxFiles <= 0;
 
   return (
     <div>
@@ -130,23 +170,26 @@ export default function PhotoUploader({
          * it: the picker on Windows will not offer a HEIC file under `image/*`
          * alone, so the file the person came to upload is greyed out.
          */
+        multiple={multiple}
         accept={
-          kind === 'attachment'
+          accept ??
+          (kind === 'attachment'
             ? `image/*,application/pdf,.pdf,${IMAGE_EXTENSIONS.map((e) => `.${e}`).join(',')}`
-            : `image/*,${IMAGE_EXTENSIONS.map((e) => `.${e}`).join(',')}`
+            : `image/*,${IMAGE_EXTENSIONS.map((e) => `.${e}`).join(',')}`)
         }
         className="hidden"
         onChange={pick}
-        disabled={busy}
+        disabled={busy || full}
       />
       <button
         type="button"
         className="btn-outline"
-        disabled={busy}
+        disabled={busy || full}
         onClick={() => input.current?.click()}
       >
         {busy ? 'Uploading…' : label}
       </button>
+      {hint && <p className="mt-1 text-xs text-gray-500">{hint}</p>}
       {error && (
         <p role="alert" className="mt-1 text-xs text-red-600">
           {error}

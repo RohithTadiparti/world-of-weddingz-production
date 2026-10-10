@@ -6,6 +6,8 @@ import { api, bootstrapSession } from './lib/api';
 import { Permission, PermissionValue, ROLE_LABEL, UserRole, canAny } from './lib/permissions';
 import { navDenied } from './lib/nav-access';
 import { describe, type Notification, UNREAD_POLL_MS } from './lib/notification-copy';
+import { notificationLink } from './lib/notification-link';
+import { markOpened, useNotificationsLive } from './lib/notifications-live';
 import type { Icon } from '@phosphor-icons/react';
 import {
   AddressBook,
@@ -67,6 +69,7 @@ import Profile from './pages/Profile';
 import Matches from './pages/Matches';
 import Vendors from './pages/Vendors';
 import VendorDetail from './pages/VendorDetail';
+import BookingRequest from './pages/BookingRequest';
 import Planner from './pages/Planner';
 import PlannerClients from './pages/PlannerClients';
 import PlannerClientDetail from './pages/PlannerClientDetail';
@@ -451,11 +454,20 @@ function useUnreadCount(): number {
 
 /** A lightweight preview: the bell is a toggle, not a navigation-only icon. */
 function NotificationPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const permissions = usePermissions();
+  const linkContext = {
+    canAllocate: canAny(permissions, [Permission.VERIFICATION_ALLOCATE]),
+    canFieldwork: canAny(permissions, [Permission.VERIFICATION_FIELDWORK]),
+  };
   const { data = [], isLoading } = useQuery<Notification[]>({
     queryKey: ['notifications'],
     queryFn: async () => (await api.get('/notifications')).data,
     enabled: open,
     retry: false,
+    // Live while the panel is open, so an update arriving mid-glance shows.
+    refetchInterval: open ? UNREAD_POLL_MS : false,
+    refetchOnMount: 'always',
   });
   if (!open) return null;
   const latest = data.slice(0, 5);
@@ -467,7 +479,16 @@ function NotificationPanel({ open, onClose }: { open: boolean; onClose: () => vo
       </div>
       <div className="max-h-[min(28rem,calc(100dvh-6rem))] overflow-y-auto">
         {isLoading ? <p className="px-4 py-5 text-sm text-gray-500">Loading notificationsâ€¦</p> : latest.length === 0 ? <p className="px-4 py-5 text-sm text-gray-500">You are all caught up.</p> : latest.map((notification) => (
-          <Link key={notification.id} to="/notifications" onClick={onClose} className={`block border-b border-brand/10 px-4 py-3 last:border-b-0 hover:bg-surface-sunken ${notification.isRead ? '' : 'bg-brand-light/25'}`}>
+          // Each row opens the item it is about and reads it (row 21b); only
+          // a notification with nowhere specific to go falls back to the list.
+          <Link
+            key={notification.id}
+            to={notificationLink(notification, linkContext) ?? '/notifications'}
+            onClick={() => {
+              void markOpened(qc, notification);
+              onClose();
+            }}
+            className={`block border-b border-brand/10 px-4 py-3 last:border-b-0 hover:bg-surface-sunken ${notification.isRead ? '' : 'bg-brand-light/25'}`}>
             <p className="text-sm font-medium text-gray-900">{describe(notification) || 'There is an update on your account.'}</p>
             <p className="mt-1 text-xs text-gray-500">{new Date(notification.createdAt).toLocaleString()}</p>
           </Link>
@@ -650,6 +671,8 @@ function Layout({ children }: { children: ReactNode }) {
   const [drawer, setDrawer] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const reduce = useReducedMotion();
+  // New notifications, and the screens they are about, refresh as they arrive.
+  useNotificationsLive(Boolean(user));
 
   const { data: profile } = useQuery({
     queryKey: ['me'],
@@ -1171,6 +1194,15 @@ export default function App() {
         element={
           <Protected requires={[Permission.BOOKING_CREATE, Permission.PLANNER_LISTING_MANAGE]}>
             <Vendors />
+          </Protected>
+        }
+      />
+      {/* Check Availability & Request, full page (row 14). */}
+      <Route
+        path="/vendors/:id/request"
+        element={
+          <Protected requires={[Permission.BOOKING_CREATE, Permission.BOOKING_REQUEST_FOR_CLIENT]}>
+            <BookingRequest />
           </Protected>
         }
       />

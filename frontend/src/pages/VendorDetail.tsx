@@ -1,13 +1,12 @@
 import { useState } from 'react';
 import { useCategoryNames } from '../components/CategoryPicker';
 import { useQuery } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Permission, can } from '../lib/permissions';
 import { usePermissions } from '../store/auth';
 import { EmptyState, Loading } from '../components/ui/Feedback';
 import { MapPin, Star, Storefront } from '@phosphor-icons/react';
-import RequestDialog from '../components/RequestDialog';
 import { formatAnswer, type FieldSpec } from '../lib/dynamic-form';
 import { PRICING_LABEL } from '../components/VendorServices';
 import { SocialLinksList, ViewInstagramLink } from '../components/SocialLinks';
@@ -199,6 +198,7 @@ export function ServiceInformation({ service }: { service: ServiceSummary }) {
 
 export default function VendorDetail() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const categoryNames = useCategoryNames();
   const permissions = usePermissions();
   const canBook = can(permissions, Permission.BOOKING_CREATE);
@@ -210,12 +210,15 @@ export default function VendorDetail() {
    */
   const canRequestForClient = can(permissions, Permission.BOOKING_REQUEST_FOR_CLIENT);
   const canAsk = canBook || canRequestForClient;
-  const [requestOpen, setRequestOpen] = useState(false);
-  const [requestDate, setRequestDate] = useState('');
-
+  // The request is its own page now (row 14); a checked date and the event
+  // the buyer arrived from travel with it.
   function openRequest(date = '') {
-    setRequestDate(date);
-    setRequestOpen(true);
+    const next = new URLSearchParams();
+    if (date) next.set('date', date);
+    const eventId = new URLSearchParams(window.location.search).get('eventId');
+    if (eventId) next.set('eventId', eventId);
+    const query = next.toString();
+    navigate(`/vendors/${id}/request${query ? `?${query}` : ''}`);
   }
 
   const { data: vendor, isLoading } = useQuery({
@@ -522,13 +525,6 @@ export default function VendorDetail() {
         </div>
       )}
 
-      {requestOpen && (
-        <RequestDialog
-          vendor={vendor}
-          initialDate={requestDate}
-          onClose={() => setRequestOpen(false)}
-        />
-      )}
     </div>
   );
 }

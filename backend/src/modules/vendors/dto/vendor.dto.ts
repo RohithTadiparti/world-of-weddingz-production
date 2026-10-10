@@ -1,9 +1,23 @@
 import { ApiProperty, ApiPropertyOptional, IntersectionType, PartialType } from '@nestjs/swagger';
-import { SocialLinksDto } from '../../../common/dto/social-links.dto';
+import {
+  SOCIAL_PLATFORM_RULES,
+  SocialLinksDto,
+  SocialPlatform,
+} from '../../../common/dto/social-links.dto';
+import {
+  BUSINESS_NAME_MAX,
+  COMPLIANCE_DOCUMENT_TYPES,
+  MAX_COMPLIANCE_DOCUMENTS,
+  MAX_PORTFOLIO_IMAGES,
+  REGISTERED_ADDRESS_MAX,
+  REGISTRATION_NUMBER_MAX,
+  duplicateSocialPlatforms,
+  titleCaseCity,
+} from '../vendor-listing-rules';
 import { CATEGORY_SLUG, MAX_CATEGORIES } from '../vendor-categories';
 import { Type } from 'class-transformer';
 import { IsNotFutureDate } from '../../../common/decorators/not-future.decorator';
-import { ArrayMaxSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ValidateBy, ValidateIf, ValidateNested, ValidationOptions } from 'class-validator';
 import { IsMediaUrlShape } from '../../../common/decorators/uploaded-url.decorator';
 import { Transform } from 'class-transformer';
 import { ReviewStatus } from '../../../common/enums';
@@ -98,10 +112,12 @@ export class VendorComplianceDto {
   @Matches(PAN_PATTERN, { message: PAN_MESSAGE })
   panNumber?: string;
 
-  @ApiPropertyOptional({ maxLength: 64 })
+  @ApiPropertyOptional({ maxLength: REGISTRATION_NUMBER_MAX })
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  @MaxLength(REGISTRATION_NUMBER_MAX, {
+    message: `Registration number can be at most ${REGISTRATION_NUMBER_MAX} characters`,
+  })
   registrationNumber?: string;
 
   /** When the business started trading — a date (EZ1-I21). Optional. */
@@ -111,10 +127,12 @@ export class VendorComplianceDto {
   @IsNotFutureDate({ message: 'Trading since cannot be in the future' })
   tradingSince?: string;
 
-  @ApiPropertyOptional({ maxLength: 500 })
+  @ApiPropertyOptional({ maxLength: REGISTERED_ADDRESS_MAX })
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(REGISTERED_ADDRESS_MAX, {
+    message: `Registered address can be at most ${REGISTERED_ADDRESS_MAX} characters`,
+  })
   registeredAddress?: string;
 
   @ApiPropertyOptional({ example: '9876543210' })
@@ -123,20 +141,74 @@ export class VendorComplianceDto {
   @Matches(MOBILE_PATTERN, { message: MOBILE_MESSAGE })
   contactPhone?: string;
 
-  @ApiPropertyOptional({ type: [String], maxItems: 10, description: 'Certificate URLs' })
+  /**
+   * At most three: the GST certificate, PAN card, Aadhaar card or business
+   * registration certificate an officer checks. New entries must be uploads
+   * of a PDF, JPG, JPEG or PNG; the service checks both, holding the stored
+   * list (kept-media.ts).
+   */
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: MAX_COMPLIANCE_DOCUMENTS,
+    description: 'Certificate URLs (PDF, JPG, JPEG or PNG)',
+  })
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(10)
+  @ArrayMaxSize(MAX_COMPLIANCE_DOCUMENTS, {
+    message: `Upload at most ${MAX_COMPLIANCE_DOCUMENTS} compliance documents`,
+  })
   // New entries must be uploads; ones already stored may be resent (kept-media.ts).
   @IsMediaUrlShape({ each: true })
   complianceDocuments?: string[];
+
+  /**
+   * What each document is, by position in `complianceDocuments`; null where
+   * the vendor has not said. Older app builds omit it, and the stored types
+   * of the documents they resend are kept.
+   */
+  @ApiPropertyOptional({
+    type: [String],
+    enum: COMPLIANCE_DOCUMENT_TYPES,
+    maxItems: MAX_COMPLIANCE_DOCUMENTS,
+    description: 'The type of each compliance document, aligned by position',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_COMPLIANCE_DOCUMENTS)
+  @IsIn([...COMPLIANCE_DOCUMENT_TYPES, null], {
+    each: true,
+    message:
+      'Choose GST Certificate, PAN Card, Aadhaar Card or Business Registration Certificate for each document',
+  })
+  complianceDocumentTypes?: (string | null)[];
+}
+
+/** Refuses a social links list that names a platform (other than `other`) twice. */
+function UniqueSocialPlatforms(options?: ValidationOptions): PropertyDecorator {
+  return ValidateBy(
+    {
+      name: 'uniqueSocialPlatforms',
+      validator: {
+        validate: (value: unknown) =>
+          !Array.isArray(value) || duplicateSocialPlatforms(value).length === 0,
+        defaultMessage: (args) => {
+          const repeated = Array.isArray(args?.value) ? duplicateSocialPlatforms(args.value) : [];
+          const names = repeated.map((p) => SOCIAL_PLATFORM_RULES[p as SocialPlatform]?.label ?? p);
+          return `Add each type of link once: ${names.join(', ')} is listed more than once`;
+        },
+      },
+    },
+    options,
+  );
 }
 
 export class CreateVendorDto extends IntersectionType(VendorComplianceDto, SocialLinksDto) {
-  @ApiProperty({ maxLength: 120 })
+  @ApiProperty({ maxLength: BUSINESS_NAME_MAX })
   @IsString()
   @MinLength(2)
-  @MaxLength(120)
+  @MaxLength(BUSINESS_NAME_MAX, {
+    message: `Business name can be at most ${BUSINESS_NAME_MAX} characters`,
+  })
   name: string;
 
   /**
@@ -175,8 +247,10 @@ export class CreateVendorDto extends IntersectionType(VendorComplianceDto, Socia
   @MaxLength(2000)
   description?: string;
 
+  /** Stored in title case: "hyderabad" is saved as "Hyderabad". */
   @ApiPropertyOptional({ maxLength: 80 })
   @IsOptional()
+  @Transform(({ value }) => titleCaseCity(value))
   @IsString()
   @MaxLength(80)
   city?: string;
@@ -195,15 +269,41 @@ export class CreateVendorDto extends IntersectionType(VendorComplianceDto, Socia
    * silently dropped and believing the price was saved.
    */
 
-  @ApiPropertyOptional({ type: [String], maxItems: 30, description: 'Absolute media URLs' })
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: MAX_PORTFOLIO_IMAGES,
+    description: 'Absolute media URLs',
+  })
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(30)
+  @ArrayMaxSize(MAX_PORTFOLIO_IMAGES, {
+    message: `Add at most ${MAX_PORTFOLIO_IMAGES} portfolio images`,
+  })
   // New entries must be uploads; ones already stored may be resent (kept-media.ts).
   @IsMediaUrlShape({ each: true })
   @MaxLength(2048, { each: true })
   portfolio?: string[];
+
+  /**
+   * The portfolio image shown as the business's profile picture. Must be one
+   * of the portfolio images (checked by the service, which holds the list);
+   * null clears the choice and the first image stands in.
+   */
+  @ApiPropertyOptional({ nullable: true, description: 'One of the portfolio URLs' })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsMediaUrlShape()
+  @MaxLength(2048)
+  profileImage?: string | null;
 }
+
+/*
+ * The inherited links list, with one more rule on a vendor listing: each
+ * platform once (`other` excepted). Applied to the inherited property rather
+ * than redeclared, so the shape rules stay SocialLinksDto's and the planner
+ * listing, which shares that DTO, is unaffected. UpdateVendorDto inherits it.
+ */
+UniqueSocialPlatforms()(CreateVendorDto.prototype, 'socialLinks');
 
 /**
  * Update payload. Every field optional, and deliberately NOT a passthrough of

@@ -408,7 +408,7 @@ function BookingList({
           <Pressable
             key={booking.id}
             accessibilityRole="button"
-            accessibilityLabel={`${booking.clientName ?? booking.clientEmail ?? 'Customer'}, open this booking`}
+            accessibilityLabel={`${booking.clientName ?? 'Customer'}, open this booking`}
             onPress={() => onOpen(booking.id)}
             style={({ pressed }) => [
               {
@@ -423,7 +423,7 @@ function BookingList({
           >
             <View style={{ flex: 1, gap: space(0.5) }}>
               <Body numberOfLines={1}>
-                {booking.clientName ?? booking.clientEmail ?? 'Customer'}
+                {booking.clientName ?? 'Customer'}
                 {booking.serviceName ? ` · ${booking.serviceName}` : ''}
               </Body>
               <Caption tone="faint" numberOfLines={1}>

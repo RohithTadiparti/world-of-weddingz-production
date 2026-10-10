@@ -28,6 +28,7 @@ import { useBusinesses } from '@/store/business';
 import { useActiveListing } from '@/lib/vendor-listing';
 import { useCompletion } from '@/components/business/completion';
 import { BusinessWizard, WizardNavigation } from '@/components/business/wizard';
+import { catalogStep } from '@/shared/catalog-rules';
 import { space } from '@/theme';
 
 /**
@@ -50,8 +51,8 @@ export default function BusinessServices() {
   const { activeId } = useBusinesses();
   const { listing } = useActiveListing(activeId);
   const { data: completion } = useCompletion(activeId);
-  const catalogItem = completion?.items.find((item) => /catalog|service/.test(item.key));
-  const catalogComplete = Boolean(catalogItem?.complete);
+  const catalog = catalogStep(completion);
+  const catalogComplete = catalog.ready;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [adding, setAdding] = useState(false);
@@ -144,7 +145,17 @@ export default function BusinessServices() {
           onNotice={setNotice}
         />
       ))}
-      {!catalogComplete ? <Alert tone="caution">{catalogItem?.missing ?? 'Add and price a service before reviewing your listing.'}</Alert> : null}
+      {/*
+        Every category the business lists needs a service, and every service a
+        live price, before Review & Submit opens: one precise line per gap.
+      */}
+      {!catalogComplete ? (
+        <Alert tone="caution">
+          {catalog.issues.length > 0
+            ? `Still needed before Review & Submit:\n${catalog.issues.map((i) => `• ${i}`).join('\n')}`
+            : 'Add and price a service before reviewing your listing.'}
+        </Alert>
+      ) : null}
       <WizardNavigation back={() => router.back()} next={() => router.push('/business-review')} nextLabel="Review & submit" disabled={!catalogComplete} />
     </Screen>
   );

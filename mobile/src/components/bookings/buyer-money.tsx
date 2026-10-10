@@ -9,6 +9,7 @@ import { money, shortDate } from '@/lib/format';
 import { MILESTONE_LABEL, Permission, can } from '@/shared/permissions';
 import { selectPermissions, useAuth } from '@/store/auth';
 import { BUYER_PAYMENT_STATUS_LABEL } from '@/app/escrow';
+import { deliveryDecision } from '@/shared/booking-rules';
 import { Badge } from '@/components/chrome';
 import { Alert as UiAlert, Body, Button, Caption, Field, Card } from '@/components/ui';
 import { rgb, space, useTheme, radius } from '@/theme';
@@ -127,6 +128,9 @@ function invalidateMoney(qc: ReturnType<typeof useQueryClient>, bookingId: strin
     'incoming-bookings',
     'wedding-dashboard',
     'event-workspace',
+    // The advance is what opens the booking's chat for both sides (row 18).
+    'booking-chat-state',
+    'booking-chat',
   ]) {
     void qc.invalidateQueries({ queryKey: [key] });
   }
@@ -152,6 +156,14 @@ export function BuyerMoneyPanel({ booking, isDedicatedScreen }: { booking: Buyer
   const [disputeBody, setDisputeBody] = useState('');
   const payKeyRef = useRef<string | null>(null);
   const terminal = booking.status === 'cancelled' || booking.status === 'disputed';
+  // Accept the delivery or raise an issue: one disables the other, and an open
+  // issue blocks acceptance until it is resolved (row 21).
+  const [accepting, setAccepting] = useState(false);
+  const decision = deliveryDecision(booking, {
+    canRaise: canRaiseCase,
+    disputing: showDispute,
+    accepting,
+  });
 
   const methodsQuery = useQuery({
     queryKey: ['payment-methods'],
@@ -541,7 +553,7 @@ export function BuyerMoneyPanel({ booking, isDedicatedScreen }: { booking: Buyer
         </View>
       </Card>
 
-      {!terminal && booking.deliveredAt && !booking.deliveryAcceptedAt ? (
+      {decision.showAccept ? (
         <Card style={{ gap: space(1.5) }}>
           {booking.deliveryNotes ? (
             <Caption>
@@ -552,23 +564,33 @@ export function BuyerMoneyPanel({ booking, isDedicatedScreen }: { booking: Buyer
           <Button
             label="Accept delivery"
             small
-            busy={busy}
-            disabled={busy}
-            onPress={() =>
+            busy={busy && accepting}
+            disabled={busy || Boolean(decision.acceptDisabledReason)}
+            onPress={() => {
+              setAccepting(true);
               Alert.alert(
                 'Accept delivery',
                 'Confirm the work was delivered as agreed. Held escrow can then move to the provider.',
                 [
-                  { text: 'Not yet', style: 'cancel' },
+                  { text: 'Not yet', style: 'cancel', onPress: () => setAccepting(false) },
                   {
                     text: 'Accept delivery',
                     onPress: () =>
-                      run(() => api.put(`/bookings/${booking.id}/confirm-delivery`, {})),
+                      run(async () => {
+                        try {
+                          return await api.put(`/bookings/${booking.id}/confirm-delivery`, {});
+                        } finally {
+                          setAccepting(false);
+                        }
+                      }),
                   },
                 ],
-              )
-            }
+              );
+            }}
           />
+          {decision.acceptDisabledReason ? (
+            <Caption style={{ color: rgb(theme.cautionFg) }}>{decision.acceptDisabledReason}</Caption>
+          ) : null}
           <Caption tone="muted">
             Confirming delivery lets held escrow move to the provider.
           </Caption>
@@ -630,19 +652,24 @@ export function BuyerMoneyPanel({ booking, isDedicatedScreen }: { booking: Buyer
         </Card>
       ) : null}
 
-      {!terminal && canRaiseCase && DISPUTABLE.has(booking.status) ? (
+      {!terminal && decision.showRaise && DISPUTABLE.has(booking.status) ? (
         <Card style={{ gap: space(1.5) }}>
           {!showDispute ? (
-            <Button
-              label="Raise an Issue"
-              variant="outline"
-              small
-              disabled={busy}
-              onPress={() => {
-                setError('');
-                setShowDispute(true);
-              }}
-            />
+            <>
+              <Button
+                label="Raise an Issue"
+                variant="outline"
+                small
+                disabled={busy || Boolean(decision.raiseDisabledReason)}
+                onPress={() => {
+                  setError('');
+                  setShowDispute(true);
+                }}
+              />
+              {decision.raiseDisabledReason ? (
+                <Caption tone="muted">{decision.raiseDisabledReason}</Caption>
+              ) : null}
+            </>
           ) : (
             <View style={{ gap: space(2) }}>
               <Caption tone="muted">

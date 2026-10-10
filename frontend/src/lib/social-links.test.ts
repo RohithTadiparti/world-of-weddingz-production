@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   SocialLink,
+  availableSocialPlatforms,
+  duplicateSocialPlatforms,
   httpsHost,
   instagramProfileUrl,
   listingInstagramUrl,
@@ -180,5 +182,44 @@ describe('listingInstagramUrl', () => {
     ).toBeNull();
     expect(listingInstagramUrl({ socialLinks: [], instagramUrl: null })).toBeNull();
     expect(listingInstagramUrl(null)).toBeNull();
+  });
+});
+
+describe('one link of each type', () => {
+  const links: SocialLink[] = [
+    { platform: 'website', url: 'https://lotus.in' },
+    { platform: 'instagram', url: '' },
+    { platform: 'other', url: 'https://behance.net/lotus', label: 'Behance' },
+  ];
+
+  it('leaves a type out of "Add a link" once it is on the list', () => {
+    const offered = availableSocialPlatforms(links).map((p) => p.value);
+    expect(offered).not.toContain('website');
+    expect(offered).not.toContain('instagram');
+    expect(offered).toEqual(expect.arrayContaining(['facebook', 'youtube', 'whatsapp', 'other']));
+  });
+
+  it("keeps a row's own type selectable on that row", () => {
+    const forInstagramRow = availableSocialPlatforms(links, 1).map((p) => p.value);
+    expect(forInstagramRow).toContain('instagram');
+    expect(forInstagramRow).not.toContain('website');
+  });
+
+  it('offers a type again once its link is removed', () => {
+    const offered = availableSocialPlatforms(links.filter((l) => l.platform !== 'website'));
+    expect(offered.map((p) => p.value)).toContain('website');
+  });
+
+  it('names a repeated type, never "other"', () => {
+    expect(duplicateSocialPlatforms(links)).toEqual([]);
+    expect(
+      duplicateSocialPlatforms([...links, { platform: 'website', url: 'https://lotus2.in' }]),
+    ).toEqual(['website']);
+    const twice = [...links, { platform: 'website' as const, url: 'https://lotus2.in' }];
+    expect(socialLinkErrors(twice, { uniquePlatforms: true }).list).toBe(
+      'Add each type of link once: Website is listed more than once',
+    );
+    // The planner listing does not hold links to one per type.
+    expect(socialLinkErrors(twice).list).toBeNull();
   });
 });

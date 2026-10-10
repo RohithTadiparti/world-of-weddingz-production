@@ -95,11 +95,34 @@ export default function Notifications() {
     queryKey: ['notifications'],
     queryFn: async () => (await api.get('/notifications')).data as Notification[],
     retry: false,
+    // Live while open, so a booking in progress or a verification step shows
+    // up without pulling to refresh (row 22).
+    refetchInterval: 20_000,
+    refetchOnMount: 'always',
   });
 
+  /*
+   * Opening one reads everything about the same thing (row 22): the server
+   * marks every notification for that target, and the badge drops at once
+   * rather than on the next poll.
+   */
   const markRead = useMutation({
-    mutationFn: (id: string) => api.put(`/notifications/${id}/read`, {}),
-    onSuccess: () => {
+    mutationFn: async (item: Notification) =>
+      (item.targetId
+        ? await api.put(`/notifications/targets/${item.targetId}/read`, {})
+        : await api.put(`/notifications/${item.id}/read`, {})
+      ).data as { unread?: number },
+    onMutate: (item) => {
+      qc.setQueryData<Notification[]>(['notifications'], (rows) =>
+        rows?.map((n) =>
+          n.id === item.id || (item.targetId && n.targetId === item.targetId) ? { ...n, isRead: true } : n,
+        ),
+      );
+    },
+    onSuccess: (result) => {
+      if (typeof result?.unread === 'number') qc.setQueryData(['unread-count'], { unread: result.unread });
+    },
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: ['notifications'] });
       void qc.invalidateQueries({ queryKey: ['unread-count'] });
     },
@@ -108,6 +131,7 @@ export default function Notifications() {
   const markAll = useMutation({
     mutationFn: () => api.put('/notifications/read-all', {}),
     onSuccess: () => {
+      qc.setQueryData(['unread-count'], { unread: 0 });
       void qc.invalidateQueries({ queryKey: ['notifications'] });
       void qc.invalidateQueries({ queryKey: ['unread-count'] });
     },
@@ -231,7 +255,8 @@ export default function Notifications() {
               <Pressable
                 accessibilityRole="button"
                 onPress={() => {
-                  if (!item.isRead) markRead.mutate(item.id);
+                  // Older unread updates about the same thing are read too.
+                  if (!item.isRead || item.targetId) markRead.mutate(item);
                   if (route) router.push(route);
                 }}
                 style={({ pressed }) => [

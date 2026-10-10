@@ -2,27 +2,20 @@ import { View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
 import { api } from '@/lib/api';
-import { dateTime, humanise, rupees, shortDate } from '@/lib/format';
+import { dateTime, humanise, shortDate } from '@/lib/format';
 import { CORRECTION_FIELD_LABELS } from '@/shared/permissions';
 import { DetailGrid, DetailRow, Divider } from '@/components/chrome';
-import { DocumentList, MediaStrip } from '@/components/uploader';
+import { DocumentList } from '@/components/uploader';
+import {
+  CatalogSummaryList,
+  PortfolioGallery,
+  SubmittedSocialLinks,
+} from '@/components/business/catalog-summary';
+import type { SummaryService } from '@/shared/catalog-rules';
+import type { SocialLinks } from '@/components/social-links';
 import { useCategoryNames } from '@/components/business/category-picker';
 import { Body, Caption, Card, Loading, SectionTitle } from '@/components/ui';
 import { radius, rgb, space, useTheme } from '@/theme';
-
-/** A vendor service with its priced offerings, for the officer's review. */
-interface ServiceSummary {
-  id: string;
-  active: boolean;
-  definition?: { name?: string } | null;
-  category?: { name?: string } | null;
-  offerings?: {
-    id: string;
-    name: string;
-    price: string | number | null;
-    pricingModel?: string;
-  }[];
-}
 
 /**
  * What is actually being verified.
@@ -81,7 +74,7 @@ export function SubjectDetails({
   const documents = Array.isArray(subject?.complianceDocuments)
     ? (subject!.complianceDocuments as string[])
     : [];
-  const services = Array.isArray(data?.services) ? (data!.services as ServiceSummary[]) : [];
+  const services = Array.isArray(data?.services) ? (data!.services as SummaryService[]) : [];
   const correctionFields = Array.isArray(subject?.correctionFields)
     ? (subject!.correctionFields as string[])
     : [];
@@ -137,12 +130,24 @@ export function SubjectDetails({
         </>
       ) : null}
 
-      {/* Portfolio images the business submitted. */}
+      {/*
+        Social media links the business submitted. They were always in the
+        response and never drawn. Each platform and address once.
+      */}
+      {subject && applicantType !== 'agent' ? (
+        <>
+          <Divider />
+          <Caption tone="faint">Social media links</Caption>
+          <SubmittedSocialLinks listing={subject as SocialLinks} />
+        </>
+      ) : null}
+
+      {/* Portfolio images the business submitted, each opening full screen. */}
       {portfolio.length > 0 && (
         <>
           <Divider />
           <Caption tone="faint">Portfolio ({portfolio.length})</Caption>
-          <MediaStrip urls={portfolio} />
+          <PortfolioGallery urls={portfolio} />
         </>
       )}
 
@@ -155,62 +160,15 @@ export function SubjectDetails({
         </>
       )}
 
-      {/* Catalog & services with their priced offerings. */}
+      {/*
+        Catalog & services in full: category name, service name, and for every
+        price its name, details and description.
+      */}
       {services.length > 0 && (
         <>
           <Divider />
           <Caption tone="faint">Catalog & services ({services.length})</Caption>
-          {services.map((service) => (
-            <View
-              key={service.id}
-              style={{
-                backgroundColor: rgb(theme.surfaceSunken),
-                borderRadius: radius.sm,
-                padding: space(2.5),
-                gap: space(1),
-              }}
-            >
-              <Body>
-                {service.definition?.name ?? service.category?.name ?? 'Service'}
-                {!service.active ? ' · inactive' : ''}
-              </Body>
-              {service.category?.name && service.definition?.name ? (
-                <Caption tone="faint">{service.category.name}</Caption>
-              ) : null}
-              {service.offerings && service.offerings.length > 0 ? (
-                service.offerings.map((offering) => {
-                  // A custom-quote or price-on-request offering carries no
-                  // amount and was printing as ₹0. Show the model instead, and
-                  // only format a real number.
-                  const hasPrice =
-                    offering.price !== null &&
-                    offering.price !== undefined &&
-                    Number(offering.price) > 0;
-                  return (
-                    <View
-                      key={offering.id}
-                      style={{
-                        flexDirection: 'row',
-                        justifyContent: 'space-between',
-                        gap: space(3),
-                      }}
-                    >
-                      <Caption style={{ flex: 1 }}>{offering.name}</Caption>
-                      <Caption style={{ fontVariant: ['tabular-nums'] }}>
-                        {hasPrice
-                          ? rupees(offering.price as string | number)
-                          : offering.pricingModel === 'custom_quote'
-                            ? 'Custom quote'
-                            : 'Price on request'}
-                      </Caption>
-                    </View>
-                  );
-                })
-              ) : (
-                <Caption tone="faint">No offerings priced yet.</Caption>
-              )}
-            </View>
-          ))}
+          <CatalogSummaryList services={services} />
         </>
       )}
 

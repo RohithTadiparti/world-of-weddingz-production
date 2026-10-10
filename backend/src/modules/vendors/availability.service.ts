@@ -15,6 +15,7 @@ import { BlockSlotDto, CreateSlotDto, UpdateSlotDto } from './dto/availability.d
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { BusinessStatus, ProviderType, SlotStatus, UserRole } from '../../common/enums';
 import { VendorServicesService } from '../catalog/vendor-services.service';
+import { MIN_SLOT_CAPACITY, defaultSlotCapacity, slotCapacityProblem } from './slot-rules';
 
 export interface AvailabilitySummary {
   from: string;
@@ -180,14 +181,33 @@ export class AvailabilityService {
     // Capacity comes from the service where the vendor named one, because that
     // is where "five catering teams" and "one convention hall" are actually
     // recorded. An explicit capacity on the request still wins.
-    let capacity = dto.capacity ?? 1;
+    //
+    // A vendor window names the service it is for. Without one it shows under
+    // every service the business sells, and the publish form used to fill in
+    // the first service on its own, so a vendor publishing a tasting found it
+    // listed as a wedding-day window. The client now has no default; this is
+    // the rule behind it. A business with nothing on sale (one that predates
+    // the catalog) may still publish a general window.
+    let capacity = dto.capacity ?? MIN_SLOT_CAPACITY;
     if (dto.vendorServiceId) {
       const service = await this.services.findService(dto.vendorServiceId);
       if (!service || service.vendorId !== providerId) {
         throw new BadRequestException('That service is not on this business');
       }
-      capacity = dto.capacity ?? service.concurrentCapacity;
+      if (!service.active) {
+        throw new BadRequestException(
+          'That service is switched off. Switch it on before publishing time for it.',
+        );
+      }
+      capacity = dto.capacity ?? defaultSlotCapacity(service.concurrentCapacity);
+    } else if (
+      providerType === ProviderType.VENDOR &&
+      (await this.services.countActiveServices(providerId)) > 0
+    ) {
+      throw new BadRequestException('Choose the service this window is for');
     }
+    const capacityProblem = slotCapacityProblem(capacity);
+    if (capacityProblem) throw new BadRequestException(capacityProblem);
 
     await this.assertNoIdenticalWindow(
       providerType,
@@ -258,6 +278,12 @@ export class AvailabilityService {
       );
     }
 
+    // Only a change is checked against the 1-20 range: a window published
+    // before the ceiling existed keeps its capacity until somebody edits it.
+    if (dto.capacity !== undefined && dto.capacity !== slot.capacity) {
+      const capacityProblem = slotCapacityProblem(dto.capacity);
+      if (capacityProblem) throw new BadRequestException(capacityProblem);
+    }
     if (dto.capacity !== undefined && dto.capacity < slot.confirmed) {
       throw new BadRequestException(
         `That slot already holds ${slot.confirmed} confirmed booking(s); capacity cannot go below that`,

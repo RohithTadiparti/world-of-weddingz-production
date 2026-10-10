@@ -26,6 +26,7 @@ import { AdminBookingsService } from './admin-bookings.service';
 import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 import { contactMatches, contactSearchClause } from '../../common/util/contact-search';
 import { likeEscape } from '../../common/util/like';
+import { adminAccountNames } from '../users/display-names';
 
 /**
  * Businesses and staff on the admin console.
@@ -122,10 +123,11 @@ export class AdminConsoleService {
       offeringsByService.set(o.vendorServiceId, list);
     }
 
-    const [bookings, serviceNames] = await Promise.all([
+    const [bookings, serviceNames, ownerNames] = await Promise.all([
       this.adminBookings.attachParties(receivedRaw),
       // `displayName` is only the vendor's override; the catalogue names the rest.
       serviceNamesByIds(this.vendorServices, serviceIds),
+      adminAccountNames({ users: this.users, profiles: this.profiles }, owner ? [owner] : []),
     ]);
 
     return {
@@ -147,7 +149,8 @@ export class AdminConsoleService {
         registrationNumber: vendor.registrationNumber,
         tradingSince: vendor.tradingSince,
         registeredAddress: vendor.registeredAddress,
-        contactPhone: vendor.contactPhone,
+        contactPhone: maskPhone(vendor.contactPhone),
+        contactMasked: true,
         complianceDocuments: vendor.complianceDocuments ?? [],
         // Lifecycle.
         status: vendor.status,
@@ -161,7 +164,20 @@ export class AdminConsoleService {
         createdAt: vendor.createdAt,
         updatedAt: vendor.updatedAt,
       },
-      owner,
+      /*
+       * The owner, named and masked (WOW-05). This page printed the owner's
+       * mobile and the business's contact number whole while every list
+       * masked them; the owner account's audited reveal returns both.
+       */
+      owner: owner
+        ? {
+            ...owner,
+            name: ownerNames.get(owner.id)?.personName ?? maskEmail(owner.email),
+            email: maskEmail(owner.email),
+            phone: maskPhone(owner.phone),
+            contactMasked: true,
+          }
+        : null,
       /** Services & catalogue, each with its priced offerings and category. */
       services: services.map((s) => ({
         id: s.id,
@@ -218,7 +234,14 @@ export class AdminConsoleService {
    */
   async businesses(q: DirectoryQueryDto): Promise<
     PaginatedResult<
-      Vendor & { owner: { email: string | null; isActive: boolean; createdAt: Date } | null }
+      Vendor & {
+        owner: {
+          name: string | null;
+          email: string | null;
+          isActive: boolean;
+          createdAt: Date;
+        } | null;
+      }
     >
   > {
     const qb = this.vendors.createQueryBuilder('v');
@@ -229,7 +252,10 @@ export class AdminConsoleService {
     }
     if (needle) {
       const contact = contactSearchClause({ email: 'owner.email', phone: 'owner.phone' }, needle);
-      qb.andWhere(`(LOWER(v.name) LIKE :needle OR ${contact.clause})`, {
+      // The owner's name is what the row now leads with (WOW-03), so it finds too.
+      const ownerNamed =
+        'EXISTS (SELECT 1 FROM profiles np WHERE np."userId" = v."ownerUserId" AND LOWER(np."displayName") LIKE :needle)';
+      qb.andWhere(`(LOWER(v.name) LIKE :needle OR ${ownerNamed} OR ${contact.clause})`, {
         needle: `%${likeEscape(needle.toLowerCase())}%`,
         ...contact.params,
       });
@@ -257,12 +283,23 @@ export class AdminConsoleService {
         })
       : [];
     const ownerById = new Map(owners.map((o) => [o.id, o]));
+    // The owner's own name leads the row (WOW-03); the business already has
+    // its column, so it is not offered as the owner's name here.
+    const ownerNames = await adminAccountNames(
+      { users: this.users, profiles: this.profiles },
+      owners,
+    );
     const rows = data.map((v) => {
       const owner = ownerById.get(v.ownerUserId);
       return Object.assign(v, {
         contactPhone: maskPhone(v.contactPhone),
         owner: owner
-          ? { email: maskEmail(owner.email), isActive: owner.isActive, createdAt: owner.createdAt }
+          ? {
+              name: ownerNames.get(owner.id)?.personName ?? maskEmail(owner.email),
+              email: maskEmail(owner.email),
+              isActive: owner.isActive,
+              createdAt: owner.createdAt,
+            }
           : null,
       });
     });
@@ -432,6 +469,7 @@ export class AdminConsoleService {
       CaseStatus.RESOLVED,
       CaseStatus.REJECTED,
       CaseStatus.CLOSED,
+      CaseStatus.CANCELLED,
     ];
 
     const tally = (

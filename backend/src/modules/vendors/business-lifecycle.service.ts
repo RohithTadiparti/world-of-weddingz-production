@@ -7,10 +7,13 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
 import { VendorService } from '../catalog/entities/vendor-service.entity';
 import { ServiceOffering } from '../catalog/entities/service-offering.entity';
+import { ServiceCategory } from '../catalog/entities/service-category.entity';
+import { ServiceDefinition } from '../catalog/entities/service-definition.entity';
+import { catalogIssues } from '../catalog/catalog-completeness';
 import { VerificationService } from '../verification/verification.service';
 import {
   BUSINESS_RULES,
@@ -33,6 +36,25 @@ export interface CompletionItem {
   complete: boolean;
   /** What is missing, when it is. Shown to the vendor verbatim. */
   missing: string | null;
+  /**
+   * The individual reasons behind `missing` when there are several: the
+   * catalog names each category and service that falls short ("Bridal Wear:
+   * pricing is missing for Lehenga"). Absent or empty when complete.
+   */
+  issues?: string[];
+}
+
+/**
+ * "Finish these first: ...", naming every reason rather than only the step.
+ *
+ * The same sentences the checklist shows, so the refusal from the submit route
+ * and the screen the vendor is looking at say exactly the same thing.
+ */
+export function blockingMessage(items: CompletionItem[]): string {
+  const parts = items
+    .filter((i) => !i.complete)
+    .map((i) => (i.issues && i.issues.length > 0 ? `${i.label} (${i.issues.join('; ')})` : i.label));
+  return `Finish these first: ${parts.join(', ')}.`;
 }
 
 /** JSON with object keys sorted, so equal values print the same. */
@@ -81,6 +103,9 @@ export class BusinessLifecycleService {
     private readonly notifications: NotificationsService,
     // Search results are cached; a status change decides who appears in them.
     private readonly redis: RedisService,
+    // Read-only: category and service names for the catalog checklist.
+    @InjectRepository(ServiceCategory) private readonly categories: Repository<ServiceCategory>,
+    @InjectRepository(ServiceDefinition) private readonly definitions: Repository<ServiceDefinition>,
   ) {}
 
   private async owned(actor: AuthUser, businessId: string): Promise<Vendor> {
@@ -101,17 +126,12 @@ export class BusinessLifecycleService {
    */
   async completion(actor: AuthUser, businessId: string) {
     const business = await this.owned(actor, businessId);
-    const services = await this.services.find({ where: { vendorId: businessId } });
-    const offerings = services.length
-      ? await this.offerings.find({ where: { vendorServiceId: services[0].id } })
-      : [];
+    const catalogProblems = await this.catalogProblems(business);
 
-    // Mandatory: business name, category, PAN and a contact mobile. GST,
-    // registration number and trading-since are optional (EZ1-I21) — plenty of
-    // legitimate small businesses have no GST registration.
-    // Business name, category, city, registered address, PAN and a contact
-    // mobile are all mandatory to submit (EZ1-I152). GST, registration number
-    // and trading-since stay optional.
+    // Business name, category, city, registered address, PAN, a contact mobile
+    // and the trading-since date are all mandatory to submit (EZ1-I152). GST
+    // and the registration number stay optional — plenty of legitimate small
+    // businesses have no GST registration (EZ1-I21).
     const missingIdentity: string[] = [];
     if (!business.name) missingIdentity.push('business name');
     if (!business.categories?.length) missingIdentity.push('category');
@@ -119,10 +139,9 @@ export class BusinessLifecycleService {
     if (!business.registeredAddress) missingIdentity.push('registered address');
     if (!business.panNumber) missingIdentity.push('PAN number');
     if (!business.contactPhone) missingIdentity.push('contact mobile number');
-
-    const priced = services.some((svc) =>
-      offerings.some((o) => o.vendorServiceId === svc.id && o.active),
-    );
+    // Trading since is required as well: it is how a couple judges experience,
+    // and the form marks it required.
+    if (!business.tradingSince) missingIdentity.push('trading since date');
 
     const items: CompletionItem[] = [
       {
@@ -134,13 +153,13 @@ export class BusinessLifecycleService {
       {
         key: 'catalog',
         label: 'Catalog services',
-        complete: services.length > 0 && priced,
-        missing:
-          services.length === 0
-            ? 'Add at least one service'
-            : !priced
-              ? 'One of your services needs a live price'
-              : null,
+        // Every selected category needs a service on sale, and every service on
+        // sale needs a live price. It used to be "some service has a price", and
+        // only the first service's prices were ever read, so a listing with
+        // three categories and one priced service went to verification.
+        complete: catalogProblems.length === 0,
+        missing: catalogProblems.length ? catalogProblems.join('; ') : null,
+        issues: catalogProblems,
       },
       {
         key: 'documents',
@@ -176,6 +195,48 @@ export class BusinessLifecycleService {
   }
 
   /**
+   * What stops the catalog being complete, one precise sentence each.
+   *
+   * Read fresh on every call, like the rest of the checklist: switching a price
+   * off takes the tick away again.
+   */
+  private async catalogProblems(business: Vendor): Promise<string[]> {
+    const services = await this.services.find({ where: { vendorId: business.id } });
+    const [offerings, definitions] = services.length
+      ? await Promise.all([
+          this.offerings.find({ where: { vendorServiceId: In(services.map((s) => s.id)) } }),
+          this.definitions.find({ where: { id: In(services.map((s) => s.definitionId)) } }),
+        ])
+      : [[] as ServiceOffering[], [] as ServiceDefinition[]];
+    const definitionById = new Map(definitions.map((d) => [d.id, d]));
+
+    const selected = business.categories ?? [];
+    const categoryIds = [...new Set(definitions.map((d) => d.categoryId))];
+    const where = [
+      ...(selected.length ? [{ slug: In(selected) }] : []),
+      ...(categoryIds.length ? [{ id: In(categoryIds) }] : []),
+    ];
+    const categories = where.length ? await this.categories.find({ where }) : [];
+    const categoryById = new Map(categories.map((c) => [c.id, c]));
+    const categoryBySlug = new Map(categories.map((c) => [c.slug, c]));
+
+    return catalogIssues(
+      selected.map((slug) => ({ slug, name: categoryBySlug.get(slug)?.name ?? null })),
+      services.map((service) => {
+        const definition = definitionById.get(service.definitionId);
+        const category = definition ? categoryById.get(definition.categoryId) : undefined;
+        return {
+          name: service.displayName || definition?.name || 'Service',
+          categorySlug: category?.slug ?? null,
+          categoryName: category?.name ?? null,
+          active: service.active,
+          hasActivePricing: offerings.some((o) => o.vendorServiceId === service.id && o.active),
+        };
+      }),
+    );
+  }
+
+  /**
    * The vendor looks the whole thing over before anybody else does.
    *
    * Deliberately still editable at this point: the purpose of a review step is
@@ -187,9 +248,7 @@ export class BusinessLifecycleService {
     const state = await this.completion(actor, businessId);
 
     if (!state.canSubmit && state.blocking.length > 0) {
-      throw new BadRequestException(
-        `Finish these first: ${state.blocking.join(', ')}.`,
-      );
+      throw new BadRequestException(blockingMessage(state.items));
     }
     // The chain goes DRAFT → READY_FOR_REVIEW → FIRST_REVIEW, and this walks it
     // rather than jumping. READY_FOR_REVIEW is not decoration: it is the state
@@ -216,7 +275,16 @@ export class BusinessLifecycleService {
     const state = await this.completion(actor, businessId);
 
     if (state.blocking.length > 0) {
-      throw new BadRequestException(`Finish these first: ${state.blocking.join(', ')}.`);
+      throw new BadRequestException(blockingMessage(state.items));
+    }
+    // A listing sent back for changes is resubmitted straight from the edit
+    // screen. The vendor has been through the whole listing to fix it, so the
+    // first-review step is walked here rather than refused: refusing left the
+    // listing reading "sent back for changes" after the vendor had pressed
+    // submit, with nothing on screen to say a second step was wanted.
+    const wasSentBack = business.status === BusinessStatus.REVERIFICATION_REQUIRED;
+    if (wasSentBack) {
+      await this.move(business, BusinessStatus.FIRST_REVIEW, actor);
     }
     if (!canTransition(business.status, BusinessStatus.PENDING_VERIFICATION)) {
       throw new BadRequestException(
@@ -231,13 +299,27 @@ export class BusinessLifecycleService {
 
     // The verification request is what starts the 72-hour clock. Raised per
     // business, so a vendor's second listing gets its own.
-    const request = await this.verification.raise(
+    let request = await this.verification.raise(
       ApplicantType.VENDOR,
       business.ownerUserId,
       business.id,
       business.name,
     );
+    // A request still parked from the send-back is a resubmission: it goes back
+    // to the administrators for a fresh allocation rather than to the officer
+    // who visited last time (and their findings are cleared).
+    const resubmitted = this.verification.isAwaitingResubmission(request);
+    if (resubmitted) {
+      request = await this.verification.markResubmitted(request.id, actor, business.name);
+    }
     await this.verification.startSla(request.id);
+
+    // Tracking for the vendor: their own action, confirmed in the feed.
+    await this.notifications.create(business.ownerUserId, NotificationType.VERIFICATION_PROGRESS, {
+      businessId: business.id,
+      requestId: request.id,
+      stage: resubmitted || wasSentBack ? 'resubmitted' : 'submitted',
+    });
 
     return { businessId, status: business.status, verificationRequestId: request.id };
   }
@@ -335,6 +417,10 @@ export class BusinessLifecycleService {
     // The correction key for categories is still 'category'; it opens the list
     // that replaced it (EZ1-I263).
     if (allow.has('category')) allow.add('categories');
+    // The profile picture is one of the portfolio images, and each document's
+    // type belongs to the document: they open with those fields.
+    if (allow.has('portfolio')) allow.add('profileImage');
+    if (allow.has('complianceDocuments')) allow.add('complianceDocumentTypes');
     const current = business as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(dto)) {
       if (value === undefined || allow.has(key)) continue;
@@ -377,17 +463,21 @@ export class BusinessLifecycleService {
    */
   async canDecide(
     businessId: string,
-    outcome: 'approve' | 'reject' | 'revisit',
+    outcome: 'approve' | 'reject' | 'revisit' | 'correct',
   ): Promise<{ ok: boolean; reason: string | null }> {
     const business = await this.vendors.findOne({ where: { id: businessId } });
     if (!business) return { ok: true, reason: null };
 
+    // Another review is another officer's visit to the same, still-locked
+    // listing; a correction hands the listing back to the vendor to edit.
     const target =
       outcome === 'approve'
         ? BusinessStatus.VERIFIED
         : outcome === 'reject'
           ? BusinessStatus.REJECTED
-          : BusinessStatus.REVERIFICATION_REQUIRED;
+          : outcome === 'revisit'
+            ? BusinessStatus.PENDING_VERIFICATION
+            : BusinessStatus.REVERIFICATION_REQUIRED;
 
     if (business.status === target) return { ok: true, reason: null };
     if (canTransition(business.status, target)) return { ok: true, reason: null };
@@ -418,6 +508,64 @@ export class BusinessLifecycleService {
     await this.notifications.create(business.ownerUserId, NotificationType.VERIFICATION_DECIDED, {
       businessId,
       status: BusinessStatus.LIVE,
+    });
+    return business;
+  }
+
+  /**
+   * An administrator asked for another review (ADDITIONAL_REVIEW).
+   *
+   * That is a second, independent visit to the listing exactly as submitted,
+   * so it stays locked and returns to "awaiting verification". It used to be
+   * sent back to the vendor with edit access and the administrator's note as
+   * the reason, which both exposed an internal remark and made the revisit
+   * impossible to approve until the vendor happened to resubmit.
+   */
+  async awaitAnotherReview(businessId: string, actor?: AuthUser) {
+    const business = await this.vendors.findOne({ where: { id: businessId } });
+    if (!business) return null;
+    if (business.status === BusinessStatus.VERIFICATION_IN_PROGRESS) {
+      await this.move(business, BusinessStatus.PENDING_VERIFICATION, actor);
+    }
+    return business;
+  }
+
+  /**
+   * Reopens a refused listing for correction, on an administrator's approval of
+   * a support case about it (row 27).
+   *
+   * Refusal is terminal for every other path, which is why this is not in the
+   * transition table: only an administrator approving an officer's
+   * "unlock business details" resolution on a support case reaches it. The
+   * listing returns to REVERIFICATION_REQUIRED with full edit access, is
+   * un-archived, and the vendor is told with the case note as the reason.
+   */
+  async reopenRejected(businessId: string, reason: string, actor: AuthUser) {
+    const business = await this.vendors.findOne({ where: { id: businessId } });
+    if (!business || business.status !== BusinessStatus.REJECTED) return null;
+
+    const from = business.status;
+    business.status = BusinessStatus.REVERIFICATION_REQUIRED;
+    business.isApproved = BUSINESS_RULES[BusinessStatus.REVERIFICATION_REQUIRED].visible;
+    business.archivedAt = null;
+    business.decisionReason = reason;
+    business.revisionCount += 1;
+    business.correctionFields = null;
+    business.correctionSnapshot = null;
+    await this.vendors.save(business);
+    await this.audit.record({
+      action: AuditAction.VENDOR_APPROVED,
+      actor,
+      resourceType: 'vendor',
+      resourceId: business.id,
+      metadata: { from, to: business.status, reason, via: 'support_case_unlock' },
+    });
+
+    await this.notifications.create(business.ownerUserId, NotificationType.VERIFICATION_DECIDED, {
+      businessId,
+      status: BusinessStatus.REVERIFICATION_REQUIRED,
+      reason,
+      round: business.revisionCount,
     });
     return business;
   }

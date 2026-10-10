@@ -43,6 +43,20 @@ export class NotificationsController {
     return this.notifications.markAllRead(userId);
   }
 
+  @ApiOperation({
+    summary: 'Mark every notification about one thing read',
+    description:
+      'Opening a booking, case or application from a notification reads every update about it, ' +
+      'so the badge falls by all of them and not just the newest line. Only the caller\'s own rows.',
+  })
+  @Put('targets/:targetId/read')
+  markTargetRead(
+    @CurrentUser('userId') userId: string,
+    @Param('targetId', ParseUUIDPipe) targetId: string,
+  ) {
+    return this.notifications.markTargetRead(userId, targetId);
+  }
+
   @Put(':id/read')
   markRead(@CurrentUser('userId') userId: string, @Param('id', ParseUUIDPipe) id: string) {
     return this.notifications.markRead(userId, id);

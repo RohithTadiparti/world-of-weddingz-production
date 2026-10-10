@@ -10,7 +10,8 @@ import { Permission, can } from '../lib/permissions';
 import { SELLER_STATUS_LABEL } from '../lib/labels';
 import { usePermissions } from '../store/auth';
 import { FieldSpec, formatAnswer } from './DynamicForm';
-import { canAcceptCustomerRequest, canMarkCompleted, canMarkDelivered } from '../lib/booking-progress';
+import { sellerActions } from '../lib/booking-rules';
+import RaiseIssueForm from './RaiseIssueForm';
 
 interface IncomingBooking {
   id: string;
@@ -38,42 +39,6 @@ interface IncomingBooking {
  */
 
 
-/**
- * Actions the seller side may take, by current status.
- *
- * A quote-only request is priced by the provider. A request with a selected
- * fixed package price may instead be accepted at the exact total the customer
- * was shown.
- */
-const ACTIONS: Record<string, { label: string; path: string }[]> = {
-  requested: [{ label: 'Decline', path: 'cancel' }],
-  // Takes the offer back and leaves the request with the provider to re-price.
-  // It used to cancel the whole booking (EZ1-I266).
-  quotation_sent: [{ label: 'Withdraw quotation', path: 'quotations/withdraw' }],
-  quotation_accepted: [
-    { label: 'Accept the job', path: 'confirm' },
-    { label: 'Decline', path: 'cancel' },
-  ],
-  payment_pending: [{ label: 'Cancel', path: 'cancel' }],
-  // Historic: nothing enters `pending` any more, and the server moves it only to
-  // confirmed or cancelled, which "Accept the job" never produced.
-  pending: [{ label: 'Cancel', path: 'cancel' }],
-  // From confirmed the server allows starting or cancelling; delivery comes
-  // after the work has started, so "Mark delivered" here always failed.
-  confirmed: [
-    { label: 'Start work', path: 'start' },
-    { label: 'Cancel', path: 'cancel' },
-  ],
-  in_progress: [{ label: 'Mark delivered', path: 'complete' }],
-  // Once the balance is in and the customer has accepted the delivery (EZ1-I266).
-  completed_pending_final_payment: [{ label: 'Mark as completed', path: 'mark-completed' }],
-  completed: [],
-  disputed: [],
-  cancelled: [],
-};
-
-/** A provider can quote while the job is still unpriced or being re-priced. */
-const QUOTABLE = ['requested', 'quotation_sent'];
 
 /**
  * Everything coming in to a vendor or a planner.
@@ -86,6 +51,7 @@ export default function ProviderBookings({ canQuote }: { canQuote: boolean }) {
   const qc = useQueryClient();
   const [error, setError] = useState('');
   const [quoting, setQuoting] = useState<string | null>(null);
+  const [raising, setRaising] = useState<string | null>(null);
   // A planner reviews the couple's whole wedding before quoting (EZ1-I162); a
   // vendor quotes on their one service and does not see the brief.
   const isPlanner = can(usePermissions(), Permission.PLANNER_LISTING_MANAGE);
@@ -120,6 +86,7 @@ export default function ProviderBookings({ canQuote }: { canQuote: boolean }) {
         'booking-history',
         'incoming-addons',
         'earnings',
+        'booking-chat-state',
         'availability-slots',
         'availability-summary',
         'availability-calendar',
@@ -165,103 +132,122 @@ export default function ProviderBookings({ canQuote }: { canQuote: boolean }) {
         )}
         renderActions={(b) => (
           <>
-            {(ACTIONS[b.status] ?? []).map((a) => (
-              <button
-                key={a.path}
-                className={a.path === 'confirm' ? 'btn btn-sm' : 'btn-outline btn-sm'}
-                // The server refuses a delivery before the second instalment;
-                // saying so beats a button that fails when pressed (EZ1-I266).
-                disabled={
-                  act.isPending ||
-                  (a.path === 'complete' && !canMarkDelivered(b)) ||
-                  (a.path === 'mark-completed' && !canMarkCompleted(b))
-                }
-                title={
-                  a.path === 'complete' && !canMarkDelivered(b)
-                    ? 'Available once the customer has paid the second instalment'
-                    : a.path === 'mark-completed' && !canMarkCompleted(b)
-                      ? 'Available once the customer has paid the balance and accepted the delivery'
-                      : undefined
-                }
-                onClick={() => {
-                  if (
-                    a.path === 'quotations/withdraw' &&
-                    !window.confirm(
-                      'Withdraw this quotation? The customer can no longer accept it, and the request comes back to you to price again.',
-                    )
-                  ) {
-                    return;
-                  }
-                  /*
-                    Marking a delivery asks what was delivered (EZ1-I228).
-
-                    Optional -- a caterer has nothing to show, a photographer
-                    has a gallery link -- but when it is given it stays on the
-                    booking, which is what the customer reads before confirming
-                    and what an administrator settling a later dispute needs.
-                    Cancelling the prompt cancels the action rather than
-                    marking it delivered with no note.
-                  */
-                  if (a.path === 'complete') {
-                    const notes = window.prompt(
-                      'What was delivered? The customer sees this when they confirm. Leave blank to skip.',
-                    );
-                    if (notes === null) return;
-                    act.mutate({
-                      id: b.id,
-                      path: a.path,
-                      body: notes.trim() ? { notes: notes.trim() } : {},
-                    });
-                    return;
-                  }
-                  act.mutate({ id: b.id, path: a.path });
-                }}
-              >
-                {a.label}
-              </button>
-            ))}
-            {canAcceptCustomerRequest(b) && (
-              <button
-                className="btn btn-sm"
-                disabled={act.isPending}
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      `Accept this request at ${formatMoney(customerRequestedAmount(b), b.currency)}? The customer will then be able to pay the advance.`,
-                    )
-                  ) {
-                    return;
-                  }
-                  act.mutate({ id: b.id, path: 'accept' });
-                }}
-              >
-                Accept
-              </button>
-            )}
-            {canQuote && QUOTABLE.includes(b.status) && (
-              <button
-                className="btn btn-sm"
-                onClick={() => setQuoting(quoting === b.id ? null : b.id)}
-              >
-                {b.quotation ? 'Re-quote' : 'Send quotation'}
-              </button>
-            )}
+            {sellerActions(b, { canQuote }).map((a) => {
+              if (a.key === 'raise_issue') {
+                return (
+                  <button
+                    key={a.key}
+                    className="btn-outline btn-sm text-red-600"
+                    onClick={() => setRaising(raising === b.id ? null : b.id)}
+                  >
+                    {raising === b.id ? 'Never mind' : a.label}
+                  </button>
+                );
+              }
+              if (a.key === 'requote' || a.key === 'send_quote') {
+                return (
+                  <button
+                    key={a.key}
+                    className={a.primary ? 'btn btn-sm' : 'btn-outline btn-sm'}
+                    onClick={() => setQuoting(quoting === b.id ? null : b.id)}
+                  >
+                    {a.label}
+                  </button>
+                );
+              }
+              const disabled = act.isPending || Boolean(a.disabledReason);
+              return (
+                <span key={a.key} className="inline-flex flex-col">
+                  <button
+                    className={a.primary ? 'btn btn-sm' : 'btn-outline btn-sm'}
+                    disabled={disabled}
+                    title={a.disabledReason ?? undefined}
+                    onClick={() => {
+                      if (
+                        a.key === 'withdraw_quote' &&
+                        !window.confirm(
+                          'Withdraw this quotation? The customer can no longer accept it, and the request comes back to you to price again.',
+                        )
+                      ) {
+                        return;
+                      }
+                      if (
+                        a.key === 'accept_request' &&
+                        !window.confirm(
+                          `${a.label}? The customer will then be able to pay the advance.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      /*
+                        Marking a delivery asks what was delivered (EZ1-I228).
+                        Cancelling the prompt cancels the action.
+                      */
+                      if (a.key === 'deliver') {
+                        const notes = window.prompt(
+                          'What was delivered? The customer sees this when they confirm. Leave blank to skip.',
+                        );
+                        if (notes === null) return;
+                        act.mutate({
+                          id: b.id,
+                          path: a.path as string,
+                          body: notes.trim() ? { notes: notes.trim() } : {},
+                        });
+                        return;
+                      }
+                      act.mutate({
+                        id: b.id,
+                        path: a.path as string,
+                        body: a.key === 'accept_request' ? { amount: a.amount } : undefined,
+                      });
+                    }}
+                  >
+                    {a.label}
+                  </button>
+                </span>
+              );
+            })}
+            {/* Why an action is unavailable, said on the card rather than only
+                in a tooltip (row 20). */}
+            {sellerActions(b, { canQuote })
+              .filter((a) => a.disabledReason)
+              .map((a) => (
+                <p key={`${a.key}-why`} className="w-full text-xs text-caution-fg">
+                  {a.label}: {a.disabledReason}
+                </p>
+              ))}
             {canQuote && quoting === b.id && (
               <QuotationForm
                 bookingId={b.id}
                 onDone={() => {
                   setQuoting(null);
-                  qc.invalidateQueries({ queryKey: ['incoming-bookings'] });
-                  qc.invalidateQueries({ queryKey: ['incoming-counts'] });
-                  qc.invalidateQueries({ queryKey: ['booking-summary', b.id] });
+                  for (const key of ['incoming-bookings', 'incoming-counts', 'booking-summary', 'booking-history']) {
+                    qc.invalidateQueries({ queryKey: [key] });
+                  }
+                }}
+              />
+            )}
+            {raising === b.id && (
+              <RaiseIssueForm
+                bookingId={b.id}
+                intro="An officer looks into it. Money held on this booking stays frozen until they decide, and you can keep talking to the customer in the conversation below."
+                onCancel={() => setRaising(null)}
+                onRaise={async (body) => {
+                  try {
+                    await api.post('/verification/cases', body);
+                    setRaising(null);
+                    setError('');
+                    qc.invalidateQueries({ queryKey: ['incoming-bookings'] });
+                    qc.invalidateQueries({ queryKey: ['incoming-counts'] });
+                  } catch (err) {
+                    setError(apiMessage(err, 'That issue could not be raised.'));
+                  }
                 }}
               />
             )}
             {/*
-              Messaging the client, on the job it is about. This is the
-              "Message Client" the report asks for, and it has always been
-              here — inside the booking, where a conversation about a wedding
-              belongs, rather than in a general-purpose Chat menu.
+              Messaging the client, on the job it is about. Opens for both sides
+              once the advance is paid and closes when the job is completed.
             */}
             <div className="w-full">
               <BookingChat bookingId={b.id} />
@@ -271,21 +257,6 @@ export default function ProviderBookings({ canQuote }: { canQuote: boolean }) {
       />
     </div>
   );
-}
-
-function customerRequestedAmount(booking: {
-  estimatedAmount?: string | null;
-  expectedBudget?: string | null;
-}): string | null | undefined {
-  return Number(booking.estimatedAmount ?? 0) > 0
-    ? booking.estimatedAmount
-    : booking.expectedBudget;
-}
-
-function formatMoney(amount: string | null | undefined, currency = 'INR'): string {
-  return `${currency} ${Number(amount ?? 0).toLocaleString('en-IN', {
-    maximumFractionDigits: 2,
-  })}`;
 }
 
 /**
@@ -689,8 +660,16 @@ function VendorAddOns({ bookingId }: { bookingId: string }) {
 
             {a.status === 'requested' && (
               <div className="mt-2 flex flex-wrap items-center gap-2">
+                {/* Accepting agrees the customer's price; with none there is
+                    nothing to agree, so the vendor requotes instead. */}
                 <button
                   className="btn btn-sm"
+                  disabled={!(Number(a.proposedPrice ?? 0) > 0)}
+                  title={
+                    Number(a.proposedPrice ?? 0) > 0
+                      ? undefined
+                      : 'No price was proposed. Requote it with yours.'
+                  }
                   onClick={() => run(() => api.put(`/bookings/addons/${a.id}/accept`, {}))}
                 >
                   Accept
@@ -715,14 +694,16 @@ function VendorAddOns({ bookingId }: { bookingId: string }) {
                     <input
                       className="input w-32"
                       type="number"
-                      min={0}
+                      min={1}
+                      step="0.01"
                       placeholder="Your price"
                       value={price}
                       onChange={(e) => setPrice(e.target.value)}
                     />
                     <button
                       className="btn btn-sm"
-                      disabled={!price}
+                      // Only an amount above zero is a price (row 17).
+                      disabled={!(Number(price) > 0)}
                       onClick={() =>
                         run(() =>
                           api.put(`/bookings/addons/${a.id}/requote`, {

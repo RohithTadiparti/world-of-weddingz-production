@@ -136,6 +136,18 @@ export class AdminController {
     return this.accounts.profileDetail(id);
   }
 
+  @RequirePermissions(Permission.ADMIN_USERS_READ, Permission.ADMIN_CONTACT_REVEAL)
+  @ApiOperation({
+    summary: "One marriage profile's full contact email and mobile number",
+    description:
+      'The profile detail returns both masked. The profile carries its own contact lines — an ' +
+      'agent-created profile may have no account at all — so this is their audited reveal.',
+  })
+  @Get('profiles/:id/contact')
+  revealProfileContact(@CurrentUser() actor: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.accounts.revealProfileContact(actor, id);
+  }
+
   @RequirePermissions(Permission.ADMIN_USERS_READ)
   @ApiOperation({
     summary: 'One vendor business in full (EZ1-I188)',

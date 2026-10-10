@@ -5,6 +5,8 @@ import { Booking } from './entities/booking.entity';
 import { BookingAddon } from './entities/booking-addon.entity';
 import { Payment } from './entities/payment.entity';
 import { Quotation } from './entities/quotation.entity';
+import { QuotationEvent } from './entities/quotation-event.entity';
+import { deriveEvents, negotiationView } from './negotiation';
 import { BookingsService } from './bookings.service';
 import { paymentBreakup, priceSource, quotationStage, summariseQuotations } from './booking-summary';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
@@ -26,6 +28,7 @@ export class BookingSummaryService {
     @InjectRepository(Payment) private readonly payments: Repository<Payment>,
     @InjectRepository(Quotation) private readonly quotations: Repository<Quotation>,
     @InjectRepository(BookingAddon) private readonly addons: Repository<BookingAddon>,
+    @InjectRepository(QuotationEvent) private readonly events: Repository<QuotationEvent>,
     private readonly bookingsService: BookingsService,
   ) {}
 
@@ -34,12 +37,19 @@ export class BookingSummaryService {
     if (!booking) throw new NotFoundException('Booking not found');
     await this.bookingsService.assertEitherSide(actor, booking);
 
-    const [quotations, payments, addons, instalments] = await Promise.all([
+    const [quotations, payments, addons, instalments, events] = await Promise.all([
       this.quotations.find({ where: { bookingId }, order: { createdAt: 'ASC' } }),
       this.payments.find({ where: { bookingId } }),
       this.addons.find({ where: { bookingId } }),
       this.bookingsService.milestones(actor, bookingId),
+      this.events.find({ where: { bookingId }, order: { occurredAt: 'ASC' } }),
     ]);
+    // Every step of the price negotiation (row 16). Rebuilt from the booking
+    // and its quotations for a booking that has no recorded steps.
+    const negotiation = negotiationView(
+      events.length > 0 ? events : deriveEvents(booking, quotations),
+      quotations,
+    );
 
     const accepted = quotations.find((q) => q.id === booking.acceptedQuotationId) ?? null;
     const agreed = addons.filter((a) => a.status === BookingAddonStatus.ACCEPTED);
@@ -91,6 +101,12 @@ export class BookingSummaryService {
         grandTotal: booking.amount,
       },
       quotation: summariseQuotations(quotations),
+      /**
+       * The negotiation as a history: the listed price, the customer's budget,
+       * every quotation and counteroffer with what became of it, and the final
+       * accepted price -- each with who moved, when, and its status.
+       */
+      negotiation,
       /** Every offer, newest first, with what became of each. */
       quotations: quotations
         .map((q, index) => ({

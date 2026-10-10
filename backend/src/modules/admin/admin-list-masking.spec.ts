@@ -59,7 +59,10 @@ const OFFICERS = [
   },
 ];
 
-function consoleService(repos: Record<string, ReturnType<typeof repo>> = {}) {
+function consoleService(
+  repos: Record<string, ReturnType<typeof repo>> = {},
+  adminBookings: unknown = {},
+) {
   const r = (name: string) => repos[name] ?? repo();
   return new AdminConsoleService(
     r('users') as never,
@@ -76,7 +79,7 @@ function consoleService(repos: Record<string, ReturnType<typeof repo>> = {}) {
     r('verifications') as never,
     r('sessions') as never,
     r('availability') as never,
-    {} as never,
+    adminBookings as never,
   );
 }
 
@@ -173,6 +176,76 @@ describe('AdminConsoleService.businesses', () => {
     expect(clause).toContain('LOWER(v.name) LIKE :needle');
     expect(clause).toContain('LOWER(owner.email) LIKE :contactNeedle');
     expect(params).toMatchObject({ needle: '%owner@cat%', contactNeedle: '%owner@cat%' });
+    // A row whose owner has no profile name falls back to the masked email.
+    expect(page.data[0].owner?.name).toBe('o***@caterers.in');
+  });
+
+  it("leads each row with the owner's own name, and searches it (WOW-03)", async () => {
+    const vendor = { id: 'v1', ownerUserId: 'u1', name: 'Sri Caterers', createdAt: new Date(0) };
+    const vendors = repo();
+    vendors.builder.getManyAndCount.mockResolvedValue([[vendor], 1]);
+    const users = repo({
+      find: jest
+        .fn()
+        .mockResolvedValue([
+          { id: 'u1', email: 'owner@caterers.in', isActive: true, createdAt: new Date(0) },
+        ]),
+    });
+    const profiles = repo({
+      find: jest.fn().mockResolvedValue([{ id: 'p1', userId: 'u1', displayName: 'Suresh Reddy' }]),
+    });
+
+    const page = await consoleService({ vendors, users, profiles }).businesses({
+      page: 1,
+      limit: 20,
+      q: 'suresh',
+    } as never);
+
+    expect(page.data[0].owner?.name).toBe('Suresh Reddy');
+    expect(page.data[0].name).toBe('Sri Caterers');
+    const [clause] = vendors.builder.andWhere.mock.calls[0];
+    expect(clause).toContain('LOWER(np."displayName") LIKE :needle');
+  });
+});
+
+describe('AdminConsoleService.businessDetail (WOW-05)', () => {
+  it("masks the owner's email and mobile and the business contact number", async () => {
+    const vendors = repo({
+      findOne: jest.fn().mockResolvedValue({
+        id: 'v1',
+        ownerUserId: 'u1',
+        name: 'Sri Caterers',
+        contactPhone: '+91 98765 11111',
+      }),
+    });
+    const users = repo({
+      findOne: jest.fn().mockResolvedValue({
+        id: 'u1',
+        email: 'owner@caterers.in',
+        phone: '+919876522222',
+        isActive: true,
+      }),
+    });
+    const profiles = repo({
+      find: jest.fn().mockResolvedValue([{ id: 'p1', userId: 'u1', displayName: 'Suresh Reddy' }]),
+    });
+    const service = consoleService({ vendors, users, profiles }, {
+      attachParties: jest.fn(async (rows: unknown[]) => rows),
+    });
+
+    const detail = await service.businessDetail('v1');
+
+    expect(detail.business).toMatchObject({ contactPhone: '********1111', contactMasked: true });
+    expect(detail.owner).toMatchObject({
+      id: 'u1',
+      name: 'Suresh Reddy',
+      email: 'o***@caterers.in',
+      phone: '********2222',
+      contactMasked: true,
+    });
+    const json = JSON.stringify(detail);
+    expect(json).not.toContain('owner@caterers.in');
+    expect(json).not.toContain('98765');
   });
 });
 

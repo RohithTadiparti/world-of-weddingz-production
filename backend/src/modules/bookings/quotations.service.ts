@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Not, Repository } from 'typeorm';
 import { Booking } from './entities/booking.entity';
 import { Quotation } from './entities/quotation.entity';
+import { QuotationEvent, QuotationEventKind } from './entities/quotation-event.entity';
 import { RespondQuotationDto, SendQuotationDto } from './dto/quotation.dto';
 import { BookingsService } from './bookings.service';
 import { AppConfigService } from '../../config/app-config.service';
@@ -27,6 +28,7 @@ export class QuotationsService {
   constructor(
     @InjectRepository(Quotation) private readonly quotations: Repository<Quotation>,
     @InjectRepository(Booking) private readonly bookings: Repository<Booking>,
+    @InjectRepository(QuotationEvent) private readonly events: Repository<QuotationEvent>,
     private readonly bookingsService: BookingsService,
     private readonly cfg: AppConfigService,
     private readonly outbox: OutboxService,
@@ -98,6 +100,8 @@ export class QuotationsService {
       await this.bookings.save(booking);
     }
 
+    await this.recordEvent(this.events, quotation, 'quotation_sent', 'provider', actor.userId);
+
     await this.outbox.record({
       eventType: 'booking.quotation_sent',
       aggregateType: 'booking',
@@ -139,6 +143,13 @@ export class QuotationsService {
       // Customer acceptance settles the price, reserves the date and opens the advance.
       booking.status = BookingStatus.PAYMENT_PENDING;
       const saved = await manager.getRepository(Booking).save(booking);
+      await this.recordEvent(
+        manager.getRepository(QuotationEvent),
+        quotation,
+        'quotation_accepted',
+        'customer',
+        actor.userId,
+      );
 
       await this.outbox.record({
         eventType: 'booking.quotation_accepted',
@@ -166,6 +177,7 @@ export class QuotationsService {
     quotation.respondedAt = new Date();
     quotation.responseNote = dto.note ?? null;
     const saved = await this.quotations.save(quotation);
+    await this.recordEvent(this.events, quotation, 'quotation_rejected', 'customer', actor.userId);
 
     if (booking.status === BookingStatus.QUOTATION_SENT) {
       booking.status = BookingStatus.REQUESTED;
@@ -198,6 +210,9 @@ export class QuotationsService {
       quotation.respondedAt = now;
     }
     await this.quotations.save(live);
+    for (const quotation of live) {
+      await this.recordEvent(this.events, quotation, 'quotation_withdrawn', 'provider', actor.userId);
+    }
 
     booking.status = BookingStatus.REQUESTED;
     const saved = await this.bookings.save(booking);
@@ -247,6 +262,29 @@ export class QuotationsService {
       return null;
     }
     return row;
+  }
+
+  /** One step of the negotiation, written as it happens and never edited. */
+  private async recordEvent(
+    repo: Repository<QuotationEvent>,
+    quotation: Quotation,
+    kind: QuotationEventKind,
+    actorRole: 'customer' | 'provider',
+    actorUserId: string,
+  ): Promise<void> {
+    await repo.save(
+      repo.create({
+        bookingId: quotation.bookingId,
+        kind,
+        amount: quotation.amount,
+        currency: quotation.currency,
+        actorRole,
+        actorUserId,
+        quotationId: quotation.id,
+        note: kind === 'quotation_sent' ? null : (quotation.responseNote ?? null),
+        occurredAt: kind === 'quotation_sent' ? (quotation.createdAt ?? new Date()) : new Date(),
+      }),
+    );
   }
 
   private hasLapsed(quotation: Quotation): boolean {

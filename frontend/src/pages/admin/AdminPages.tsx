@@ -12,6 +12,7 @@ import ReviewModeration from '../../components/ReviewModeration';
 import CatalogAdmin from '../../components/CatalogAdmin';
 import AdminReportsDashboard from '../../components/AdminReportsDashboard';
 import { Loading, EmptyState } from '../../components/ui/Feedback';
+import { accountLabel } from '../../lib/admin-names';
 
 /*
  * The dedicated module pages of the Admin Portal (EZ1-I153).
@@ -140,7 +141,7 @@ function Masthead({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function AdminAgents() {
-  return <RoleDirectory role="agent" title="Agents" noun="agents" detailBase="/admin/agents" description="Agencies acting for families, and where each stands on approval." />;
+  return <RoleDirectory role="agent" title="Agents" noun="agents" detailBase="/admin/agents" businessLabel="Agency Name" description="Agencies acting for families, and where each stands on approval." />;
 }
 
 /**
@@ -152,6 +153,10 @@ export function AdminAgents() {
  */
 interface RoleDirectoryRow {
   id: string;
+  /** The person's name, else their business, else the masked contact (WOW-02/04). */
+  name?: string | null;
+  /** The agency (agent) or planning business (planner) the account runs. */
+  businessName?: string | null;
   /** Masked by the server (ISS-11); the detail page has the audited reveal. */
   email: string | null;
   phone?: string | null;
@@ -167,12 +172,15 @@ function RoleDirectory({
   title,
   noun,
   detailBase,
+  businessLabel,
   description,
 }: {
   role: 'agent' | 'planner';
   title: string;
   noun: string;
   detailBase: string;
+  /** The column beside the name: the agency an agent runs, a planner's business. */
+  businessLabel: string;
   description: string;
 }) {
   const navigate = useNavigate();
@@ -243,7 +251,7 @@ function RoleDirectory({
           <button key={card.key} type="button" onClick={() => change({ status: card.key === 'all' ? undefined : card.key })}
             className={`card text-left transition-shadow hover:shadow-pop focus-visible:ring-2 focus-visible:ring-brand ${filter === card.key ? 'ring-2 ring-brand' : ''}`}>
             <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${card.tone}`}>{card.label}</span>
-            <span className="mt-3 block text-2xl font-semibold tabular-nums text-gray-900">{loadingCounts ? 'â€”' : card.value}</span>
+            <span className="mt-3 block text-2xl font-semibold tabular-nums text-gray-900">{loadingCounts ? '—' : card.value}</span>
           </button>
         ))}
       </div>
@@ -254,22 +262,23 @@ function RoleDirectory({
             <h2 className="section-title">{title} accounts</h2>
             <p className="text-xs text-gray-500">{data?.meta.total ?? 0} {noun} from the backend</p>
           </div>
-          <input className="input w-full sm:w-80" placeholder="Search by email or mobile" value={search}
-            onChange={(event) => change({ q: event.target.value || undefined })} aria-label={`Search ${noun} by email or mobile`} />
+          <input className="input w-full sm:w-80" placeholder="Search by name, email or mobile" value={search}
+            onChange={(event) => change({ q: event.target.value || undefined })} aria-label={`Search ${noun} by name, email or mobile`} />
         </div>
         {isLoading ? <Loading rows={5} /> : isError ? (
           <p className="p-6 text-sm text-critical-fg">The {noun} directory could not be loaded. Try again.</p>
         ) : rows.length === 0 ? (
-          <EmptyState title={`No ${noun} match`}><span>Try a different status, email or mobile number.</span></EmptyState>
+          <EmptyState title={`No ${noun} match`}><span>Try a different status, name, email or mobile number.</span></EmptyState>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500"><tr>
-                <th className="px-4 py-3">Name / Email</th><th className="px-4 py-3">Account Status</th><th className="px-4 py-3">Identity</th><th className="px-4 py-3">Joined Date</th>
+                <th className="px-4 py-3">Name</th><th className="px-4 py-3">{businessLabel}</th><th className="px-4 py-3">Account Status</th><th className="px-4 py-3">Identity</th><th className="px-4 py-3">Joined Date</th>
               </tr></thead>
               <tbody className="divide-y divide-gray-100">
                 {rows.map((account) => <tr key={account.id} onClick={() => navigate(`${detailBase}/${account.id}`)} className="cursor-pointer transition-colors hover:bg-brand-soft/30 focus-within:bg-brand-soft/30">
-                  <td className="px-4 py-3"><Link className="block font-medium text-gray-900 hover:text-brand-strong focus-visible:underline" to={`${detailBase}/${account.id}`}>{account.email ?? account.phone ?? 'No email on file'}</Link><span className="block font-mono text-[11px] text-gray-400">#{account.id.slice(0, 8)}</span></td>
+                  <td className="px-4 py-3"><Link className="block font-medium text-gray-900 hover:text-brand-strong focus-visible:underline" to={`${detailBase}/${account.id}`}>{accountLabel(account)}</Link><span className="block font-mono text-[11px] text-gray-400">#{account.id.slice(0, 8)}</span></td>
+                  <td className="px-4 py-3 text-gray-700">{account.businessName || '—'}</td>
                   <td className="px-4 py-3"><StatusPill active={account.isActive} /></td>
                   <td className="px-4 py-3"><span className={`pill ${account.isVerified ? 'bg-positive-bg text-positive-fg' : 'bg-caution-bg text-caution-fg'}`}>{account.isVerified ? 'Verified' : 'Not verified'}</span></td>
                   <td className="px-4 py-3 text-gray-600">{new Date(account.createdAt).toLocaleDateString()}</td>
@@ -375,7 +384,7 @@ export function AdminVendors() {
           </div>
           <input
             className="input w-full sm:w-80"
-            placeholder="Search by business name, owner email or mobile"
+            placeholder="Search by business or owner name, owner email or mobile"
             value={search}
             onChange={(event) => {
               const next = new URLSearchParams(params);
@@ -394,7 +403,7 @@ export function AdminVendors() {
             <table className="min-w-full text-left text-sm">
               <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="px-4 py-3">Name / Email</th>
+                  <th className="px-4 py-3">Owner Name</th>
                   <th className="px-4 py-3">Business Name</th>
                   <th className="px-4 py-3">Categories</th>
                   <th className="px-4 py-3">Account Status</th>
@@ -409,7 +418,7 @@ export function AdminVendors() {
                     <tr key={business.id} className="hover:bg-brand-soft/30">
                       <td className="px-4 py-3">
                         <Link className="block font-medium text-gray-900 hover:text-brand-strong" to={`/admin/vendors/${business.ownerUserId}`}>
-                          {account?.email ?? 'Unknown account'}
+                          {account ? accountLabel(account) : 'Unknown account'}
                         </Link>
                       </td>
                       <td className="px-4 py-3">
@@ -462,7 +471,13 @@ interface VendorBusinessRow {
   status: string;
   createdAt: string;
   /** The owning vendor account, named by the server on each row. */
-  owner: { email: string | null; isActive: boolean; createdAt: string } | null;
+  owner: {
+    /** The owner's own name, else their masked email (WOW-03). */
+    name?: string | null;
+    email: string | null;
+    isActive: boolean;
+    createdAt: string;
+  } | null;
 }
 
 function StatusPill({ active }: { active: boolean }) {
@@ -508,7 +523,7 @@ function useVendorCounts() {
 }
 
 export function AdminPlanners() {
-  return <RoleDirectory role="planner" title="Wedding Planners" noun="planners" detailBase="/admin/planners" description="Planners who run weddings end to end for the families here." />;
+  return <RoleDirectory role="planner" title="Wedding Planners" noun="planners" detailBase="/admin/planners" businessLabel="Business Name" description="Planners who run weddings end to end for the families here." />;
 }
 
 /**

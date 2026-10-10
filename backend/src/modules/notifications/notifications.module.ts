@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
 import { Notification } from './entities/notification.entity';
 import { Profile } from '../users/entities/profile.entity';
 import { Booking } from '../bookings/entities/booking.entity';
@@ -12,6 +13,7 @@ import { WeddingEvent } from '../events/entities/event.entity';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsConsumer } from './notifications.consumer';
+import { NotificationsGateway } from './notifications.gateway';
 
 @Module({
   imports: [
@@ -31,8 +33,10 @@ import { NotificationsConsumer } from './notifications.consumer';
       // The linked function's date on a booking notification. Read-only.
       WeddingEvent,
     ]),
+    // The handshake on the notifications socket verifies the access token.
+    JwtModule.register({}),
   ],
-  providers: [NotificationsService, NotificationsConsumer],
+  providers: [NotificationsService, NotificationsConsumer, NotificationsGateway],
   controllers: [NotificationsController],
   exports: [NotificationsService],
 })

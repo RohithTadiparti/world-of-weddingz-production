@@ -103,6 +103,14 @@ export class BookingAddonsService {
   ): Promise<BookingAddon> {
     const { addon } = await this.loadForSeller(actor, addonId);
     this.assertAwaitingVendor(addon);
+    // Accepting agrees the customer's price. With no price (or a zero one left
+    // over from before prices had to be positive) there is nothing to agree,
+    // and accepting would add the extra to the booking for free.
+    if (!(Number(addon.proposedPrice ?? 0) > 0)) {
+      throw new BadRequestException(
+        'The customer did not propose a price for this add-on. Requote it with yours.',
+      );
+    }
 
     addon.status = BookingAddonStatus.ACCEPTED;
     addon.vendorPrice = addon.proposedPrice;

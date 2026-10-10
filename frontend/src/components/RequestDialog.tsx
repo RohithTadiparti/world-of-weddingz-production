@@ -6,7 +6,13 @@ import { CategoryNames } from './CategoryPicker';
 import DynamicForm, { Answers, FieldSpec, cleanAnswers, validateAnswers } from './DynamicForm';
 import { offeringPrice, requestFormFields, requirementsRequired } from '../lib/booking-request';
 import { Offering, OfferingPicker, ReferencePhotos, takesQuantity, totalLabel } from './BookingRequestParts';
-import SlotPicker, { Slot } from './SlotPicker';
+import ScheduleOptions, { Slot } from './ScheduleOptions';
+import {
+  EMPTY_SCHEDULE,
+  type ScheduleSelection,
+  scheduleError,
+  schedulePayload,
+} from '../lib/request-schedule';
 
 /** The vendor being asked, as much of it as the request needs. */
 interface RequestVendor {
@@ -38,9 +44,9 @@ interface BookingContext {
 }
 
 /**
- * The booking request form, opened from the vendor directory.
- *
- * Moved out of pages/Vendors.tsx, which it had grown larger than.
+ * The booking request form, shown as its own full page (row 14) at
+ * /vendors/:id/request rather than a popup over the directory, so every date,
+ * time, service and request option has the room to be visible at once.
  */
 export default function RequestDialog({
   vendor,
@@ -57,11 +63,13 @@ export default function RequestDialog({
   // someone for this day" has already told the app which day, and asking again
   // in a dropdown is asking them to repeat themselves.
   const [params] = useSearchParams();
-  const [slotId, setSlotId] = useState('');
-  // A request without a published window (EZ1-I179): the vendor may have nothing
-  // open, or none of the open windows suit, so the buyer names a date and the
-  // vendor confirms. Prefilled from the detail page's date check when it arrives.
-  const [eventDate, setEventDate] = useState(initialDate ?? params.get('date') ?? '');
+  // When: a published slot, a requested date and time, or (with only one
+  // filled) either. Neither option starts selected (row 13); a date checked
+  // on the detail page arrives as a requested date.
+  const [schedule, setSchedule] = useState<ScheduleSelection>(() => {
+    const date = initialDate ?? params.get('date') ?? '';
+    return date ? { ...EMPTY_SCHEDULE, requestDate: true, date } : EMPTY_SCHEDULE;
+  });
   const [eventId, setEventId] = useState(params.get('eventId') ?? '');
   const [serviceId, setServiceId] = useState('');
   const [offeringId, setOfferingId] = useState('');
@@ -156,11 +164,21 @@ export default function RequestDialog({
     retry: false,
   });
 
+  // A request for one of the couple's functions is for that function's day
+  // (row 14); the server refuses a mismatch with the same sentence.
+  const selectedEvent = events.find((ev) => ev.id === eventId) ?? null;
+  const scheduleProblem = scheduleError(schedule, selectedEvent);
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
     setExisting('');
     setExistingNote('');
+
+    if (scheduleProblem) {
+      setError(scheduleProblem);
+      return;
+    }
 
     // Checked here so a long form does not have to be sent to find out about a
     // missing guest count. The server checks all of it again regardless.
@@ -183,11 +201,8 @@ export default function RequestDialog({
       const { data } = await api.post('/bookings', {
         providerType: 'vendor',
         providerId: vendor.id,
-        ...(slotId ? { slotId } : {}),
-        // No published window: carry the date the buyer asked for so the vendor
-        // knows which day to confirm. The server derives it from the slot when
-        // one is chosen, so the two are never sent together.
-        ...(!slotId && eventDate ? { eventDate } : {}),
+        // The slot, or the requested date and time -- never both.
+        ...schedulePayload(schedule),
         ...(requirements.trim() ? { requirements } : {}),
         ...(serviceId ? { vendorServiceId: serviceId } : {}),
         ...(offeringId ? { offeringId } : {}),
@@ -223,18 +238,19 @@ export default function RequestDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-surface p-6">
-        <div className="mb-4 flex items-start justify-between">
+    <div className="flex min-h-[calc(100vh-8rem)] w-full flex-col">
+      <div className="card w-full flex-1">
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="section-title">{vendor.name}</h2>
+            <p className="text-xs uppercase tracking-wide text-gray-500">Check availability &amp; request</p>
+            <h1 className="page-title">{vendor.name}</h1>
             <p className="text-sm text-gray-600">
               <CategoryNames slugs={vendor.categories?.length ? vendor.categories : [vendor.category]} />
               {vendor.city ? ` · ${vendor.city}` : ''}
             </p>
           </div>
-          <button className="text-2xl leading-none text-gray-400" onClick={onClose} aria-label="Close">
-            ×
+          <button className="btn-outline btn-sm" onClick={onClose}>
+            Back to vendor
           </button>
         </div>
 
@@ -264,7 +280,7 @@ export default function RequestDialog({
                     setFieldErrors({});
                     // The slots belong to the previous service; clear the pick so
                     // a stale slot cannot be submitted against the new service.
-                    setSlotId('');
+                    setSchedule((current) => ({ ...current, slotId: '', slotDate: null }));
                   }}
                   required
                 >
@@ -301,38 +317,36 @@ export default function RequestDialog({
                 several at once, how many places are left. Windows that are full
                 or blocked never reach here — listBookable returns only the free
                 ones — so every date shown is one the buyer can actually take. */}
-            {showAvailability ? (
-              <SlotPicker
-                slots={slots}
-                isLoading={isLoading}
-                slotId={slotId}
-                eventDate={eventDate}
-                onSlot={(id) => {
-                  setSlotId(id);
-                  setEventDate('');
-                }}
-                onDate={setEventDate}
-                summary={
-                  selectedService && (
-                    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 rounded-sm bg-surface-sunken px-3 py-2">
-                      <span className="text-sm font-medium text-gray-900">
-                        {selectedService.displayName ?? selectedService.definition?.name ?? 'Service'}
+            <ScheduleOptions
+              value={schedule}
+              onChange={(next) => {
+                setSchedule(next);
+                setError('');
+              }}
+              slots={slots}
+              isLoading={isLoading}
+              slotsLocked={
+                showAvailability ? null : 'Pick a service above to see the slots they have open.'
+              }
+              summary={
+                selectedService && (
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-sm bg-surface-sunken px-3 py-2">
+                    <span className="text-sm font-medium text-gray-900">
+                      {selectedService.displayName ?? selectedService.definition?.name ?? 'Service'}
+                    </span>
+                    {offering && (
+                      <span className="text-sm text-gray-700">
+                        {totalLabel(offering, quantity) ?? offeringPrice(offering)}
                       </span>
-                      {offering && (
-                        <span className="text-sm text-gray-700">
-                          {totalLabel(offering, quantity) ?? offeringPrice(offering)}
-                        </span>
-                      )}
-                    </div>
-                  )
-                }
-              />
-            ) : (
-              needsService && (
-                <p className="rounded-sm bg-surface-sunken px-3 py-2 text-sm text-gray-500">
-                  Pick a service above to see the dates and times they are free.
-                </p>
-              )
+                    )}
+                  </div>
+                )
+              }
+            />
+            {scheduleProblem && (schedule.pickSlot || schedule.requestDate) && (
+              <p className="text-sm text-caution-fg" role="status">
+                {scheduleProblem}
+              </p>
             )}
 
             {/*
@@ -443,7 +457,7 @@ export default function RequestDialog({
               <button
                 className="btn"
                 disabled={
-                  (!slotId && !eventDate) ||
+                  Boolean(scheduleProblem) ||
                   busy ||
                   (engagedClients.length > 0 && !forClient) ||
                   (bookable.length > 0 && !serviceId)

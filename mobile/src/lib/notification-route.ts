@@ -47,18 +47,23 @@ export function routeFor(n: Notification, opts: RouteOptions = {}): Href | null 
       case 'quotations':
       case 'disputes':
         return bookingRoute(bookingId, opts);
-      case 'support':
-        // Staff work cases on the Cases tab; the person who raised it reads
-        // their own on Support (EZ1-I49).
+      case 'support': {
+        // The case itself, for whoever reads it: the case screen loads by id
+        // and shows each reader their own step (row 21b). Without an id, staff
+        // land on the Cases tab and the raiser on Support (EZ1-I49).
+        const caseId = n.targetId ?? str('caseId');
+        if (caseId) return { pathname: '/case/[id]', params: { id: caseId } };
         return opts.canVerify ? '/cases' : '/support';
-      case 'verification':
-        // A decision is for the applicant, who reads it on their own listing.
-        // Only the staff notifications — assigned, submitted, requested — go to
-        // the queue, and an assigned visit opens the visit itself.
-        // Its target is the business, not a visit, so staff go to the queue.
-        if (n.type === 'verification_decided') return opts.canVerify ? '/verification' : '/business';
-        if (opts.canVerify && n.targetId) return { pathname: '/visit/[id]', params: { id: n.targetId } };
+      }
+      case 'verification': {
+        // A decision or a tracking update is for the applicant, who reads it
+        // on their own listing. Staff notifications open the visit itself.
+        const forApplicant = n.type === 'verification_decided' || n.type === 'verification_progress';
+        if (forApplicant && !opts.canVerify) return '/business';
+        const visit = forApplicant ? str('requestId') : (n.targetId ?? str('requestId'));
+        if (opts.canVerify && visit) return { pathname: '/visit/[id]', params: { id: visit } };
         return '/verification';
+      }
       case 'matches':
         // An agency told about interest in a client opens that client's
         // Interests board, already acting for them.
@@ -94,6 +99,11 @@ export function routeFor(n: Notification, opts: RouteOptions = {}): Href | null 
    */
   if (n.type.startsWith('booking_')) return bookingRoute(bookingId, opts);
   if (n.type.startsWith('verification_')) return '/verification';
+  if (n.type === 'dispute_update' || n.type === 'business_change_update') {
+    const caseId = str('caseId');
+    if (caseId) return { pathname: '/case/[id]', params: { id: caseId } };
+    return opts.canVerify ? '/cases' : '/support';
+  }
   if (n.type.startsWith('match_')) return '/matches';
 
   return null;

@@ -39,6 +39,24 @@ import {
   SectionTitle,
 } from '@/components/ui';
 import { useBusinesses } from '@/store/business';
+import { SelectField } from '@/components/form';
+import {
+  BUSINESS_NAME_MAX,
+  COMPLIANCE_DOCUMENT_HELP,
+  COMPLIANCE_DOCUMENT_TYPES,
+  MAX_COMPLIANCE_DOCUMENTS,
+  MAX_PORTFOLIO_IMAGES,
+  REGISTERED_ADDRESS_MAX,
+  REGISTRATION_NUMBER_MAX,
+  addPortfolioImages,
+  businessNameError,
+  orderedPortfolio,
+  portfolioSlotsLeft,
+  profileImageOf,
+  registrationFieldErrors,
+  removePortfolioImage,
+  titleCaseCity,
+} from '@/shared/vendor-listing-rules';
 import { space } from '@/theme';
 
 /**
@@ -109,7 +127,10 @@ function BusinessDetails() {
   // One to five catalogue categories, first one first (EZ1-I263).
   const [categories, setCategories] = useState<string[]>([]);
   const [portfolio, setPortfolio] = useState<string[]>([]);
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   const [documents, setDocuments] = useState<string[]>([]);
+  // The type of each document, by position in `documents`.
+  const [documentTypes, setDocumentTypes] = useState<(string | null)[]>([]);
   const [socialLinks, setSocialLinks] = useState<SocialLink[]>([]);
   const [errors, setErrors] = useState<Errors>({});
   // After a save attempt every link row shows its problem.
@@ -147,7 +168,11 @@ function BusinessDetails() {
     });
     setCategories(listing.categories ?? []);
     setPortfolio(listing.portfolio ?? []);
+    setProfileImage(profileImageOf(listing.portfolio ?? [], listing.profileImage));
     setDocuments(listing.complianceDocuments ?? []);
+    setDocumentTypes(
+      (listing.complianceDocuments ?? []).map((_, i) => listing.complianceDocumentTypes?.[i] ?? null),
+    );
     // The stored list as it is, so a link the rules now refuse is shown to be
     // fixed; the three single fields only from a server with no list.
     setSocialLinks(
@@ -158,9 +183,12 @@ function BusinessDetails() {
 
   /** The link rows' problems, under one key; each row shows its own. */
   function linkErrors(): Errors {
-    const check = socialLinkErrors(socialLinks);
+    // One link of each type on a vendor listing; the API refuses a repeat.
+    const check = socialLinkErrors(socialLinks, { uniquePlatforms: true });
     return check.any ? { socialLinks: check.list ?? 'Fix the highlighted links.' } : {};
   }
+
+  const portfolioOrder = orderedPortfolio(portfolio, profileImage);
 
   const set = (key: keyof Form) => (value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -175,13 +203,10 @@ function BusinessDetails() {
     const found: Errors = {};
     const descriptionError = validateBusinessDescription(form.description);
     if (descriptionError) found.description = descriptionError;
-    const businessName = form.name.trim();
-    if (!businessName) found.name = 'Business name is required.';
-    else if (businessName.length < 2 || businessName.length > 100) {
-      found.name = 'Business name must be between 2 and 100 characters.';
-    } else if (!/^(?=.*[\p{L}\p{N}])[\p{L}\p{N} .&'-]+$/u.test(businessName)) {
-      found.name = 'Please enter a valid business name.';
-    }
+    const nameError = businessNameError(form.name);
+    if (nameError) found.name = nameError;
+    // Trading since is required; registration number and address are capped.
+    Object.assign(found, registrationFieldErrors(form));
     // Category, city, registered address, a portfolio image and a compliance
     // document are all mandatory to submit a listing for verification — an
     // officer cannot verify a business that has named none of them.
@@ -191,8 +216,13 @@ function BusinessDetails() {
       found.registeredAddress = 'A registered address is required — it is where the officer visits';
     }
     if (portfolio.length === 0) found.portfolio = 'Add at least one portfolio photo';
+    else if (portfolio.length > MAX_PORTFOLIO_IMAGES) {
+      found.portfolio = `Add at most ${MAX_PORTFOLIO_IMAGES} portfolio images — remove ${portfolio.length - MAX_PORTFOLIO_IMAGES}`;
+    }
     if (documents.length === 0) {
       found.complianceDocuments = 'Upload at least one compliance document';
+    } else if (documents.length > MAX_COMPLIANCE_DOCUMENTS) {
+      found.complianceDocuments = `Upload at most ${MAX_COMPLIANCE_DOCUMENTS} compliance documents — remove ${documents.length - MAX_COMPLIANCE_DOCUMENTS}`;
     }
     if (form.gstNumber && !GSTIN_PATTERN.test(form.gstNumber.toUpperCase())) {
       found.gstNumber = 'A GSTIN is 15 characters, like 29ABCDE1234F1Z5';
@@ -225,6 +255,9 @@ function BusinessDetails() {
     const descriptionError = validateBusinessDescription(form.description);
     if (descriptionError) found.description = descriptionError;
     if (portfolio.length === 0) found.portfolio = 'Add at least one portfolio photo';
+    else if (portfolio.length > MAX_PORTFOLIO_IMAGES) {
+      found.portfolio = `Add at most ${MAX_PORTFOLIO_IMAGES} portfolio images — remove ${portfolio.length - MAX_PORTFOLIO_IMAGES}`;
+    }
     if (!form.contactPhone.trim()) {
       found.contactPhone = 'A contact mobile number is required';
     } else if (!MOBILE.test(form.contactPhone.replace(/\s|-/g, ''))) {
@@ -246,11 +279,17 @@ function BusinessDetails() {
       // A verified/live listing may only change the presentational fields, so
       // the payload carries just those — the legal fields are not sent, not
       // merely disabled.
+      // The city goes in title case ("hyderabad" -> "Hyderabad"); the API
+      // applies the same rule, and the form shows what was saved.
+      const city = titleCaseCity(form.city);
+      if (city !== form.city) setForm((f) => ({ ...f, city }));
+      const picture = profileImageOf(portfolio, profileImage);
       const payload: Record<string, unknown> = presentationalOnly
         ? {
             description: form.description.trim(),
             contactPhone: form.contactPhone.trim(),
             portfolio,
+            profileImage: picture,
           }
         : {
             name: form.name.trim(),
@@ -258,7 +297,9 @@ function BusinessDetails() {
             // Portfolio is deliberately always sent, including empty: clearing
             // the last photo has to be able to reach the server.
             portfolio,
+            profileImage: picture,
             complianceDocuments: documents,
+            complianceDocumentTypes: documents.map((_, i) => documentTypes[i] ?? null),
           };
       if (!presentationalOnly) {
         for (const key of [
@@ -275,6 +316,7 @@ function BusinessDetails() {
           // format checks on GST and PAN, so we send null to clear it instead of dropping it.
           payload[key] = form[key] ? form[key] : null;
         }
+        payload.city = city || null;
       }
       // Always sent, including empty: removing the last link has to reach the server.
       payload.socialLinks = normaliseSocialLinks(socialLinks);
@@ -375,7 +417,8 @@ function BusinessDetails() {
             value={form.name}
             onChangeText={set('name')}
             error={errors.name}
-            maxLength={100}
+            maxLength={BUSINESS_NAME_MAX}
+            hint={`${form.name.length}/${BUSINESS_NAME_MAX}`}
             autoCapitalize="words"
           />
           <CategoryPicker
@@ -389,6 +432,7 @@ function BusinessDetails() {
             required
             value={form.city}
             onChangeText={set('city')}
+            onBlur={() => setForm((f) => ({ ...f, city: titleCaseCity(f.city) }))}
             error={errors.city}
             autoCapitalize="words"
           />
@@ -433,14 +477,30 @@ function BusinessDetails() {
           <RequiredMark />
         </SectionTitle>
         <Body tone="muted">
-          At least one photo is required. Clients rarely book from a listing with none.
+          At least one photo is required, up to {MAX_PORTFOLIO_IMAGES}. Tap “Set as profile photo”
+          under the one that represents your business; the rest show as your portfolio.
         </Body>
         {errors.portfolio ? <Alert tone="critical">{errors.portfolio}</Alert> : null}
-        <MediaStrip urls={portfolio} onRemove={(url) => setPortfolio((p) => p.filter((u) => u !== url))} />
+        {/* The profile picture first, then the rest of the portfolio. */}
+        <MediaStrip
+          urls={portfolioOrder.profile ? [portfolioOrder.profile, ...portfolioOrder.rest] : portfolioOrder.rest}
+          primary={portfolioOrder.profile}
+          onMakePrimary={setProfileImage}
+          onRemove={(url) => {
+            const next = removePortfolioImage(portfolio, url, profileImage);
+            setPortfolio(next.portfolio);
+            setProfileImage(next.profileImage);
+          }}
+        />
         <PhotoPicker
           label="Add photos"
-          onUploaded={(url) => setPortfolio((p) => [...p, url])}
+          multiple
+          maxFiles={portfolioSlotsLeft(portfolio)}
+          onUploaded={(url) => setPortfolio((p) => addPortfolioImages(p, [url]).portfolio)}
         />
+        <Caption tone="faint">
+          {portfolio.length} of {MAX_PORTFOLIO_IMAGES} images. You can select several at once.
+        </Caption>
       </Card>
 
       <SocialLinksEditor
@@ -449,6 +509,7 @@ function BusinessDetails() {
         showErrors={showLinkErrors}
         error={errors.socialLinks}
         saved={listing}
+        uniquePlatforms
       />
 
       {!presentationalOnly && (
@@ -468,13 +529,39 @@ function BusinessDetails() {
             ) : null}
             <DocumentList
               urls={documents}
-              onRemove={(url) => setDocuments((d) => d.filter((u) => u !== url))}
+              onRemove={(url) => {
+                const at = documents.indexOf(url);
+                setDocuments((d) => d.filter((u) => u !== url));
+                setDocumentTypes((types) => types.filter((_, j) => j !== at));
+              }}
             />
+            {documents.map((url, i) => (
+              <SelectField
+                key={url}
+                label={`Document ${i + 1} type`}
+                placeholder="Choose the document type…"
+                value={documentTypes[i] ?? ''}
+                options={COMPLIANCE_DOCUMENT_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                onChange={(value) =>
+                  setDocumentTypes((types) => {
+                    const next = documents.map((_, j) => types[j] ?? null);
+                    next[i] = value || null;
+                    return next;
+                  })
+                }
+              />
+            ))}
             <PhotoPicker
-              label="Add a document"
-              kind="attachment"
-              onUploaded={(url) => setDocuments((d) => [...d, url])}
+              label="Add documents"
+              kind="compliance"
+              multiple
+              maxFiles={MAX_COMPLIANCE_DOCUMENTS - documents.length}
+              onUploaded={(url) => setDocuments((d) => (d.includes(url) ? d : [...d, url]))}
             />
+            <Caption tone="faint">{COMPLIANCE_DOCUMENT_HELP}</Caption>
+            <Caption tone="faint">
+              {documents.length} of {MAX_COMPLIANCE_DOCUMENTS} documents
+            </Caption>
           </Card>
 
           <Card>
@@ -508,6 +595,8 @@ function BusinessDetails() {
               value={form.registrationNumber}
               onChangeText={set('registrationNumber')}
               autoCapitalize="characters"
+              maxLength={REGISTRATION_NUMBER_MAX}
+              error={errors.registrationNumber}
             />
             {/* A date, not a year — the same question the agency form answers,
                 so families can see how long the business has run. Today or
@@ -515,10 +604,12 @@ function BusinessDetails() {
                 the API enforces this too. */}
             <WowCalendar
               label="Trading since"
+              required
               value={form.tradingSince}
               onChange={set('tradingSince')}
               maximumDate={todayIso()}
-              hint="Today or earlier."
+              hint={errors.tradingSince ? undefined : 'Today or earlier.'}
+              error={errors.tradingSince}
             />
             <Textarea
               label="Registered address"
@@ -526,9 +617,12 @@ function BusinessDetails() {
               value={form.registeredAddress}
               onChange={set('registeredAddress')}
               rows={3}
-              maxLength={500}
+              maxLength={REGISTERED_ADDRESS_MAX}
               error={errors.registeredAddress}
             />
+            <Caption tone="faint">
+              {form.registeredAddress.length}/{REGISTERED_ADDRESS_MAX}
+            </Caption>
             <Field
               label="Contact number"
               required

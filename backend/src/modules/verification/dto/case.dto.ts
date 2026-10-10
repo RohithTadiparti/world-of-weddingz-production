@@ -128,6 +128,31 @@ export class GrantBusinessChangeAccessDto {
   note?: string;
 }
 
+/** An administrator withdrawing a business change request without granting it. */
+export class CancelCaseDto {
+  @ApiPropertyOptional({ maxLength: 1000, description: 'Shown to the vendor.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  reason?: string;
+}
+
+/** The person who raised a case answering on it, with any further proof. */
+export class ReplyCaseDto {
+  @ApiProperty({ minLength: 2, maxLength: 4000 })
+  @IsString()
+  @MinLength(2, { message: 'Write a reply first' })
+  @MaxLength(4000)
+  message: string;
+
+  @ApiPropertyOptional({ type: [String], maxItems: 10 })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsUploadedUrl({ each: true })
+  evidence?: string[];
+}
+
 /**
  * Escalate a case to somebody who will go and look.
  *

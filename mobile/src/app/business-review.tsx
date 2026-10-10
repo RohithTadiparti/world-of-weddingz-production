@@ -1,19 +1,23 @@
-import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 
 import { api } from '@/lib/api';
 import { CategoryNames } from '@/components/business/category-picker';
 import { shortDate } from '@/lib/format';
-import { priceLabel } from '@/lib/pricing';
 import { useActiveListing } from '@/lib/vendor-listing';
 import { DetailGrid, DetailRow, Divider } from '@/components/chrome';
 import { BusinessChecklist } from '@/components/business/completion';
 import { useCompletion } from '@/components/business/completion';
 import { BusinessWizard, WizardNavigation } from '@/components/business/wizard';
-import { DocumentList, MediaStrip } from '@/components/uploader';
+import { DocumentList } from '@/components/uploader';
 import {
-  Body,
+  CatalogSummaryList,
+  PortfolioGallery,
+  SubmittedSocialLinks,
+} from '@/components/business/catalog-summary';
+import type { SummaryService } from '@/shared/catalog-rules';
+import {
+  Alert,
   Button,
   Caption,
   Card,
@@ -24,24 +28,7 @@ import {
   SectionTitle,
 } from '@/components/ui';
 import { useBusinesses } from '@/store/business';
-import { rgb, radius, space, useTheme } from '@/theme';
-
-/** A vendor service and its priced offerings, as the review reads them. */
-interface ReviewService {
-  id: string;
-  displayName: string | null;
-  description: string | null;
-  definition: { name?: string } | null;
-  category: { name?: string } | null;
-  offerings: {
-    id: string;
-    name: string;
-    pricingModel: string;
-    price: string | null;
-    currency: string;
-    unitLabel: string | null;
-  }[];
-}
+import { rgb, useTheme } from '@/theme';
 
 /**
  * Review & Submit — step three of My Business.
@@ -63,7 +50,7 @@ export default function BusinessReview() {
   const { listing, isPending } = useActiveListing(activeId);
   const { data: completion } = useCompletion(activeId);
 
-  const { data: services = [] } = useQuery<ReviewService[]>({
+  const { data: services = [] } = useQuery<SummaryService[]>({
     queryKey: ['vendor-services', activeId],
     queryFn: async () => (await api.get(`/vendors/${activeId}/services`)).data,
     enabled: Boolean(activeId),
@@ -88,18 +75,29 @@ export default function BusinessReview() {
     );
   }
 
-  const portfolio = listing.portfolio ?? [];
   const documents = listing.complianceDocuments ?? [];
+  // Read from the checklist the Submit button writes into, so this changes the
+  // moment the submission is accepted, with no pull-to-refresh.
+  const status = completion?.status ?? listing.status;
+  const submitted = status === 'pending_verification' || status === 'verification_in_progress';
 
   return (
     <Screen>
       <BusinessWizard step={2} completion={completion} />
-      <View style={{ gap: space(1) }}>
-        <PageSubtitle>
-          Everything you have entered, read-only. Go back to change anything, then submit for
-          verification below.
-        </PageSubtitle>
-      </View>
+      {submitted ? (
+        <Alert tone="positive">
+          Submitted for verification.{' '}
+          {status === 'verification_in_progress'
+            ? 'An officer is verifying it now.'
+            : 'An officer will be assigned and will visit the registered address.'}{' '}
+          This is what was submitted.
+        </Alert>
+      ) : null}
+      <PageSubtitle>
+        {submitted
+          ? 'Everything you submitted, read-only while it is being verified.'
+          : 'Everything you have entered, read-only. Go back to change anything, then submit for verification below.'}
+      </PageSubtitle>
 
       <Card>
         <SectionTitle>The business</SectionTitle>
@@ -132,14 +130,16 @@ export default function BusinessReview() {
         ) : null}
       </Card>
 
-      {/* The actual portfolio images, not a count of them. */}
+      {/* Each social link once; this screen did not show them at all. */}
       <Card>
-        <SectionTitle>Portfolio ({portfolio.length})</SectionTitle>
-        {portfolio.length > 0 ? (
-          <MediaStrip urls={portfolio} />
-        ) : (
-          <Caption style={{ color: rgb(theme.cautionFg) }}>No photos added yet.</Caption>
-        )}
+        <SectionTitle>Social media</SectionTitle>
+        <SubmittedSocialLinks listing={listing} />
+      </Card>
+
+      {/* The actual portfolio images, each opening full screen. */}
+      <Card>
+        <SectionTitle>Portfolio ({(listing.portfolio ?? []).length})</SectionTitle>
+        <PortfolioGallery urls={listing.portfolio ?? []} />
       </Card>
 
       {/* Each compliance document by name. */}
@@ -152,48 +152,14 @@ export default function BusinessReview() {
         )}
       </Card>
 
-      {/* Catalogs, services and their priced offerings in full. */}
-      {services.length > 0 && (
-        <Card>
-          <SectionTitle>Catalog & services ({services.length})</SectionTitle>
-          {services.map((service) => (
-            <View
-              key={service.id}
-              style={{
-                backgroundColor: rgb(theme.surfaceSunken),
-                borderRadius: radius.sm,
-                padding: space(3),
-                gap: space(1),
-              }}
-            >
-              <Body>{service.displayName ?? service.definition?.name ?? 'Service'}</Body>
-              {service.category?.name ? (
-                <Caption tone="faint">{service.category.name}</Caption>
-              ) : null}
-              {service.description ? <Caption>{service.description}</Caption> : null}
-              {service.offerings.length > 0 ? (
-                <View style={{ gap: space(0.5), marginTop: space(1) }}>
-                  {service.offerings.map((offering) => (
-                    <View
-                      key={offering.id}
-                      style={{ flexDirection: 'row', justifyContent: 'space-between', gap: space(3) }}
-                    >
-                      <Body style={{ flex: 1 }} numberOfLines={2}>
-                        {offering.name}
-                      </Body>
-                      <Caption style={{ fontVariant: ['tabular-nums'] }}>
-                        {priceLabel(offering)}
-                      </Caption>
-                    </View>
-                  ))}
-                </View>
-              ) : (
-                <Caption tone="faint">No offerings priced yet.</Caption>
-              )}
-            </View>
-          ))}
-        </Card>
-      )}
+      {/*
+        Catalog & services in full: category, service, pricing name, pricing
+        details and description for every price.
+      */}
+      <Card>
+        <SectionTitle>Catalog & services ({services.length})</SectionTitle>
+        <CatalogSummaryList services={services} />
+      </Card>
 
       {/*
         The checklist and the two-step Submit for Verification are the server's,

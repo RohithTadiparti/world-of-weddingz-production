@@ -12,6 +12,7 @@ import {
   roleLabel,
 } from '../lib/labels';
 import { Loading } from './ui/Feedback';
+import { accountLabel } from '../lib/admin-names';
 import ActivityDetailDrawer, { type ActivityDetail } from './admin/ActivityDetailDrawer';
 
 /**
@@ -83,6 +84,8 @@ export function ActivityFeed() {
 
 interface DirectoryRow {
   id: string;
+  /** The person's name, else their business, else the masked contact (WOW-01). */
+  name?: string | null;
   /** Masked by the server (ISS-11); the account detail has the audited reveal. */
   email: string | null;
   phone?: string | null;
@@ -151,7 +154,7 @@ export function Directory({
       <div className="mb-3 flex flex-wrap gap-2">
         <input
           className="input flex-1"
-          placeholder="Search by email or mobile"
+          placeholder="Search by name, email or mobile"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -182,9 +185,10 @@ export function Directory({
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-gray-900">
-                  {u.email ?? u.phone ?? 'No email on file'}
+                  {accountLabel(u)}
                 </span>
                 <span className="text-xs text-gray-500">
+                  {u.name && (u.email ?? u.phone) ? `${u.email ?? u.phone} · ` : ''}
                   {roleLabel(u.role)} · joined{' '}
                   {new Date(u.createdAt).toLocaleDateString()}
                 </span>
@@ -268,9 +272,9 @@ function AccountDetail({ userId }: { userId: string }) {
     [
       'Agency clients',
       (data.agency?.clients ?? []).map(
-        (u: { id: string; email: string; role: string; isActive: boolean }) => ({
+        (u: { id: string; name?: string | null; email: string; role: string; isActive: boolean }) => ({
           id: u.id,
-          label: u.email,
+          label: accountLabel(u),
           note: `${roleLabel(u.role)}${u.isActive ? '' : ' · suspended'}`,
         }),
       ),

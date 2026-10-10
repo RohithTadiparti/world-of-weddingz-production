@@ -35,7 +35,11 @@ export interface VendorListing {
   instagramUrl: string | null;
   youtubeUrl: string | null;
   portfolio: string[];
+  /** Which portfolio image is the business's profile picture; absent from an older server. */
+  profileImage?: string | null;
   complianceDocuments: string[];
+  /** The type of each compliance document, by position; absent from an older server. */
+  complianceDocumentTypes?: (string | null)[];
   isApproved: boolean;
   payoutAccountId: string | null;
   /** Where this business is in its life, from draft to live. */

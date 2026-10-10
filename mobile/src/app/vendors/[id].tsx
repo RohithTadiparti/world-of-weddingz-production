@@ -8,15 +8,13 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Heart, MapPin, SealCheck, ShareNetwork, Star } from 'phosphor-react-native';
 
 import { api, apiMessage } from '@/lib/api';
-import { hhmm, money, rupees } from '@/lib/format';
+import { money, rupees } from '@/lib/format';
 import { loadVendorShortlist, toggleVendorShortlist } from '@/lib/plan-shortlist';
-import { cleanAnswers, validateAnswers, type Answers, type FieldSpec } from '@/shared/dynamic-form';
-import { WowCalendar } from '@/components/common/WowCalendar';
-import { DynamicForm } from '@/components/dynamic-form';
+import { type FieldSpec } from '@/shared/dynamic-form';
 import {
   SocialLinksList,
   ViewInstagramButton,
@@ -30,7 +28,6 @@ import {
   Caption,
   Card,
   EmptyState,
-  Field,
   Loading,
   SectionTitle,
 } from '@/components/ui';
@@ -77,7 +74,6 @@ function cheapestOffering(services: Service[]): number | null {
 
 type MyBooking = { id: string; providerId?: string; status: string; createdAt?: string };
 
-type Slot = { id: string; startTime: string; endTime: string; remaining: number };
 
 type Review = {
   id: string;
@@ -88,19 +84,10 @@ type Review = {
 export default function VendorDetail() {
   const theme = useTheme();
   const router = useRouter();
-  const qc = useQueryClient();
   const { width } = useWindowDimensions();
   const { id, eventId } = useLocalSearchParams<{ id: string; eventId?: string }>();
   const [tab, setTab] = useState<Tab>('overview');
   const [shortlist, setShortlist] = useState<Set<string>>(new Set());
-  const [requesting, setRequesting] = useState(false);
-  const [eventDate, setEventDate] = useState('');
-  const [budget, setBudget] = useState('');
-  const [requirements, setRequirements] = useState('');
-  const [vendorServiceId, setVendorServiceId] = useState('');
-  const [slotId, setSlotId] = useState('');
-  const [answers, setAnswers] = useState<Answers>({});
-  const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -142,77 +129,6 @@ export default function VendorDetail() {
   });
 
   const serviceRows = Array.isArray(services.data) ? services.data : [];
-  const bookableServices = serviceRows.filter((s) => s.bookable !== false);
-  const selectedService = serviceRows.find((s) => s.id === vendorServiceId);
-  // The server answers the form's event date from the slot or chosen date.
-  const formFields = (selectedService?.bookingForm ?? []).filter(
-    (f) => !(eventDate && f.key === 'event_date'),
-  );
-
-  useEffect(() => {
-    if (bookableServices.length === 1 && !vendorServiceId) {
-      setVendorServiceId(bookableServices[0].id);
-    }
-  }, [bookableServices, vendorServiceId]);
-
-  const availability = useQuery({
-    queryKey: ['vendor-availability', id, eventDate, vendorServiceId],
-    queryFn: async () =>
-      (
-        await api.get(`/vendors/${id}/availability`, {
-          params: { from: eventDate, to: eventDate, vendorServiceId: vendorServiceId || undefined },
-        })
-      ).data as Slot[],
-    enabled: Boolean(id && eventDate && requesting),
-    retry: false,
-  });
-
-  const request = useMutation({
-    mutationFn: async () => {
-      const serviceAnswers = cleanAnswers(formFields, answers);
-      const response = await api.post('/bookings', {
-        providerType: 'vendor',
-        providerId: id,
-        ...(eventDate ? { eventDate } : {}),
-        ...(eventId ? { eventId } : {}),
-        ...(vendorServiceId ? { vendorServiceId } : {}),
-        ...(slotId ? { slotId } : {}),
-        ...(Object.keys(serviceAnswers).length ? { serviceAnswers } : {}),
-        ...(budget ? { expectedBudget: Number(budget) } : {}),
-        ...(requirements.trim() ? { requirements: requirements.trim() } : {}),
-      });
-      return response.data as { id: string };
-    },
-    onSuccess: async (data) => {
-      setRequesting(false);
-      setNotice('');
-      setError('');
-      await qc.invalidateQueries({ queryKey: ['my-bookings'] });
-      await qc.invalidateQueries({ queryKey: ['wedding-dashboard'] });
-      await qc.invalidateQueries({ queryKey: ['event-workspace'] });
-      router.push({ pathname: '/plan/bookings', params: { highlight: data.id } });
-    },
-    onError: (err) => {
-      const body = (err as { response?: { status?: number; data?: Record<string, any> } }).response;
-      const existingId = body?.data?.bookingId ?? body?.data?.error?.bookingId;
-      if (body?.status === 409 && existingId) {
-        router.push({ pathname: '/plan/bookings', params: { highlight: existingId } });
-        return;
-      }
-      if (slotId) {
-        setSlotId('');
-        void qc.invalidateQueries({ queryKey: ['vendor-availability', id] });
-      }
-      setError(apiMessage(err, 'That request could not be sent.'));
-    },
-  });
-
-  const submit = () => {
-    const found = validateAnswers(formFields, answers);
-    setAnswerErrors(found);
-    if (Object.keys(found).length === 0) request.mutate();
-  };
-
   if (query.isPending) {
     return (
       <View style={{ flex: 1, padding: space(4) }}>
@@ -467,140 +383,10 @@ export default function VendorDetail() {
             )
           ) : null}
 
-          {requesting ? (
-            <Card style={{ gap: space(3) }}>
-              <SectionTitle>Request Booking</SectionTitle>
-              {services.isPending ? (
-                <Loading rows={1} />
-              ) : services.error ? (
-                <Caption tone="critical">
-                  {apiMessage(services.error, 'Services could not be loaded.')}
-                </Caption>
-              ) : serviceRows.length > 0 && bookableServices.length === 0 ? (
-                <Caption tone="muted">
-                  None of this vendor&apos;s services can be booked right now.
-                </Caption>
-              ) : bookableServices.length > 0 ? (
-                <View style={{ gap: space(1) }}>
-                  <Caption style={{ fontWeight: '600' }}>Service</Caption>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space(2) }}>
-                    {bookableServices.map((s) => {
-                      const active = vendorServiceId === s.id;
-                      return (
-                        <Pressable
-                          key={s.id}
-                          onPress={() => {
-                            setVendorServiceId(s.id);
-                            setSlotId('');
-                            setAnswers({});
-                            setAnswerErrors({});
-                          }}
-                          style={{
-                            paddingHorizontal: space(3),
-                            paddingVertical: space(1.5),
-                            borderRadius: radius.md,
-                            backgroundColor: active ? rgb(theme.brand) : rgb(theme.surfaceSunken),
-                          }}
-                        >
-                          <Caption
-                            style={{
-                              color: active ? rgb(theme.brandFg) : rgb(theme.ink[700]),
-                            }}
-                          >
-                            {serviceName(s)}
-                          </Caption>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </View>
-              ) : null}
-              <WowCalendar
-                label="Event date"
-                value={eventDate}
-                onChange={(date) => {
-                  setEventDate(date);
-                  setSlotId('');
-                }}
-                minimumDate={new Date().toISOString().slice(0, 10)}
-              />
-              {eventDate && availability.isFetching ? (
-                <Loading rows={1} />
-              ) : eventDate && availability.error ? (
-                <Caption tone="critical">
-                  {apiMessage(availability.error, 'Availability could not be loaded.')}
-                </Caption>
-              ) : eventDate && availability.data && availability.data.length > 0 ? (
-                <View style={{ gap: space(1) }}>
-                  <Caption style={{ fontWeight: '600' }}>Available slots</Caption>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space(2) }}>
-                    {availability.data.map((slot) => {
-                      const active = slotId === slot.id;
-                      return (
-                        <Pressable
-                          key={slot.id}
-                          onPress={() => setSlotId(slot.id)}
-                          style={{
-                            paddingHorizontal: space(3),
-                            paddingVertical: space(1.5),
-                            borderRadius: radius.md,
-                            backgroundColor: active ? rgb(theme.brand) : rgb(theme.surfaceSunken),
-                          }}
-                        >
-                          <Caption
-                            style={{
-                              color: active ? rgb(theme.brandFg) : rgb(theme.ink[700]),
-                            }}
-                          >
-                            {hhmm(slot.startTime)} – {hhmm(slot.endTime)} · {slot.remaining} left
-                          </Caption>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </View>
-              ) : eventDate && availability.data && availability.data.length === 0 ? (
-                <Caption tone="muted">
-                  No slots published for this date. You can still send a request.
-                </Caption>
-              ) : null}
-              <DynamicForm
-                fields={formFields}
-                answers={answers}
-                errors={answerErrors}
-                onChange={(key, value) => setAnswers((current) => ({ ...current, [key]: value }))}
-              />
-              <Field
-                label="Budget (optional)"
-                value={budget}
-                onChangeText={setBudget}
-                keyboardType="number-pad"
-              />
-              <Field
-                label="Notes"
-                value={requirements}
-                onChangeText={setRequirements}
-                placeholder="Tell them briefly what you need"
-              />
-              <Button
-                label="Send request"
-                busy={request.isPending}
-                disabled={
-                  request.isPending ||
-                  services.isPending ||
-                  (bookableServices.length > 0 && !vendorServiceId) ||
-                  (Boolean(eventDate) && availability.isFetching) ||
-                  (Boolean(availability.data?.length) && !slotId)
-                }
-                onPress={submit}
-              />
-              <Button label="Cancel" variant="outline" onPress={() => setRequesting(false)} />
-            </Card>
-          ) : null}
         </View>
       </ScrollView>
 
-      {!requesting ? (
+      {(
         <View
           style={{
             position: 'absolute',
@@ -630,15 +416,19 @@ export default function VendorDetail() {
           />
           <Button
             label="Request Booking"
+            // Check Availability & Request is its own screen (row 14).
             onPress={() => {
-              setRequesting(true);
               setNotice('');
               setError('');
+              router.push({
+                pathname: '/vendors/[id]/request',
+                params: { id: vendor.id, ...(eventId ? { eventId } : {}) },
+              });
             }}
             style={{ flex: 1.5 }}
           />
         </View>
-      ) : null}
+      )}
     </View>
   );
 }

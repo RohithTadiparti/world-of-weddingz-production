@@ -112,7 +112,10 @@ export default function MyBusiness() {
           <Button
             label="Raise it on Support"
             variant="outline"
-            onPress={() => router.push('/support')}
+            // Opens Support with the case already about this listing (row 27).
+            onPress={() =>
+              router.push({ pathname: '/support', params: { subject: 'vendor', business: listing.id } })
+            }
           />
         </Card>
       </Screen>
@@ -160,7 +163,10 @@ export default function MyBusiness() {
         fix what nobody named. Read from the owner-only route, so a competitor
         cannot look it up.
       */}
-      {listing.decisionReason ? (
+      {/* Only while the listing is actually sent back: the reason stays on the
+          record after a resubmission, and showing it then kept the "edits to
+          be made" note over a listing already submitted for verification. */}
+      {listing.decisionReason && listing.status === 'reverification_required' ? (
         <Card style={{ backgroundColor: rgb(theme.cautionBg), borderColor: rgb(theme.cautionBg) }}>
           <Eyebrow>
             {(listing.correctionFields?.length ?? 0) > 0 ? 'Correction required' : 'What needs fixing'}

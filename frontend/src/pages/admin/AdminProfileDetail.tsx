@@ -5,6 +5,8 @@ import { CaretLeft } from '@phosphor-icons/react';
 import { api, apiMessage } from '../../lib/api';
 import { formatDate } from '../../lib/dates';
 import { EmptyState, Loading } from '../../components/ui/Feedback';
+import { ContactRevealButton, useContactReveal } from '../../components/AdminContactReveal';
+import { accountLabel } from '../../lib/admin-names';
 
 /**
  * One marriage profile in full (EZ1-I185).
@@ -16,9 +18,11 @@ import { EmptyState, Loading } from '../../components/ui/Feedback';
  * government id number is never fetched; only the last four and who verified it.
  */
 
+/** An account around the profile; email and mobile masked by the server (WOW-05). */
 interface RelatedUser {
   id: string;
-  email: string;
+  name?: string | null;
+  email: string | null;
   role?: string;
   isActive?: boolean;
   isVerified?: boolean;
@@ -106,6 +110,8 @@ export default function AdminProfileDetail() {
     queryFn: async () => (await api.get(`/admin/profiles/${id}`)).data,
     retry: false,
   });
+  // The profile's own contact lines, not an account's: their own audited read.
+  const contactReveal = useContactReveal(id, `/admin/profiles/${id}/contact`);
 
   const back = (
     <button onClick={() => navigate(-1)} className="btn-ghost btn-sm -ml-2 text-gray-500">
@@ -169,8 +175,14 @@ export default function AdminProfileDetail() {
         </Section>
 
         <Section title="Contact">
-          <Row label="Email">{dash(p.contactEmail)}</Row>
-          <Row label="Phone">{dash(p.contactPhone)}</Row>
+          {/* Masked as served (WOW-05) until the audited reveal is pressed. */}
+          <Row label="Email">{dash(contactReveal.contact ? contactReveal.contact.email : p.contactEmail)}</Row>
+          <Row label="Phone">{dash(contactReveal.contact ? contactReveal.contact.phone : p.contactPhone)}</Row>
+          {(p.contactEmail || p.contactPhone) && (
+            <div className="mb-1">
+              <ContactRevealButton state={contactReveal} />
+            </div>
+          )}
           <Row label="Managed for">{dash(p.managingFor)}</Row>
           <Row label="Steward relation">{dash(p.stewardRelation)}</Row>
           <Row label="Claim status">{p.claimStatus}</Row>
@@ -189,7 +201,7 @@ export default function AdminProfileDetail() {
           <Row label="ID (last 4)">{p.governmentIdLast4 ? `••••${p.governmentIdLast4}` : '—'}</Row>
           <Row label="Submitted">{p.idSubmittedAt ? formatDate(p.idSubmittedAt) : '—'}</Row>
           <Row label="Verified">{p.idVerifiedAt ? formatDate(p.idVerifiedAt) : '—'}</Row>
-          {data.verifiedBy && <Row label="Verified by">{data.verifiedBy.email}</Row>}
+          {data.verifiedBy && <Row label="Verified by">{accountLabel(data.verifiedBy)}</Row>}
         </Section>
 
         <Section title="Matchmaking">
@@ -212,7 +224,7 @@ export default function AdminProfileDetail() {
               className="btn-outline btn-sm w-full justify-center"
               to={`/admin/${data.steward.role === 'agent' ? 'agents' : 'clients'}/${data.steward.id}`}
             >
-              Open steward ({data.steward.email})
+              Open steward ({accountLabel(data.steward)})
             </Link>
           )}
         </Section>

@@ -2,6 +2,19 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, apiMessage } from '../lib/api';
 import { Loading } from './ui/Feedback';
+import RequiredMark from './ui/RequiredMark';
+import { useCompletion } from './BusinessSetup';
+import {
+  PRICING_DESCRIPTION_MAX,
+  PRICING_DESCRIPTION_MIN,
+  PRICING_LABEL,
+  QUOTE_ONLY,
+  OfferingErrors,
+  catalogStep,
+  offeringAmount,
+  offeringErrors,
+  titleCaseWords,
+} from '../lib/catalog-rules';
 import ConfirmDialog from './ConfirmDialog';
 import DynamicForm, {
   Answers,
@@ -60,20 +73,9 @@ interface VendorService {
   offerings: Offering[];
 }
 
-export const PRICING_LABEL: Record<string, string> = {
-  fixed: 'Fixed price',
-  per_person: 'Per person',
-  per_hour: 'Per hour',
-  per_day: 'Per day',
-  per_session: 'Per session',
-  per_item: 'Per item',
-  starting_from: 'Starting from',
-  custom_quote: 'Custom quote',
-  no_public_price: 'Price on request',
-};
-
-/** The two models that publish no amount — the vendor quotes after the request. */
-const QUOTE_ONLY = ['custom_quote', 'no_public_price'];
+// The labels and the amount wording live in lib/catalog-rules.ts, shared with
+// the mobile app; re-exported here for the screens that already import them.
+export { PRICING_LABEL };
 
 /** Where a quantity is part of the price rather than decoration. */
 const QUANTITY_MODELS = ['per_person', 'per_item', 'per_hour', 'per_day', 'per_session'];
@@ -81,10 +83,7 @@ const QUANTITY_MODELS = ['per_person', 'per_item', 'per_hour', 'per_day', 'per_s
 export function priceLabel(
   o: Pick<Offering, 'pricingModel' | 'price' | 'currency' | 'unitLabel'>,
 ): string {
-  if (QUOTE_ONLY.includes(o.pricingModel)) return PRICING_LABEL[o.pricingModel];
-  const amount = `${o.currency} ${Number(o.price).toLocaleString()}`;
-  if (o.pricingModel === 'starting_from') return `From ${amount}`;
-  return o.unitLabel ? `${amount} ${o.unitLabel}` : amount;
+  return offeringAmount(o);
 }
 
 /**
@@ -124,7 +123,12 @@ export default function VendorServices({
     setNotice('');
     try {
       await fn();
-      await qc.invalidateQueries({ queryKey: ['vendor-services', vendorId] });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['vendor-services', vendorId] }),
+        // The checklist counts services and prices per category, so it is
+        // asked again after every change here.
+        qc.invalidateQueries({ queryKey: ['business-completion'] }),
+      ]);
       setNotice(ok);
       return true;
     } catch (err) {
@@ -139,6 +143,8 @@ export default function VendorServices({
    * them to switch them off or remove them.
    */
   const visibleServices = services;
+  const { data: completion } = useCompletion(vendorId);
+  const catalog = catalogStep(completion);
   const takenDefinitionIds = useMemo(() => services.map((s) => s.definitionId), [services]);
 
   return (
@@ -157,6 +163,22 @@ export default function VendorServices({
 
       {error && <p className="alert-critical">{error}</p>}
       {notice && <p className="alert-positive">{notice}</p>}
+
+      {/*
+        What is still missing, per category and per service, in the server's
+        words: every category the business lists needs a service, and every
+        service a live price, before Review & Submit opens.
+      */}
+      {catalog.issues.length > 0 && (
+        <div className="alert-caution" role="status">
+          <p className="text-sm font-medium">Still needed before Review &amp; Submit:</p>
+          <ul className="mt-1 list-disc pl-5 text-sm">
+            {catalog.issues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {adding && (
         <AddService
@@ -560,7 +582,10 @@ function Offerings({
     setError('');
     try {
       await fn();
-      await qc.invalidateQueries({ queryKey: ['vendor-services', vendorId] });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['vendor-services', vendorId] }),
+        qc.invalidateQueries({ queryKey: ['business-completion'] }),
+      ]);
       onChanged(ok);
       setEditing(null);
     } catch (err) {
@@ -633,6 +658,7 @@ function Offerings({
                 {o.inclusions.length > 0 && (
                   <p className="text-xs text-gray-500">Includes: {o.inclusions.join(', ')}</p>
                 )}
+                {o.description && <p className="text-xs text-gray-600">{o.description}</p>}
               </div>
               <button className="btn-outline" onClick={() => setEditing(o.id)}>
                 Edit
@@ -679,14 +705,21 @@ function OfferingForm({
   const [inclusions, setInclusions] = useState((existing?.inclusions ?? []).join(', '));
   const [active, setActive] = useState(existing?.active ?? true);
   const [problem, setProblem] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<OfferingErrors>({});
 
   const quoteOnly = QUOTE_ONLY.includes(model);
   const takesQuantity = QUANTITY_MODELS.includes(model);
+  const descriptionLength = description.trim().length;
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (!quoteOnly && (price === '' || Number(price) < 0)) {
-      setProblem('Give a price, or choose Custom quote if you price each job.');
+    // The server's rules, checked first so each field says what is wrong
+    // beside itself: a name that is not blank, an amount above zero, and a
+    // 50 to 500 character description.
+    const found = offeringErrors({ name, description, pricingModel: model, price });
+    setFieldErrors(found);
+    if (Object.keys(found).length > 0) {
+      setProblem('');
       return;
     }
     if (minQuantity && maxQuantity && Number(minQuantity) > Number(maxQuantity)) {
@@ -694,9 +727,13 @@ function OfferingForm({
       return;
     }
     setProblem('');
+    // Title Case on submission ("pre-wedding-shoot" -> "Pre-wedding-shoot"),
+    // shown in the field too so the vendor sees what was saved.
+    const finalName = titleCaseWords(name);
+    setName(finalName);
     onSave({
-      name: name.trim(),
-      description: description.trim() || undefined,
+      name: finalName,
+      description: description.trim(),
       pricingModel: model,
       price: quoteOnly ? undefined : String(price),
       unitLabel: unitLabel.trim() || undefined,
@@ -715,14 +752,19 @@ function OfferingForm({
     <form onSubmit={submit} className="space-y-3 rounded-sm bg-gray-50 p-3">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
-          <span className="font-medium text-gray-700">Name</span>
+          <span className="font-medium text-gray-700">
+            Pricing name <RequiredMark />
+          </span>
           <input
             className="input mt-1"
             placeholder="Full day, two photographers"
             value={name}
+            maxLength={140}
+            aria-invalid={Boolean(fieldErrors.name)}
             onChange={(e) => setName(e.target.value)}
-            required
+            onBlur={() => setName((v) => titleCaseWords(v))}
           />
+          {fieldErrors.name && <span className="mt-1 block text-xs text-red-600">{fieldErrors.name}</span>}
         </label>
         <label className="text-sm">
           <span className="font-medium text-gray-700">How it is priced</span>
@@ -736,16 +778,19 @@ function OfferingForm({
         </label>
         {!quoteOnly && (
           <label className="text-sm">
-            <span className="font-medium text-gray-700">Amount (INR)</span>
+            <span className="font-medium text-gray-700">
+              Pricing amount (INR) <RequiredMark />
+            </span>
             <input
               className="input mt-1"
               type="number"
-              min={0}
+              min={0.01}
               step="0.01"
               value={price}
+              aria-invalid={Boolean(fieldErrors.price)}
               onChange={(e) => setPrice(e.target.value)}
-              required
             />
+            {fieldErrors.price && <span className="mt-1 block text-xs text-red-600">{fieldErrors.price}</span>}
           </label>
         )}
         {!quoteOnly && (
@@ -786,12 +831,30 @@ function OfferingForm({
       </div>
 
       <label className="block text-sm">
-        <span className="font-medium text-gray-700">Description</span>
-        <input
+        <span className="font-medium text-gray-700">
+          Description <RequiredMark />
+        </span>
+        <textarea
           className="input mt-1"
+          rows={3}
+          maxLength={PRICING_DESCRIPTION_MAX}
+          placeholder="What the client gets: hours, people, deliverables, anything not included."
           value={description}
+          aria-invalid={Boolean(fieldErrors.description)}
           onChange={(e) => setDescription(e.target.value)}
         />
+        <span
+          className={`mt-1 block text-xs ${
+            descriptionLength > 0 && descriptionLength < PRICING_DESCRIPTION_MIN
+              ? 'text-amber-700'
+              : 'text-gray-500'
+          }`}
+        >
+          {descriptionLength} / {PRICING_DESCRIPTION_MAX} characters, at least {PRICING_DESCRIPTION_MIN}.
+        </span>
+        {fieldErrors.description && (
+          <span className="mt-1 block text-xs text-red-600">{fieldErrors.description}</span>
+        )}
       </label>
 
       {packagesAllowed && (

@@ -10,6 +10,12 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import {
+  MAX_SLOT_CAPACITY,
+  MIN_SLOT_CAPACITY,
+  SLOT_CAPACITY_MAX_MESSAGE,
+  SLOT_CAPACITY_MIN_MESSAGE,
+} from '../slot-rules';
 
 /** 24-hour HH:MM. Seconds are not a thing anybody schedules a wedding by. */
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -29,23 +35,24 @@ export class CreateSlotDto {
   endTime: string;
 
   @ApiPropertyOptional({
-    minimum: 1,
-    maximum: 500,
+    minimum: MIN_SLOT_CAPACITY,
+    maximum: MAX_SLOT_CAPACITY,
     description:
-      'How many bookings this window can take at once. Defaults to the service’s configured ' +
-      'capacity — five for a caterer running five teams, one for a convention hall.',
+      'How many bookings this window can take at once, 1 to 20. Defaults to the service’s ' +
+      'configured capacity (held at 20) — five for a caterer running five teams, one for a hall.',
   })
   @IsOptional()
   @IsInt()
-  @Min(1)
-  @Max(500)
+  @Min(MIN_SLOT_CAPACITY, { message: SLOT_CAPACITY_MIN_MESSAGE })
+  @Max(MAX_SLOT_CAPACITY, { message: SLOT_CAPACITY_MAX_MESSAGE })
   capacity?: number;
 
   @ApiPropertyOptional({
     format: 'uuid',
     description:
-      'Which of the vendor’s services this window is for. Publishing per service is what lets ' +
-      'one afternoon be five catering bookings and one tasting.',
+      'Which of the vendor’s services this window is for. Required for a vendor that has a ' +
+      'service on sale; publishing per service is what lets one afternoon be five catering ' +
+      'bookings and one tasting.',
   })
   @IsOptional()
   @IsUUID()
@@ -69,11 +76,11 @@ export class UpdateSlotDto {
   @Matches(TIME_PATTERN, { message: TIME_MESSAGE })
   endTime?: string;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: 500 })
+  @ApiPropertyOptional({ minimum: MIN_SLOT_CAPACITY, maximum: MAX_SLOT_CAPACITY })
   @IsOptional()
   @IsInt()
-  @Min(1)
-  @Max(500)
+  @Min(MIN_SLOT_CAPACITY, { message: SLOT_CAPACITY_MIN_MESSAGE })
+  @Max(MAX_SLOT_CAPACITY, { message: SLOT_CAPACITY_MAX_MESSAGE })
   capacity?: number;
 
   @ApiPropertyOptional({ maxLength: 200 })

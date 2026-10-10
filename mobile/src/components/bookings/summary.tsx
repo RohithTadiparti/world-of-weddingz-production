@@ -15,6 +15,8 @@ import {
 import { dateTime, money } from '@/lib/format';
 import { formatDate } from '@/shared/dates';
 import { MILESTONE_LABEL } from '@/shared/permissions';
+import { negotiationActor, type NegotiationEntryView } from '@/shared/booking-rules';
+import type { Tone } from '@/components/chrome';
 import { Badge, DetailGrid, DetailRow, Divider } from '@/components/chrome';
 import { Alert, Button, Caption, SectionTitle } from '@/components/ui';
 import { rgb, space, useTheme } from '@/theme';
@@ -73,6 +75,12 @@ export interface BookingSummaryData {
     grandTotal: string;
   };
   quotation: QuotationSummary | null;
+  /** Every step of the price negotiation (row 16); older servers omit it. */
+  negotiation?: {
+    entries: NegotiationEntryView[];
+    finalPrice: { amount: string; currency: string; at: string; source: string } | null;
+    requoteRequested: boolean;
+  };
   quotations: {
     id: string;
     amount: string;
@@ -203,10 +211,64 @@ export function PriceBreakdown({ summary }: { summary: BookingSummaryData }) {
   );
 }
 
+const NEGOTIATION_TONE: Record<string, Tone> = {
+  listed: 'neutral',
+  requested: 'caution',
+  awaiting_customer: 'brand',
+  superseded: 'neutral',
+  expired: 'caution',
+  rejected: 'critical',
+  withdrawn: 'caution',
+  accepted: 'positive',
+};
+
+/**
+ * How the price was arrived at (row 16): listed price, the customer's budget,
+ * every quotation and counteroffer, and the final accepted price, each with
+ * who moved, its status and when.
+ */
+export function NegotiationHistory({
+  summary,
+  viewer,
+}: {
+  summary: BookingSummaryData;
+  viewer: 'customer' | 'provider';
+}) {
+  const entries = summary.negotiation?.entries ?? [];
+  if (entries.length === 0) return null;
+  const final = summary.negotiation?.finalPrice;
+  return (
+    <Section title="Quotation history">
+      {entries.map((e, index) => (
+        <View key={`${e.kind}-${index}`} style={{ gap: space(0.5) }}>
+          {index > 0 ? <Divider /> : null}
+          <Caption style={{ fontWeight: '600' }}>{e.label}</Caption>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space(2) }}>
+            {e.amount ? (
+              <Caption style={{ fontVariant: ['tabular-nums'] }}>{money(e.amount, e.currency)}</Caption>
+            ) : null}
+            <Badge tone={NEGOTIATION_TONE[e.status] ?? 'neutral'}>{e.statusLabel}</Badge>
+          </View>
+          <Caption tone="faint">{`${negotiationActor(e.by, viewer)} · ${dateTime(e.at)}`}</Caption>
+          {e.note ? <Caption>{`Note: ${e.note}`}</Caption> : null}
+        </View>
+      ))}
+      <Divider />
+      <Caption>
+        {final
+          ? `Final accepted price: ${money(final.amount, final.currency)} · ${dateTime(final.at)}`
+          : summary.negotiation?.requoteRequested
+            ? 'Final accepted price: not agreed yet - the customer asked for a requote'
+            : 'Final accepted price: not agreed yet'}
+      </Caption>
+    </Section>
+  );
+}
+
 export function QuotationHistory({ summary }: { summary: BookingSummaryData }) {
   if (summary.quotations.length === 0) return null;
   return (
-    <Section title="Quotation history">
+    <Section title="Quotations sent">
       {summary.quotations.map((q, index) => (
         <View key={q.id} style={{ gap: space(0.5) }}>
           {index > 0 ? <Divider /> : null}

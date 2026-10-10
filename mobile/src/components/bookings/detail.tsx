@@ -17,6 +17,7 @@ import {
   BookingProgress,
   PaymentBreakdown,
   PriceBreakdown,
+  NegotiationHistory,
   QuotationHistory,
   Section,
   useBookingSummary,
@@ -79,7 +80,7 @@ export function BookingDetail({ booking }: { booking: IncomingBooking }) {
             {SELLER_STATUS_LABEL[booking.status] ?? booking.status.replace(/_/g, ' ')}
           </DetailRow>
           <DetailRow label="Customer">
-            {booking.clientName ?? booking.clientEmail ?? 'Customer'}
+            {booking.clientName ?? 'Customer'}
           </DetailRow>
           {booking.providerName ? (
             <DetailRow label="Booked with">{booking.providerName}</DetailRow>
@@ -154,6 +155,7 @@ export function BookingDetail({ booking }: { booking: IncomingBooking }) {
       {summary.data ? (
         <>
           <PriceBreakdown summary={summary.data} />
+          <NegotiationHistory summary={summary.data} viewer="provider" />
           <QuotationHistory summary={summary.data} />
           <PaymentBreakdown summary={summary.data} />
         </>

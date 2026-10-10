@@ -238,6 +238,10 @@ function Routes() {
       <Stack.Screen name="vendors/index" options={{ headerShown: true, title: 'Vendors' }} />
       <Stack.Screen name="vendors/[id]" options={{ title: 'Vendor' }} />
       <Stack.Screen
+        name="vendors/[id]/request"
+        options={{ headerShown: true, title: 'Check availability & request' }}
+      />
+      <Stack.Screen
         name="vendors/[id]/gallery"
         options={{ headerShown: true, title: 'Photos' }}
       />

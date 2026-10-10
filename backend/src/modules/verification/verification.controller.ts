@@ -30,11 +30,13 @@ import {
 import {
   AddEvidenceDto,
   AllocateCaseDto,
+  CancelCaseDto,
   CaseQueryDto,
   EscalateCaseDto,
   GrantBusinessChangeAccessDto,
   RaiseCaseDto,
   RecordFindingsDto,
+  ReplyCaseDto,
   ReviewCaseDto,
   SettleCaseDto,
   SettlementRequestDto,
@@ -374,6 +376,38 @@ export class VerificationController {
     @Body() dto: GrantBusinessChangeAccessDto,
   ) {
     return this.cases.grantBusinessChangeAccess(actor, id, dto);
+  }
+
+  @RequirePermissions(Permission.CASE_ALLOCATE)
+  @ApiOperation({
+    summary: 'Cancel a vendor business-details change request',
+    description:
+      'Administrator only, and only before edit access is granted. The listing is untouched; ' +
+      'the request is marked cancelled, the action is audited and the vendor is told.',
+  })
+  @Put('cases/:id/cancel-business-change')
+  cancelBusinessChange(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelCaseDto,
+  ) {
+    return this.cases.cancelBusinessChange(actor, id, dto);
+  }
+
+  @RequirePermissions(Permission.CASE_RAISE)
+  @ApiOperation({
+    summary: 'Reply on a case you raised',
+    description:
+      'Adds a message (and optional proof) to the timeline. A case waiting on you goes back to ' +
+      'whoever is working it, and they are told.',
+  })
+  @Put('cases/:id/reply')
+  replyCase(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReplyCaseDto,
+  ) {
+    return this.cases.reply(actor, id, dto);
   }
 
   @RequirePermissions(Permission.CASE_INVESTIGATE)

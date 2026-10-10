@@ -13,6 +13,7 @@ import { OfficerServiceArea } from '../verification/entities/officer-service-are
 import { SupportCase } from '../verification/entities/support-case.entity';
 import { VerificationRequest } from '../verification/entities/verification-request.entity';
 import { AgentCharge } from '../agents/entities/agent-charge.entity';
+import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { DirectoryQueryDto } from './dto/console.dto';
 import {
   InterestStatus,
@@ -27,6 +28,19 @@ import { AuditAction, AuditService } from '../../platform/audit/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { maskEmail, maskPhone } from '../../common/util/pii-mask';
 import { contactSearchClause } from '../../common/util/contact-search';
+import { likeEscape } from '../../common/util/like';
+import { AdminNameRepositories, adminAccountNames } from '../users/display-names';
+
+/** What the audited reveal returns for one account. */
+export interface RevealedAccountContact {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  /** The contact line on each vendor business the account owns. */
+  businesses: { id: string; contactPhone: string | null }[];
+  /** The contact lines on each planner business the account owns. */
+  plannerBusinesses: { id: string; contactPhone: string | null; contactEmail: string | null }[];
+}
 
 function uniqueById<T extends { id: string }>(rows: T[]): T[] {
   return [...new Map(rows.map((row) => [row.id, row])).values()];
@@ -56,6 +70,8 @@ export class AdminAccountsService {
     @InjectRepository(AgentCharge) private readonly charges: Repository<AgentCharge>,
     // Read-only, for the matchmaking half of an individual's history.
     @InjectRepository(Interest) private readonly interests: Repository<Interest>,
+    // Read-only, for the agency name an agent account is listed under.
+    @InjectRepository(AgentProfile) private readonly agencies: Repository<AgentProfile>,
     private readonly adminBookings: AdminBookingsService,
     private readonly audit: AuditService,
   ) {}
@@ -68,24 +84,92 @@ export class AdminAccountsService {
    * whole, it sits behind its own permission, and every call leaves an audit
    * row naming who looked and whose details they saw.
    */
-  async revealContact(
-    actor: AuthUser,
-    userId: string,
-  ): Promise<{ id: string; email: string | null; phone: string | null }> {
+  async revealContact(actor: AuthUser, userId: string): Promise<RevealedAccountContact> {
     const user = await this.users.findOne({
       where: { id: userId },
       select: ['id', 'email', 'phone'],
     });
     if (!user) throw new NotFoundException('Account not found');
 
+    /*
+     * The businesses the account runs carry their own contact lines, masked on
+     * the account and business detail pages like the account's (WOW-05). They
+     * are this account's contact details too, so the one audited reveal
+     * returns them rather than each page inventing a reveal of its own.
+     */
+    const [vendors, planners] = await Promise.all([
+      this.vendors.find({ where: { ownerUserId: user.id }, select: ['id', 'contactPhone'] }),
+      this.planners.find({
+        where: { ownerUserId: user.id },
+        select: ['id', 'contactPhone', 'contactEmail'],
+      }),
+    ]);
+
     await this.audit.record({
       action: AuditAction.ADMIN_CONTACT_REVEALED,
       actor,
       resourceType: 'user',
       resourceId: user.id,
-      metadata: { fields: ['email', 'phone'] },
+      metadata: {
+        fields: ['email', 'phone'],
+        businesses: vendors.map((v) => v.id),
+        plannerBusinesses: planners.map((p) => p.id),
+      },
     });
-    return { id: user.id, email: user.email ?? null, phone: user.phone ?? null };
+    return {
+      id: user.id,
+      email: user.email ?? null,
+      phone: user.phone ?? null,
+      businesses: vendors.map((v) => ({ id: v.id, contactPhone: v.contactPhone ?? null })),
+      plannerBusinesses: planners.map((p) => ({
+        id: p.id,
+        contactPhone: p.contactPhone ?? null,
+        contactEmail: p.contactEmail ?? null,
+      })),
+    };
+  }
+
+  /**
+   * A marriage profile's own contact lines, unmasked (WOW-05).
+   *
+   * They are not the owner account's: an agent-created profile has a contact
+   * number and no account at all. "View full profile" shows them masked; this
+   * is the audited read behind its reveal button.
+   */
+  async revealProfileContact(
+    actor: AuthUser,
+    profileId: string,
+  ): Promise<{ id: string; email: string | null; phone: string | null }> {
+    const profile = await this.profiles.findOne({
+      where: { id: profileId },
+      select: ['id', 'contactEmail', 'contactPhone'],
+    });
+    if (!profile) throw new NotFoundException('Profile not found');
+
+    await this.audit.record({
+      action: AuditAction.ADMIN_CONTACT_REVEALED,
+      actor,
+      resourceType: 'profile',
+      resourceId: profile.id,
+      metadata: { fields: ['contactEmail', 'contactPhone'] },
+    });
+    return {
+      id: profile.id,
+      email: profile.contactEmail ?? null,
+      phone: profile.contactPhone ?? null,
+    };
+  }
+
+  /** The sources an administrator list names accounts from. */
+  private nameRepos(): AdminNameRepositories {
+    return {
+      users: this.users,
+      profiles: this.profiles,
+      details: this.profileDetails,
+      vendors: this.vendors,
+      planners: this.planners,
+      agencies: this.agencies,
+    };
   }
 
   /**
@@ -120,8 +204,19 @@ export class AdminAccountsService {
     }
     if (q.agentId) qb.andWhere('u.managedByAgentId = :agentId', { agentId: q.agentId });
     if (q.q?.trim()) {
+      // The rows lead with a name now (WOW-01..04), so a name finds them too:
+      // the profile's display name or the business the account runs.
       const search = contactSearchClause({ email: 'u.email', phone: 'u.phone' }, q.q);
-      qb.andWhere(search.clause, search.params);
+      const named = [
+        'EXISTS (SELECT 1 FROM profiles np WHERE np."userId" = u.id AND LOWER(np."displayName") LIKE :nameNeedle)',
+        'EXISTS (SELECT 1 FROM vendors nv WHERE nv."ownerUserId" = u.id AND LOWER(nv.name) LIKE :nameNeedle)',
+        'EXISTS (SELECT 1 FROM planner_profiles npl WHERE npl."ownerUserId" = u.id AND LOWER(npl."agencyName") LIKE :nameNeedle)',
+        'EXISTS (SELECT 1 FROM agent_profiles na WHERE na."ownerUserId" = u.id AND LOWER(na."agencyName") LIKE :nameNeedle)',
+      ];
+      qb.andWhere(`(${search.clause} OR ${named.join(' OR ')})`, {
+        ...search.params,
+        nameNeedle: `%${likeEscape(q.q.trim().toLowerCase())}%`,
+      });
     }
 
     qb.orderBy('u.createdAt', 'DESC')
@@ -129,8 +224,14 @@ export class AdminAccountsService {
       .take(q.limit);
 
     const [data, total] = await qb.getManyAndCount();
+    const names = await adminAccountNames(this.nameRepos(), data);
     const rows = data.map((user) => ({
       ...user,
+      // The person first (WOW-01..04); the business is its own column for the
+      // provider roles. Both are names, never contact values.
+      name: names.get(user.id)?.name ?? null,
+      personName: names.get(user.id)?.personName ?? null,
+      businessName: names.get(user.id)?.businessName ?? null,
       email: maskEmail(user.email),
       phone: maskPhone(user.phone),
       contactMasked: true,
@@ -327,6 +428,11 @@ export class AdminAccountsService {
       paymentSum(PaymentStatus.REFUNDED),
     ]);
 
+    // Named the way the lists name them (WOW-01..04), so the page heading and
+    // the row an administrator clicked agree — and an agent is not headed with
+    // the first client profile they happen to steward.
+    const names = await adminAccountNames(this.nameRepos(), [user, ...agencyClients]);
+
     const matchmaking = profileIds.length
       ? {
           sent: distinctInterests.filter((i) => profileIds.includes(i.fromProfileId)).length,
@@ -345,12 +451,18 @@ export class AdminAccountsService {
        */
       user: {
         ...user,
+        name: names.get(user.id)?.name ?? null,
+        personName: names.get(user.id)?.personName ?? null,
+        businessName: names.get(user.id)?.businessName ?? null,
         email: maskEmail(user.email),
         phone: maskPhone(user.phone),
         contactMasked: true,
       },
       profiles: distinctProfiles.map((p) => ({
         id: p.id,
+        // Whose profile: the account's own, or one it stewards for a client.
+        userId: p.userId,
+        own: p.userId === userId,
         displayName: p.displayName,
         lifecycle: p.lifecycle,
         city: p.city,
@@ -388,8 +500,11 @@ export class AdminAccountsService {
         packages: p.packages,
         yearsExperience: p.yearsExperience,
         contactPerson: p.contactPerson,
-        contactPhone: p.contactPhone,
-        contactEmail: p.contactEmail,
+        // Masked like the account's own (WOW-05); the account reveal returns
+        // them whole alongside the account's email and mobile.
+        contactPhone: maskPhone(p.contactPhone),
+        contactEmail: maskEmail(p.contactEmail),
+        contactMasked: true,
         address: p.address,
         state: p.state,
         pincode: p.pincode,
@@ -419,6 +534,7 @@ export class AdminAccountsService {
           ? {
               clients: agencyClients.map((client) => ({
                 ...client,
+                name: names.get(client.id)?.name ?? null,
                 email: maskEmail(client.email),
               })),
               charges: await this.charges.find({
@@ -589,6 +705,10 @@ export class AdminAccountsService {
       // and occupation (EZ1-I194).
       this.profileDetails.findOne({ where: { profileId } }),
     ]);
+    const names = await adminAccountNames(
+      this.nameRepos(),
+      [owner, steward, verifier].filter((u): u is User => Boolean(u)),
+    );
 
     return {
       profile: {
@@ -602,9 +722,13 @@ export class AdminAccountsService {
         bio: profile.bio,
         photos: profile.photos ?? [],
         preferences: profile.preferences ?? {},
-        // Contact and stewardship.
-        contactEmail: profile.contactEmail,
-        contactPhone: profile.contactPhone,
+        // Contact and stewardship. Masked like every administrator surface
+        // (WOW-05): this is the "View full profile" page, which used to print
+        // the number whole while the list beside it hid it. The full values
+        // are the audited `revealProfileContact`.
+        contactEmail: maskEmail(profile.contactEmail),
+        contactPhone: maskPhone(profile.contactPhone),
+        contactMasked: true,
         stewardRelation: profile.stewardRelation,
         managingFor: profile.managingFor,
         claimStatus: profile.claimStatus,
@@ -624,9 +748,23 @@ export class AdminAccountsService {
         createdAt: profile.createdAt,
         updatedAt: profile.updatedAt,
       },
-      owner,
-      steward,
-      verifiedBy: verifier,
+      // The accounts around the profile, masked the same way; each has its own
+      // account page with the account reveal.
+      owner: owner
+        ? {
+            ...owner,
+            name: names.get(owner.id)?.name ?? null,
+            email: maskEmail(owner.email),
+            phone: maskPhone(owner.phone),
+            contactMasked: true,
+          }
+        : null,
+      steward: steward
+        ? { ...steward, name: names.get(steward.id)?.name ?? null, email: maskEmail(steward.email) }
+        : null,
+      verifiedBy: verifier
+        ? { ...verifier, name: names.get(verifier.id)?.name ?? null, email: maskEmail(verifier.email) }
+        : null,
       // Personal facts kept on the biodata table, not the profile row (EZ1-I194).
       details: details
         ? {

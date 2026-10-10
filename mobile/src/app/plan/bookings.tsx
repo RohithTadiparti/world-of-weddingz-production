@@ -51,6 +51,16 @@ export interface BuyerBooking {
   requestedServices?: string[];
   ratingAvg?: number;
   ratingCount?: number;
+  /** What the list endpoint actually sends for where and for whom (row 19). */
+  eventVenue?: string | null;
+  eventCity?: string | null;
+  expectedGuests?: number | null;
+  requirements?: string | null;
+  referenceImages?: string[];
+  expectedBudget?: string | null;
+  requestedTime?: string | null;
+  pricingModel?: string | null;
+  quotation?: { amount: string; currency?: string; stage?: string } | null;
 }
 
 const TABS: { key: Tab; label: string }[] = [
