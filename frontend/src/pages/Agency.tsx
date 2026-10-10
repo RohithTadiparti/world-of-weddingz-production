@@ -28,6 +28,19 @@ const empty = {
   about: '',
 };
 
+const MOBILE_RE = /^[6-9]\d{9}$/;
+const STORAGE_KEY = 'agency-form-draft';
+
+function loadDraft(): typeof empty | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return { ...empty, ...parsed };
+  } catch { /* corrupted draft — start fresh */ }
+  return null;
+}
+
 /**
  * Agency registration and its approval state.
  *
@@ -41,6 +54,7 @@ export default function Agency() {
   const [pictures, setPictures] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const { data: verification } = useQuery({
     queryKey: ['my-verification'],
@@ -90,8 +104,31 @@ export default function Agency() {
         about: agency.about ?? '',
       });
       setPictures(agency.pictures ?? []);
+    } else {
+      const draft = loadDraft();
+      if (draft) setForm(draft);
     }
   }, [agency]);
+
+  // Persist the draft so a refresh does not wipe a half-filled form.
+  useEffect(() => {
+    if (agency) return;
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(form));
+  }, [form, agency]);
+
+  function validate(): Record<string, string> {
+    const errs: Record<string, string> = {};
+    const name = form.agencyName.trim();
+    if (!name) errs.agencyName = 'Agency name is required.';
+    else if (name.length < 2 || name.length > 120) errs.agencyName = 'Agency name must be between 2 and 120 characters.';
+    if (form.contactPhone) {
+      const digits = form.contactPhone.replace(/[\s-]/g, '').replace(/^\+91/, '');
+      if (!MOBILE_RE.test(digits)) errs.contactPhone = 'Enter a 10-digit Indian mobile number.';
+    }
+    if (form.city && form.city.length > 80) errs.city = 'City must be 80 characters or fewer.';
+    if (form.address && form.address.length > 500) errs.address = 'Address must be 500 characters or fewer.';
+    return errs;
+  }
 
   // A rejected agency is locked out of re-verification (EZ1-I66): the server
   // refuses a resubmit, so the form disables its submit and says why rather
@@ -102,6 +139,9 @@ export default function Agency() {
     e.preventDefault();
     setError('');
     setNotice('');
+    const errs = validate();
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     try {
       const payload: Record<string, unknown> = { agencyName: form.agencyName };
       for (const key of [
@@ -116,6 +156,7 @@ export default function Agency() {
       }
       payload.pictures = pictures;
       await api.put('/agents/agency', payload);
+      sessionStorage.removeItem(STORAGE_KEY);
       setNotice(
         agency?.isApproved
           ? 'Agency details updated.'
@@ -240,7 +281,8 @@ export default function Agency() {
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label">Agency name</label>
-            <input className="input" value={form.agencyName} onChange={set('agencyName')} required />
+            <input className="input" value={form.agencyName} onChange={set('agencyName')} required maxLength={120} />
+            {fieldErrors.agencyName && <p className="mt-1 text-xs text-red-600">{fieldErrors.agencyName}</p>}
           </div>
           <div>
             <label className="label">Registration / licence number</label>
@@ -258,10 +300,12 @@ export default function Agency() {
               value={form.contactPhone}
               onChange={set('contactPhone')}
             />
+            {fieldErrors.contactPhone && <p className="mt-1 text-xs text-red-600">{fieldErrors.contactPhone}</p>}
           </div>
           <div>
             <label className="label">City</label>
-            <input className="input" value={form.city} onChange={set('city')} />
+            <input className="input" value={form.city} onChange={set('city')} maxLength={80} />
+            {fieldErrors.city && <p className="mt-1 text-xs text-red-600">{fieldErrors.city}</p>}
           </div>
           <div>
             <label className="label">Trading since</label>
@@ -286,6 +330,7 @@ export default function Agency() {
             value={form.address}
             onChange={set('address')}
           />
+          {fieldErrors.address && <p className="mt-1 text-xs text-red-600">{fieldErrors.address}</p>}
           <p className="mt-1 text-xs text-gray-500">
             Where a verification officer will visit. It is not shown to clients.
           </p>

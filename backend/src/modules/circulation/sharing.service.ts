@@ -419,7 +419,9 @@ export class SharingService {
     const qb = this.profiles
       .createQueryBuilder('p')
       .where('p."networkVisibility" = :pool', { pool: NetworkVisibility.POOL })
-      .andWhere('p.visibility != :private', { private: ProfileVisibility.PRIVATE })
+      .andWhere('p.visibility NOT IN (:...excluded)', {
+        excluded: [ProfileVisibility.PRIVATE, ProfileVisibility.MATCHES_ONLY],
+      })
       .andWhere('(p."managedByUserId" IS NULL OR p."managedByUserId" != :me)', { me: actor.userId })
       // Only somebody to be matched: an unclaimed profile, or one held by a
       // bride or groom. A family account's own row describes the parent.

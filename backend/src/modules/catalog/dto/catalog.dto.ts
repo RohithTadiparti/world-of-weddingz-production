@@ -16,6 +16,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 import { IsStrictString } from '../../../common/decorators/strict-type.decorator';
@@ -331,6 +332,7 @@ export class UpsertOfferingDto {
       '("pre-wedding-shoot" becomes "Pre-wedding-shoot"); see offering-rules.ts.',
   })
   @IsString()
+  @MinLength(2)
   @MaxLength(140)
   name: string;
 
@@ -342,7 +344,8 @@ export class UpsertOfferingDto {
   @ApiProperty({ minLength: 50, maxLength: 500 })
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MinLength(50)
+  @MaxLength(500)
   description?: string;
 
   @ApiProperty({ enum: PricingModel })

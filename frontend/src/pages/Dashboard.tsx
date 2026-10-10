@@ -580,7 +580,7 @@ export default function Dashboard({
             <AgentMetric
             label="Matches fixed"
             value={agentStats?.matchesFixed ?? 0}
-            to="/matches"
+            to="/interests"
             icon={CheckCircle}
             gradient="from-positive-bg to-brand-50"
             />
