@@ -1,7 +1,7 @@
 {
   "repository": "RohithTadiparti/WOW-MD",
-  "reviewedCommit": "0d23fa25f166b61dae654b44c7b3b818102ad2e6",
-  "snapshotDate": "2026-10-09",
+  "reviewedCommit": "86ccadeca89b65cba27e35935256f17c458ee397",
+  "snapshotDate": "2026-10-10",
   "historyImported": false,
-  "notes": "Reviewed through WOW-MD PR 75 at 0d23fa2. Change-intake rows CHG-019 through CHG-024 classify client observability, officer QA fixes, dependency locks, OPS-002, OPS-003 and UI-001. The scanner-only fixture cleanup in PR 76 is included in the reviewed source history and changes no behavior. Remaining uncommitted source changes still require separate intake review."
+  "notes": "Reviewed through WOW-MD PR 77 at 86ccade. CHG-025 accepts the vendor, administrator, verification, booking and QA remediation from PRs 78 and 77 while preserving production-only hardening and excluding UI-002 PR 79. Remaining uncommitted source changes still require separate intake review."
 }
